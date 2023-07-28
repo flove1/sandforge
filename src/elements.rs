@@ -1,6 +1,7 @@
+use crate::cell::CellAction;
+
 use super::cell::Cell;
-use super::chunk::ChunkApi;
-use super::constants::*;
+use super::chunk::PixelToChunkApi;
 
 #[derive(Default, Clone, Copy)]
 pub enum Element {
@@ -11,211 +12,98 @@ pub enum Element {
     Sand,
 }
 
-fn falling_velocity_change(cell: &mut Cell, dt: &f32){
-    if cell.falling {
-        cell.vel_y = f32::min(cell.vel_y + GRAVITY * dt, 10.0);
-        if cell.vel_x.abs() > 0.5 {
-            cell.vel_x *= 0.5;
-        }
-        else {
-            cell.vel_x = 0.0;
-        }
+pub fn update_sand(mut cell: Cell, mut api: PixelToChunkApi, dt: f32) -> Vec<CellAction> {
+    let mut actions: Vec<CellAction> = vec![];
+    let mut offset_x = 0;
+    let mut offset_y = 0;
+    let dx = api.rand_dir();
+
+    if matches!(api.get(0, 1).element, Element::Empty ) {
+        actions.push(CellAction::Swap(0, 1));
+    } else if matches!(api.get(dx, 1).element, Element::Empty ) {
+        actions.push(CellAction::Swap(dx, 1));
+    } else if matches!(api.get(0, 1).element, Element::Water) {
+        actions.push(CellAction::Swap(0, 1));
     }
+    actions.push(CellAction::Update(cell));
+
+    actions
 }
 
-pub fn update_sand(mut cell: Cell, mut api: ChunkApi, dt: f32) {
-    // General rules of cells
-    if cell.falling {
-        falling_velocity_change(&mut cell, &dt);
-    }
-    else {
-        if matches!(api.get(0, 1).element, Element::Empty | Element::Water) {
-            cell.falling = true;
+pub fn update_liquid(mut cell: Cell, mut api: PixelToChunkApi, dt: f32) -> Vec<CellAction> {
+    let mut actions: Vec<CellAction> = vec![];
+    let mut dx = api.rand_dir();
+
+    if matches!(api.get(0, 1).element, Element::Empty) {
+        actions.push(CellAction::Swap(0, 1));
+        if api.once_in(20) {
+            //randomize direction when falling sometimes
+            cell.ra = 100 + api.rand_int(50) as u8;
         }
-        else {
-            let ln = api.get(-1, 1);
-            let rn = api.get(1, 1);
-            if cell.vel_x > 0.1 && matches!(rn.element, Element::Empty | Element::Water) {
-                api.swap(1, 1);
-                api.set(0, 0, cell);
-                return;
-            }
-            else if cell.vel_x < -0.1 && matches!(ln.element, Element::Empty | Element::Water) {
-                api.swap(-1, 1);
-                api.set(0, 0, cell);
-                return;
-            }
-        }
+        actions.push(CellAction::Update(cell));
+        return actions;
+    } else if matches!(api.get(dx, 1).element, Element::Empty) {
+        //fall diagonally
+        actions.push(CellAction::Swap(dx, 1));
+        actions.push(CellAction::Update(cell));
+        return actions;
+    } else if matches!(api.get(-dx, 1).element, Element::Empty) {
+        actions.push(CellAction::Swap(-dx, 1));
+        actions.push(CellAction::Update(cell));
+        return actions;
     }
 
-    // More specific rules
-    if cell.falling || f32::sqrt(f32::powi(cell.vel_x, 2) + f32::powi(cell.vel_y, 2)) > 1.0 {
-        let (x1, y1) = (0, 0);
-        let (x2, y2) = (cell.vel_x.round() as i32, cell.vel_y.round() as i32);
+    dx = if cell.ra % 2 == 0 { 1 } else { -1 };
+    let dx0 = api.get(dx, 0);
 
-        let dx:i32 = i32::abs(x2 - x1);
-        let dy:i32 = i32::abs(y2 - y1);
-        let sx:i32 = { if x1 < x2 { 1 } else { -1 } };
-        let sy:i32 = { if y1 < y2 { 1 } else { -1 } };
+    if matches!(api.get(dx, 0).element, Element::Empty) && matches!(api.get(dx * 2, 0).element, Element::Empty) {
+        // scoot double
+        cell.rb = 6;
+        actions.push(CellAction::Swap(2 * dx, 0));
+        actions.push(CellAction::Update(cell));
+        let (dx, dy) = api.rand_vec_8();
+        let nbr = api.get(dx, dy);
 
-        let mut error:i32 = (if dx > dy  { dx } else { -dy }) / 2 ;
-        let mut current_x:i32 = x1;
-        let mut current_y:i32 = y1;
-
-        let mut last_x = 0;
-        let mut last_y = 0;
-
-        let mut collided = false;
-
-        loop {
-            if current_x == x2 && current_y == y2 { break; }
-
-            let error2:i32 = error;
-
-            if error2 > -dx {
-                error -= dy;
-                current_x += sx;
-            }
-            if error2 < dy {
-                error += dx;
-                current_y += sy;
-            }
-
-            let nc = api.get(current_x - last_x, dy - last_y);
-            match nc.element {
-                Element::Empty | Element::Water => {
-                    api.swap(current_x - last_x, current_y - last_y);
-                    last_x = current_x;
-                    last_y = current_y;
-                    cell.vel_x *= 0.9;
-                },
-                Element::Stone | Element::Sand => {
-                    collided = true;
-                    break;
-                },
+        // spread opinion
+        if matches!(nbr.element, Element::Water) {
+            if nbr.ra % 2 != cell.ra % 2 {
+                actions.push(CellAction::Set(dx, dy, Cell {
+                    ra: cell.ra,
+                    ..cell
+                }));
             }
         }
+    } else if matches!(dx0.element, Element::Empty) {
+        actions.push(CellAction::Set(0, 0, dx0));
+        actions.push(CellAction::Set(dx, 0, Cell { rb: 3, ..cell }));
+        let (dx, dy) = api.rand_vec_8();
+        let nbr = api.get(dx, dy);
 
-        if collided {
-            if (current_x - last_x) != 0 {
-                cell.vel_x = 0.0;
-            }
-            else if cell.falling {
-                if cell.vel_x.abs() > 0.5 {
-                    cell.vel_x += f32::min(cell.vel_y, GRAVITY as f32) * api.random_float(0.2, 0.5) * cell.vel_x.signum();
-                }
-                else {
-                    cell.vel_x = f32::min(cell.vel_y, GRAVITY as f32) * api.random_float(0.2, 0.5) * (api.get_direction() as f32);
-                }
-                cell.vel_y *= 0.7;
-                cell.falling = false;
-            }
-            else {
-                cell.vel_x *= -0.5;
-            }
-        }        
-        api.set(0, 0, cell);
-    }
-}
-
-pub fn update_liquid(mut cell: Cell, mut api: ChunkApi, dt: f32) {
-    if cell.falling {
-        falling_velocity_change(&mut cell, &dt);
-    }
-    else {
-        if matches!(api.get(0, 1).element, Element::Empty) {
-            cell.falling = true;
-        }
-        else {
-            let direction = api.get_direction();
-            let ln = api.get(-1, 0);
-            let rn = api.get(1, 0);
-
-            if direction > 0 {
-                if matches!(rn.element, Element::Empty) {
-                    cell.vel_x = 5.0;
-                }
-                else if matches!(ln.element, Element::Empty) {
-                    cell.vel_x = -5.0;
-                }
-            }
-            else {
-                if matches!(ln.element, Element::Empty) {
-                    cell.vel_x = -5.0;
-                }
-                else if matches!(rn.element, Element::Empty) {
-                    cell.vel_x = 5.0;
-                }
+        if matches!(nbr.element, Element::Water) {
+            if nbr.ra % 2 != cell.ra % 2 {
+                actions.push(CellAction::Set(dx, dy, Cell {
+                    ra: cell.ra,
+                    ..cell
+                }));
             }
         }
-    }
-
-    // More specific rules
-    if cell.falling || f32::sqrt(f32::powi(cell.vel_x, 2) + f32::powi(cell.vel_y, 2)) > 1.0 {
-        let (x1, y1) = (0, 0);
-        let (x2, y2) = (cell.vel_x.round() as i32, cell.vel_y.round() as i32);
-
-        let dx:i32 = i32::abs(x2 - x1);
-        let dy:i32 = i32::abs(y2 - y1);
-        let sx:i32 = { if x1 < x2 { 1 } else { -1 } };
-        let sy:i32 = { if y1 < y2 { 1 } else { -1 } };
-
-        let mut error:i32 = (if dx > dy  { dx } else { -dy }) / 2 ;
-        let mut current_x:i32 = x1;
-        let mut current_y:i32 = y1;
-
-        let mut last_x = 0;
-        let mut last_y = 0;
-
-        let mut collided = false;
-
-        loop {
-            if current_x == x2 && current_y == y2 { break; }
-
-            let error2:i32 = error;
-
-            if error2 > -dx {
-                error -= dy;
-                current_x += sx;
-            }
-            if error2 < dy {
-                error += dx;
-                current_y += sy;
-            }
-
-            let nc = api.get(current_x - last_x, dy - last_y);
-            match nc.element {
-                Element::Empty => {
-                    api.swap(current_x - last_x, current_y - last_y);
-                    last_x = current_x;
-                    last_y = current_y;
-                    cell.vel_x *= 0.9;
-                },
-                _ => {
-                    collided = true;
-                    break;
-                },
-            }
+    } else if cell.rb == 0 {
+        if matches!(api.get(-dx, 0).element, Element::Empty) {
+            // bump
+            actions.push(CellAction::Set(0, 0, Cell {
+                ra: ((cell.ra as i64) + dx) as u8,
+                ..cell
+            }));
         }
-
-        if collided {
-            if (current_x - last_x) != 0 {
-                cell.vel_x = 0.0;
-            }
-            else if cell.falling {
-                if cell.vel_x.abs() > 0.5 {
-                    cell.vel_x += f32::min(cell.vel_y, GRAVITY as f32) * api.random_float(0.2, 0.5) * cell.vel_x.signum();
-                }
-                else {
-                    cell.vel_x = f32::min(cell.vel_y, GRAVITY as f32) * api.random_float(0.2, 0.5) * (api.get_direction() as f32);
-                }
-                cell.vel_y *= 0.7;
-                cell.falling = false;
-            }
-            else {
-                cell.vel_x *= -0.5;
-            }
-        }        
-        api.set(0, 0, cell);
+    } else {
+        // become less certain (more bumpable)
+        actions.push(CellAction::Set(0, 0, Cell {
+            rb: cell.rb - 1,
+            ..cell
+        }));
     }
+
+    return  actions;
+    
+    
 }

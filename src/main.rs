@@ -8,7 +8,7 @@ mod elements;
 mod utils;
 mod constants;
 
-use chunk::Chunk;
+use chunk::{Chunk, ChunkManager};
 use elements::Element;
 
 use error_iter::ErrorIter as _;
@@ -20,8 +20,10 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::x11::{WindowBuilderExtX11, XWindowType};
 use winit::window::{WindowBuilder, Window};
 
-const SIZE: u32 = 100;
-const DELAY: u128 = 10;
+const CHUNK_SIZE: u32 = 10;
+const WORLD_SIZE: u32 = 24;
+const SIZE: u32 = CHUNK_SIZE * WORLD_SIZE;
+const DELAY: u128 = 1;
 
 fn screen_to_world(x: f32, y:f32,  window: &Window) -> (i32, i32) {
     ((x as f32 / window.inner_size().width as f32 * SIZE as f32).round() as i32, (y as f32 / window.inner_size().height as f32 * SIZE as f32).round() as i32)
@@ -54,15 +56,17 @@ fn main() {
         Pixels::new(SIZE, SIZE, surface_texture).unwrap()
     };
 
-    let mut chunk = Chunk::new(SIZE, SIZE);
+    let mut chunk_manager = ChunkManager::new(CHUNK_SIZE as i64, WORLD_SIZE as i64);
 
-    for i in 0..SIZE {
-        chunk.place(i as i32, 0, Element::Stone);
-        chunk.place(i as i32, (SIZE-1) as i32, Element::Stone);
-        chunk.place(0 as i32, i as i32, Element::Stone);
-        chunk.place((SIZE-1) as i32 as i32, i as i32, Element::Stone);
+    for x in 0..SIZE {
+        chunk_manager.place(x as i64, 0, Element::Stone);
+        chunk_manager.place(x as i64, (SIZE - 1) as i64, Element::Stone);
     }
 
+    for y in 0..SIZE {
+        chunk_manager.place(0, y as i64, Element::Stone);
+        chunk_manager.place((SIZE - 1) as i64, y as i64, Element::Stone);
+    }
     let mut input_state = InputState{
         mouse_keys_held: [ElementState::Released; 3],
         last_mouse_position: None,
@@ -77,7 +81,8 @@ fn main() {
             Event::NewEvents(_) => {
                 let now = Instant::now();
                 if now.duration_since(input_state.time_instant).as_millis() > DELAY {
-                    chunk.update(now.duration_since(input_state.time_instant).as_secs_f32());
+                    dbg!(now.duration_since(input_state.time_instant));
+                    chunk_manager.update(now.duration_since(input_state.time_instant).as_secs_f32());
                     input_state.time_instant = now;
                 }
             }
@@ -95,23 +100,25 @@ fn main() {
                     return;
                 },
                 winit::event::WindowEvent::KeyboardInput { input, .. } => {
-                    match input.virtual_keycode.unwrap() {
-                        VirtualKeyCode::Escape | VirtualKeyCode::Q  => {
-                            control_flow.set_exit();
+                    if let Some(keycode) = input.virtual_keycode {
+                        match keycode {
+                            VirtualKeyCode::Escape | VirtualKeyCode::Q  => {
+                                control_flow.set_exit();
+                            }
+                            VirtualKeyCode::S => {
+                                input_state.selected_element = Element::Sand;
+                            }
+                            VirtualKeyCode::W => {
+                                input_state.selected_element = Element::Water;
+                            }
+                            VirtualKeyCode::E => {
+                                input_state.selected_element = Element::Empty;
+                            }
+                            VirtualKeyCode::C => {
+                                // chunk.clear();
+                            }
+                            _ => {}
                         }
-                        VirtualKeyCode::S => {
-                            input_state.selected_element = Element::Sand;
-                        }
-                        VirtualKeyCode::W => {
-                            input_state.selected_element = Element::Water;
-                        }
-                        VirtualKeyCode::E => {
-                            input_state.selected_element = Element::Empty;
-                        }
-                        VirtualKeyCode::C => {
-                            chunk.clear();
-                        }
-                        _ => {}
                     }
                 },
                 winit::event::WindowEvent::CursorMoved { position, .. } => {
@@ -119,7 +126,7 @@ fn main() {
                         if let Some(last_position) = input_state.last_mouse_position {
                             let (x1, y1) = screen_to_world(last_position.x as f32, last_position.y as f32, &window);
                             let (x2, y2) = screen_to_world(position.x as f32, position.y as f32, &window);
-                
+
                             let dx:i32 = i32::abs(x2 - x1);
                             let dy:i32 = i32::abs(y2 - y1);
                             let sx:i32 = { if x1 < x2 { 1 } else { -1 } };
@@ -130,11 +137,11 @@ fn main() {
                             let mut current_y:i32 = y1;
 
                             loop {
-                                for x in -1..2 {
-                                    for y in -1..2 {
-                                chunk.place(current_x + x as i32, current_y + y as i32, input_state.selected_element);
-                                    }
-                                }
+                                // for x in -1..2 {
+                                //     for y in -1..2 {
+                                //     }
+                                // }
+                                chunk_manager.place((current_x) as i64, (current_y) as i64, input_state.selected_element);
                         
                                 if current_x == x2 && current_y == y2 { break; }
                         
@@ -171,7 +178,7 @@ fn main() {
             }
 
             Event::RedrawRequested(_) => {
-                chunk.draw(pixels.frame_mut());
+                chunk_manager.render(pixels.frame_mut());
                 if let Err(err) = pixels.render() {
                     log_error("pixels.render", err);
                     *control_flow = ControlFlow::Exit;
