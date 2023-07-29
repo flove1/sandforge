@@ -1,8 +1,10 @@
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::rc::Rc;
-use std::sync::{Arc, RwLock, Mutex, Weak};
-use std::thread;
+use std::sync::{Arc, RwLock, Mutex, Weak, RwLockReadGuard};
+use std::thread::{self, JoinHandle};
 
 use rand::Rng;
 
@@ -12,24 +14,24 @@ use super::elements::Element;
 pub struct Chunk {
     index: usize,
     cells: Vec<Cell>,    
-    iter_bit: bool,    
+    active_cells: HashSet<usize>,
     size: usize,
-    manager: Weak<RwLock<ChunkManager>>,
 }
 
 pub struct ChunkManager {
     chunks: Vec<Chunk>,
+    iter_bit: bool,    
     world_size: i64,
     chunk_size: i64,
     maximum_size: usize,
     elements_in_chunk: usize,
 }
 
-pub struct PixelToChunkApi {
+pub struct PixelToChunkApi<'a> {
     x: i64,
     y: i64,    
     chunk_index: usize,
-    chunk_manager: Arc<ChunkManager>,
+    chunk_manager: &'a RwLockReadGuard<'a, ChunkManager>,
 }
 
 pub struct UserToChunkApi {
@@ -37,13 +39,12 @@ pub struct UserToChunkApi {
 }
 
 impl Chunk {
-    fn new(element: Element, index: usize, size: usize, manager: Weak<RwLock<ChunkManager>>) -> Self {
+    fn new(element: Element, index: usize, size: usize) -> Self {
         let mut chunk = Self {
             index: index,
-            iter_bit: false,
             cells: vec![Cell::default(); size.pow(2)],
+            active_cells: HashSet::new(),
             size: size,
-            manager: manager,
         };
 
         for cell in chunk.cells.iter_mut() {
@@ -53,23 +54,10 @@ impl Chunk {
         chunk
     }
 
-    fn update(&mut self, manager: Arc<RwLock<ChunkManager>>, dt: f32) {
-        self.iter_bit = !self.iter_bit;
-        for x in 0..self.size as i64 {
-            for y in (0..self.size as i64).rev() {
-                self.get_cell(x, y).update(PixelToChunkApi { 
-                    x, 
-                    y, 
-                    chunk_index: self.index, 
-                    chunk_manager: manager.clone()
-                }, dt);
-            }
-        }
-    }
-
     fn place(&mut self, index: usize, element: Element) {
         if matches!(self.cells[index].element, Element::Empty) || matches!(element, Element::Empty) {
             self.cells[index] = Cell::new(element);
+            self.active_cells.insert(index);
         }
     }
 
@@ -77,13 +65,13 @@ impl Chunk {
         (y * self.size as i64 + x) as usize
     }
 
-    fn get_cell(&self, x: i64, y: i64) -> Cell {
+    fn get_cell(&self, x: i64, y: i64) -> &Cell {
         let i = self.get_index(x, y);
-        return self.cells[i]
+        &self.cells[i]
     }
 
-    fn get_cell_by_index(&self, index: usize) -> Cell {
-        return self.cells[index]
+    fn get_cell_by_index(&self, index: usize) -> &Cell {
+        &self.cells[index]
     }
 }
 
@@ -93,6 +81,7 @@ impl ChunkManager {
             RwLock::new(
                 Self {
                     chunks: Vec::new(),
+                    iter_bit: false,
                     world_size,
                     chunk_size,
                     maximum_size: (world_size * chunk_size) as usize,
@@ -101,14 +90,15 @@ impl ChunkManager {
             )
         );
 
-        let mut write = manager.write().unwrap();
+        let clone = manager.clone();
+        let mut write = clone.write().unwrap();
         
         for index in 0..world_size.pow(2) {
             write.chunks.push(Chunk::new(
                 Element::Empty, 
                 index as usize, 
                 chunk_size as usize,
-                Arc::downgrade(&manager)));
+            ));
         }
 
         UserToChunkApi{chunk_manager: manager}
@@ -133,98 +123,74 @@ impl ChunkManager {
         &self.chunks[(y * self.world_size as usize) + x]
     }
 
-    fn get_cell_from_chunk(&self, index: usize) -> Cell {
+    fn switch_chunk(&self, index: usize, mut nx: i64, mut ny:i64) -> (usize, i64, i64) {
+        let chunk_offset_x = {
+            if nx < 0 { 
+                nx = self.chunk_size - 1;
+                -1 
+            }
+            else if nx > (self.chunk_size - 1) { 
+                nx = 0;
+                1 
+            }
+            else { 0 }
+        };
+
+        let chunk_offset_y = {
+            if ny < 0 { 
+                ny = self.chunk_size - 1;
+                -1 
+            }
+            else if ny > (self.chunk_size - 1) { 
+                ny = 0;
+                1 
+            }
+            else { 0 }
+        };
+        
+        let x_mod = {
+            if chunk_offset_x > 0 {
+                if (index + chunk_offset_x as usize) % self.world_size as usize == 0 { 0 }
+                else { chunk_offset_x }
+            }
+            else {
+                if (index) % self.world_size as usize == 0 { 0 }
+                else { chunk_offset_x }
+            }
+        };
+        let y_mod = {
+            if chunk_offset_y > 0 {
+                if index > (self.world_size * (self.world_size - 1)) as usize { 0 }
+                else { chunk_offset_y }
+            }
+            else {
+                if (index) % self.maximum_size == 0 { 0 }
+                else { chunk_offset_y }
+            }
+        };
+        let new_index = (index as i64 + (y_mod * self.world_size) + x_mod) as usize;
+        (new_index, nx, ny)
+    }
+
+    fn get_cell_from_chunk(&self, index: usize) -> &Cell {
         let y = index % (self.elements_in_chunk * self.world_size as usize) / self.maximum_size as usize;
         let x = index % self.chunk_size as usize;
-        // dbg!(x, y);
         self.get_chunk_by_index(index).get_cell_by_index(y * self.chunk_size as usize + x)
     }
 }
 
-impl PixelToChunkApi {
-    pub fn get(&mut self, dx: i64, dy: i64) -> Cell {
-        let manager = self.chunk_manager.read().unwrap();
-        let nx = self.x + dx;
-        let ny = self.y + dy;
-        if nx < 0 || nx > (manager.chunk_size - 1) as i64 || ny < 0 || ny > (manager.chunk_size - 1) as i64 {
-            return WALL_CELL;
+impl<'a> PixelToChunkApi<'a> {
+    pub fn get(&mut self, dx: i64, dy: i64) -> &Cell {
+        let mut nx = self.x + dx;
+        let mut ny = self.y + dy;
+        let mut chunk_index = self.chunk_index;
+
+        if nx < 0 || nx > (self.chunk_manager.chunk_size - 1) as i64 || ny < 0 || ny > (self.chunk_manager.chunk_size - 1) as i64 {
+            (chunk_index, nx, ny) = self.chunk_manager.switch_chunk(self.chunk_index, nx, ny);
         }
-        manager.chunks[self.chunk_index].get_cell(nx, ny)
+
+        self.chunk_manager.chunks[chunk_index].get_cell(nx, ny)
     }
-
-    pub fn set(&mut self, dx: i64, dy: i64, cell: Cell) {
-        let manager = self.chunk_manager.read().unwrap();
-        let x = self.x as i64 + dx;
-        let y = self.y as i64 + dy;
-        if x < 0 || x > (manager.chunk_size - 1) as i64 || y < 0 || y > (manager.chunk_size - 1) as i64 {
-            return;
-        }
-        let index = manager.chunks[self.chunk_index].get_index(x, y);
-        drop(manager);
-        self.chunk_manager.write().unwrap().chunks[self.chunk_index].cells[index] = cell;
-    }
-
-    pub fn update(&mut self, cell: Cell) {
-        let manager = self.chunk_manager.read().unwrap();
-        let index = manager.chunks[self.chunk_index].get_index(self.x, self.y);
-        drop(manager);
-        self.chunk_manager.write().unwrap().chunks[self.chunk_index].cells[index] = cell;
-    }
-
-    pub fn swap(&mut self, dx:i64, dy: i64) {
-        let manager = self.chunk_manager.read().unwrap();
-        let nx = self.x + dx;
-        let ny = self.y + dy;
-        let i1 = manager.chunks[self.chunk_index].get_index(self.x, self.y);
-        if nx < 0 || nx > (manager.chunk_size - 1) as i64 || ny < 0 || ny > (manager.chunk_size - 1) as i64 {
-            return
-            // let chunk_offset_x = {
-            //     if nx < 0 { -1 }
-            //     else if nx > (manager.chunk_size - 1) { 1 }
-            //     else { 0 }
-            // };
-
-            // let chunk_offset_y = {
-            //     if ny < 0 { -1 }
-            //     else if ny > (manager.chunk_size - 1) { 1 }
-            //     else { 0 }
-            // };
-
-            // let (new_chunk, new_index) = self.get_adjacent_chunk(chunk_offset_x, chunk_offset_y);
-            // let i2 = manager.chunks[new_index].get_index(self.x + dx, self.y + dy);
-        }
-        let i2 = manager.chunks[self.chunk_index].get_index(self.x + dx, self.y + dy);
-        drop(manager);
-        self.chunk_manager.write().unwrap().chunks[self.chunk_index].cells.swap(i1, i2);
-        self.x += dx;
-        self.y += dy;
-    }
-
-    // pub fn get_adjacent_chunk(&self, x: i64, y:i64) -> (&Chunk, usize) {
-    //     let manager = self.chunk_manager.read().unwrap();
-    //     let x_mod = {
-    //         if x > 0 {
-    //             if (self.chunk_index + x as usize) % manager.world_size as usize == 0 { 0 }
-    //             else { x as usize }
-    //         }
-    //         else {
-    //             if (self.chunk_index) % manager.world_size as usize == 0 { 0 }
-    //             else { x as usize }
-    //         }
-    //     };
-    //     let y_mod = {
-    //         if y > 0 {
-    //             if self.chunk_index > (manager.world_size * (manager.world_size - 1)) as usize { 0 }
-    //             else { y as usize }
-    //         }
-    //         else {
-    //             if (self.chunk_index) % manager.maximum_size == 0 { 9 }
-    //             else { self.chunk_index - x as usize }
-    //         }
-    //     };
-    //     let index = self.chunk_index + (y_mod * manager.maximum_size as usize) + x_mod;
-    //     (&manager.chunks[self.chunk_index + (y_mod * manager.maximum_size as usize) + x_mod], index)
-    // }
 
     pub fn rand_int(&mut self, n: i64) -> i64 {
         rand::thread_rng().gen_range(0..n)
@@ -274,132 +240,219 @@ impl PixelToChunkApi {
     }
 
     pub fn iter_bit(&self) -> bool {
-        self.chunk_manager.read().unwrap().chunks[self.chunk_index].iter_bit
+        self.chunk_manager.iter_bit
     }
  }
 
 impl UserToChunkApi {
-    pub fn update(&mut self, dt: f32) {     
-        let lock = Arc::new(RwLock::new(self.chunk_manager));
-        let mut handles = vec![];
-
-        for index in (0.. manager.chunks.len()).filter(|index| index % 2 == 0) {
-            let handle = thread::spawn({
-                let manager_ref = Arc::clone(&self.chunk_manager);
-                let index = index;
-                // dbg!(index);
-
-                move || {
-                    // match manager_ref.try_write() {
-                    //     Ok(_) => dbg!("nice"),
-                    //     Err(_) => dbg!("wtf"),
-                    // };
-                    let mut writer = manager_ref.write().unwrap();
-                    dbg!("aaaaaaaaaaaaaa");
-                    writer.chunks[index].iter_bit = !writer.chunks[index].iter_bit;
-                    drop(writer);
-                    
-                    let reader = manager_ref.read().unwrap();
-                    let chunk = &reader.chunks[index];
-                    
-                    if chunk.iter_bit {
-                        for x in 0..chunk.size as i64 {
-                            for y in (0..chunk.size as i64).rev() {
-                                chunk.get_cell(x, y).update(PixelToChunkApi { 
-                                    x, 
-                                    y, 
-                                    chunk_index: index, 
-                                    chunk_manager: manager_ref.clone()
-                                }, dt);
-                            }
-                        }
-                    }
-                    else {
-                        for x in (0..chunk.size as i64).rev() {
-                            for y in (0..chunk.size as i64).rev() {
-                                chunk.get_cell(x, y).update(PixelToChunkApi { 
-                                    x, 
-                                    y, 
-                                    chunk_index: index, 
-                                    chunk_manager: manager_ref.clone() 
-                                }, dt);
-                            }
-                        }
-                    }
-                }}
-            );
-
-            handles.push(handle);
+    pub fn update(&mut self, dt: f32) {
+        {
+            let mut writer = self.chunk_manager.write().unwrap();
+            writer.iter_bit = !writer.iter_bit;
         }
 
-        drop(manager);
-        for handle in handles {
-            handle.join().unwrap();
-        }
+        //separate chunks in squares and process them one by one, so there is no concurency during moving pixels between chunks
+        for chunk_offset in 0..4 {
+            let manager = self.chunk_manager.read().unwrap();
+            let x_range: Vec<i64> = if chunk_offset % 3 == 0 {
+                (0..manager.world_size).filter(|x| x%2 == 0).collect()
+            }
+            else {
+                (0..manager.world_size).filter(|x| x%2 == 1).collect()
+            };
 
-        let manager = self.chunk_manager.read().unwrap();
-        let mut handles = vec![];
+            let y_range: Vec<i64> = if chunk_offset < 2 {
+                (0..manager.world_size).filter(|y| y%2 == 0).collect()
+            }
+            else {
+                (0..manager.world_size).filter(|y| y%2 == 1).collect()
+            };
+
+            let mut handles = vec![];
+            for x in x_range.iter() {
+                for y in y_range.iter() {
+                    let handle = UserToChunkApi::update_chunk(
+                        dt, 
+                        ((y * manager.world_size) + x) as usize, 
+                        Arc::clone(&self.chunk_manager)
+                    );
         
-        for index in (0.. manager.chunks.len()).filter(|index| index % 2 == 1) {
-            let handle = thread::spawn({
-                let manager_ref = Arc::clone(&self.chunk_manager);
-                let index = index;
-                // dbg!(index);
+                    handles.push(handle);
+                }
+            }
 
-                move || {
-                    match manager_ref.try_write() {
-                        Ok(_) => dbg!("nice"),
-                        Err(_) => dbg!("wtf"),
-                    };
-                    let mut writer = manager_ref.write().unwrap();
-                    writer.chunks[index].iter_bit = !writer.chunks[index].iter_bit;
-                    drop(writer);
-                    
-                    let reader = manager_ref.read().unwrap();
-                    let chunk = &reader.chunks[index];
-                    
-                    if chunk.iter_bit {
-                        for x in 0..chunk.size as i64 {
-                            for y in (0..chunk.size as i64).rev() {
-                                chunk.get_cell(x, y).update(PixelToChunkApi { 
-                                    x, 
-                                    y, 
-                                    chunk_index: index, 
-                                    chunk_manager: manager_ref.clone()
-                                }, dt);
-                            }
-                        }
-                    }
-                    else {
-                        for x in (0..chunk.size as i64).rev() {
-                            for y in (0..chunk.size as i64).rev() {
-                                chunk.get_cell(x, y).update(PixelToChunkApi { 
-                                    x, 
-                                    y, 
-                                    chunk_index: index, 
-                                    chunk_manager: manager_ref.clone() 
-                                }, dt);
-                            }
-                        }
-                    }
-                }}
-            );
-
-            handles.push(handle);
-        }
-
-        drop(manager);
-        for handle in handles {
-            handle.join().unwrap();
+            drop(manager);
+            for handle in handles {
+                handle.join().unwrap();
+            }
         }
     }
 
     pub fn place(&mut self, x: i64, y: i64, element: Element) {
         self.chunk_manager.write().unwrap().place(x, y, element);
     }    
+
+    fn update_chunk(dt: f32, chunk_index: usize, manager_ref: Arc<RwLock<ChunkManager>>) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let cell_updates = UserToChunkApi::get_cell_updates(dt, chunk_index, &manager_ref);  
+            UserToChunkApi::process_cell_updates(chunk_index, cell_updates, &manager_ref);
+        })
+    }
     
+    fn get_cell_updates(dt: f32, chunk_index: usize, manager_ref: &Arc<RwLock<ChunkManager>>) -> Vec<((i64, i64), Vec<CellAction>)> {
+        let mut cell_updates: Vec<((i64, i64), Vec<CellAction>)> = vec![];
+        let manager = manager_ref.read().unwrap();
+        let chunk = &manager.chunks[chunk_index];
+
+        for cell_index in chunk.active_cells.iter() {
+            let cell = chunk.cells[*cell_index];
+            let x = (cell_index % manager.chunk_size as usize) as i64;
+            let y = (cell_index / manager.chunk_size as usize) as i64;  
+            if cell.iter_bit == manager.iter_bit {
+                let actions = cell.update(PixelToChunkApi { 
+                    x: x, 
+                    y: y, 
+                    chunk_index: chunk_index, 
+                    chunk_manager: &manager,
+                }, dt);
+
+                if actions.len() != 0 {
+                    cell_updates.push((
+                        (x, y), 
+                        actions
+                    ));
+                }
+            }
+        }
+
+        cell_updates
+    }
+
+    fn process_cell_updates(chunk_index: usize, cell_updates: Vec<((i64, i64), Vec<CellAction>)>, manager_ref: &Arc<RwLock<ChunkManager>>) {
+        let mut manager = manager_ref.write().unwrap();
+
+        for ((mut x, mut y), actions) in cell_updates {
+            let mut cell_chunk_index = chunk_index;
+            for action in actions {
+                match action {
+                    CellAction::Swap(dx, dy) => {
+                        for dx in -1..2 {
+                            for dy in -1..2 {
+                                let nx = x + dx;
+                                let ny = y + dy;
+                                if nx < 0 || nx > (manager.chunk_size - 1) as i64 || ny < 0 || ny > (manager.chunk_size - 1) as i64 {
+                                    let (new_cell_chunk_index, nx, ny) = manager.switch_chunk(cell_chunk_index, nx, ny);
+                                    let cell_index = manager.chunks[new_cell_chunk_index].get_index(nx, ny);
+                                    if manager.chunks[new_cell_chunk_index].cells[cell_index].iter_bit != manager.iter_bit {
+                                        manager.chunks[new_cell_chunk_index].active_cells.insert(cell_index);
+                                    }
+                                }
+                                else {
+                                    let cell_index = manager.chunks[cell_chunk_index].get_index(nx, ny);
+                                    if manager.chunks[cell_chunk_index].cells[cell_index].iter_bit != manager.iter_bit {
+                                        manager.chunks[cell_chunk_index].active_cells.insert(cell_index);
+                                    }
+                                }
+                            }
+                        }
+
+                        let cell_index_1 = manager.chunks[cell_chunk_index].get_index(x, y);
+                        let nx = x + dx;
+                        let ny = y + dy;
+                        if nx < 0 || nx > (manager.chunk_size - 1) as i64 || ny < 0 || ny > (manager.chunk_size - 1) as i64 {
+                            let (new_cell_chunk_index, nx, ny) = manager.switch_chunk(cell_chunk_index, nx, ny);
+                            let cell_index_2 = manager.chunks[new_cell_chunk_index].get_index(nx, ny);
+                            let temp_cell = manager.chunks[cell_chunk_index].cells[cell_index_1];
+                            manager.chunks[cell_chunk_index].cells[cell_index_1] = manager.chunks[new_cell_chunk_index].cells[cell_index_2];
+                            manager.chunks[new_cell_chunk_index].cells[cell_index_2] = temp_cell;
+                            manager.chunks[new_cell_chunk_index].active_cells.insert(cell_index_2);
+                            x = nx;
+                            y = ny;
+                            cell_chunk_index = new_cell_chunk_index;
+                        }
+                        else {
+                            let cell_index_2 = manager.chunks[cell_chunk_index].get_index(nx, ny);
+                            manager.chunks[cell_chunk_index].cells.swap(cell_index_1, cell_index_2);
+                            manager.chunks[cell_chunk_index].active_cells.insert(cell_index_1);
+                            manager.chunks[cell_chunk_index].active_cells.insert(cell_index_2);
+                            x += dx;
+                            y += dy;
+                        }
+
+                        for dx in -1..2 {
+                            for dy in -1..2 {
+                                let nx = x + dx;
+                                let ny = y + dy;
+                                if nx < 0 || nx > (manager.chunk_size - 1) as i64 || ny < 0 || ny > (manager.chunk_size - 1) as i64 {
+                                    let (new_cell_chunk_index, nx, ny) = manager.switch_chunk(cell_chunk_index, nx, ny);
+                                    let cell_index = manager.chunks[new_cell_chunk_index].get_index(nx, ny);
+                                    if manager.chunks[new_cell_chunk_index].cells[cell_index].iter_bit != manager.iter_bit {
+                                        manager.chunks[new_cell_chunk_index].active_cells.insert(cell_index);
+                                    }
+                                }
+                                else {
+                                    let cell_index = manager.chunks[cell_chunk_index].get_index(nx, ny);
+                                    if manager.chunks[cell_chunk_index].cells[cell_index].iter_bit != manager.iter_bit {
+                                        manager.chunks[cell_chunk_index].active_cells.insert(cell_index);
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    CellAction::Set(dx, dy, cell) => {
+                        let nx = x + dx;
+                        let ny = y + dy;
+                        if nx < 0 || nx > (manager.chunk_size - 1) as i64 || ny < 0 || ny > (manager.chunk_size - 1) as i64 {
+                            let (new_chunk_index, nx, ny) = manager.switch_chunk(cell_chunk_index, nx, ny);
+                            let index = manager.chunks[new_chunk_index].get_index(nx, ny);
+                            manager.chunks[new_chunk_index].cells[index] = cell;
+                        }
+                        else {
+                            let index = manager.chunks[cell_chunk_index].get_index(nx, ny);
+                            manager.chunks[cell_chunk_index].cells[index] = cell;
+                        }
+                    },
+                    CellAction::Update(cell) => {
+                        for dx in -1..2 {
+                            for dy in -1..2 {
+                                let nx = x + dx;
+                                let ny = y + dy;
+                                if nx < 0 || nx > (manager.chunk_size - 1) as i64 || ny < 0 || ny > (manager.chunk_size - 1) as i64 {
+                                    let (new_cell_chunk_index, nx, ny) = manager.switch_chunk(cell_chunk_index, nx, ny);
+                                    let cell_index = manager.chunks[new_cell_chunk_index].get_index(nx, ny);
+                                    if manager.chunks[new_cell_chunk_index].cells[cell_index].iter_bit != manager.iter_bit {
+                                        manager.chunks[new_cell_chunk_index].active_cells.insert(cell_index);
+                                    }
+                                }
+                                else {
+                                    let cell_index = manager.chunks[cell_chunk_index].get_index(nx, ny);
+                                    if manager.chunks[cell_chunk_index].cells[cell_index].iter_bit != manager.iter_bit {
+                                        manager.chunks[cell_chunk_index].active_cells.insert(cell_index);
+                                    }
+                                }
+                            }
+                        }
+                        let index = manager.chunks[cell_chunk_index].get_index(x, y);
+                        manager.chunks[cell_chunk_index].cells[index] = cell;
+                    },
+                    CellAction::Sleep() => {
+                        let index = manager.chunks[cell_chunk_index].get_index(x, y);
+                        if manager.chunks[cell_chunk_index].cells[index].iter_bit == manager.iter_bit {
+                            manager.chunks[cell_chunk_index].active_cells.remove(&index);
+                        }
+                    },
+                }
+            }
+            let index = manager.chunks[cell_chunk_index].get_index(x, y);
+            manager.chunks[cell_chunk_index].cells[index].iter_bit = !manager.iter_bit;
+            dbg!(manager.chunks[chunk_index].active_cells.len());
+        }
+    }
+
     pub fn render(&self, frame: &mut [u8]) {
         let manager = self.chunk_manager.read().unwrap();
+        
+        let mut glowing_pixels: Vec<(usize, &Cell)> = vec![];
 
         for (index, pixel) in frame.chunks_exact_mut(4).enumerate() {
             let cell = manager.get_cell_from_chunk(index);
@@ -409,8 +462,38 @@ impl UserToChunkApi {
                 Element::Stone => [0x77, 0x77, 0x77, 0xff],
                 Element::Sand => [0xf2_u8.saturating_add(cell.ra), 0xf1_u8.saturating_add(cell.ra), 0xa3_u8.saturating_add(cell.ra), 0xff],
                 Element::Water => [0x47 + offset, 0x7C + offset, 0xB8 + offset, 0xff],
+                Element::Glowing_Sand => {
+                    glowing_pixels.push((index, cell));
+                    [0xe8, 0x6a, 0x17, 0xff]
+                },
             };
             pixel.copy_from_slice(&rgba);
+        }
+
+        for (index, cell) in glowing_pixels {
+            let y = (index / manager.maximum_size) as i64;
+            let x = (index % manager.maximum_size) as i64;
+            let range = 0..(manager.maximum_size as i64);
+            for offset_x in -4..5 {
+                for offset_y in -4..5 {
+                    if offset_x == 0 && offset_y == 0 {
+                        continue;
+                    }
+
+                    let affected_pixel_x = x + offset_x; 
+                    let affected_pixel_y = y + offset_y; 
+                    if !range.contains(&affected_pixel_x) || !range.contains(&affected_pixel_y) {
+                        continue;
+                    }
+                    
+                    let intensity = (1.0 / (offset_x.abs() + offset_y.abs()) as f32).clamp(0.0, 0.2);
+                    
+                    let index = ((affected_pixel_y * (manager.maximum_size) as i64 + affected_pixel_x) * 4) as usize;
+                    frame[index] = ((frame[index] as f32 * (1.0 - intensity) + 0xe8 as f32 * (intensity)) / 2.0) as u8;
+                    frame[index + 1] = ((frame[index + 1] as f32 * (1.0 - intensity) + 0x6a as f32 * (intensity)) / 2.0) as u8;
+                    frame[index + 2] = ((frame[index + 2] as f32 * (1.0 - intensity) + 0x17 as f32 * (intensity)) / 2.0) as u8;
+                }
+            }
         }
     }
 }

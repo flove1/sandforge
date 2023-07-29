@@ -10,27 +10,30 @@ pub enum Element {
     Stone,
     Water,
     Sand,
+    GlowingSand,
 }
 
-pub fn update_sand(mut cell: Cell, mut api: PixelToChunkApi, dt: f32) -> Vec<CellAction> {
+pub fn update_sand(mut cell: Cell, mut api: PixelToChunkApi, _dt: f32) -> Vec<CellAction> {
     let mut actions: Vec<CellAction> = vec![];
-    let mut offset_x = 0;
-    let mut offset_y = 0;
     let dx = api.rand_dir();
 
     if matches!(api.get(0, 1).element, Element::Empty ) {
         actions.push(CellAction::Swap(0, 1));
-    } else if matches!(api.get(dx, 1).element, Element::Empty ) {
-        actions.push(CellAction::Swap(dx, 1));
+    } else if matches!(api.get(dx, 0).element, Element::Empty ) {
+        actions.push(CellAction::Swap(dx, 0));
     } else if matches!(api.get(0, 1).element, Element::Water) {
         actions.push(CellAction::Swap(0, 1));
     }
+    // else {
+    //     actions.push(CellAction::Sleep());
+    //     return  actions;
+    // }
+    
     actions.push(CellAction::Update(cell));
-
     actions
 }
 
-pub fn update_liquid(mut cell: Cell, mut api: PixelToChunkApi, dt: f32) -> Vec<CellAction> {
+pub fn update_liquid(mut cell: Cell, mut api: PixelToChunkApi, _dt: f32) -> Vec<CellAction> {
     let mut actions: Vec<CellAction> = vec![];
     let mut dx = api.rand_dir();
 
@@ -54,13 +57,13 @@ pub fn update_liquid(mut cell: Cell, mut api: PixelToChunkApi, dt: f32) -> Vec<C
     }
 
     dx = if cell.ra % 2 == 0 { 1 } else { -1 };
-    let dx0 = api.get(dx, 0);
+    let dx0 = *api.get(dx, 0);
 
     if matches!(api.get(dx, 0).element, Element::Empty) && matches!(api.get(dx * 2, 0).element, Element::Empty) {
         // scoot double
         cell.rb = 6;
+
         actions.push(CellAction::Swap(2 * dx, 0));
-        actions.push(CellAction::Update(cell));
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
@@ -74,8 +77,9 @@ pub fn update_liquid(mut cell: Cell, mut api: PixelToChunkApi, dt: f32) -> Vec<C
             }
         }
     } else if matches!(dx0.element, Element::Empty) {
-        actions.push(CellAction::Set(0, 0, dx0));
         actions.push(CellAction::Set(dx, 0, Cell { rb: 3, ..cell }));
+        actions.push(CellAction::Update(dx0));
+        
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
@@ -90,20 +94,14 @@ pub fn update_liquid(mut cell: Cell, mut api: PixelToChunkApi, dt: f32) -> Vec<C
     } else if cell.rb == 0 {
         if matches!(api.get(-dx, 0).element, Element::Empty) {
             // bump
-            actions.push(CellAction::Set(0, 0, Cell {
-                ra: ((cell.ra as i64) + dx) as u8,
-                ..cell
-            }));
+            cell.ra = ((cell.ra as i64) + dx) as u8;
+            actions.push(CellAction::Update(cell));
         }
     } else {
         // become less certain (more bumpable)
-        actions.push(CellAction::Set(0, 0, Cell {
-            rb: cell.rb - 1,
-            ..cell
-        }));
+        cell.rb = cell.rb - 1;
+        actions.push(CellAction::Update(cell));
     }
 
-    return  actions;
-    
-    
+    actions    
 }

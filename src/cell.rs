@@ -9,7 +9,6 @@ pub struct Cell {
     pub ra: u8,
     pub rb: u8,
     pub iter_bit: bool,
-    pub active: bool,
 }
 
 pub static WALL_CELL: Cell = Cell {
@@ -17,7 +16,6 @@ pub static WALL_CELL: Cell = Cell {
     ra: 0,
     rb: 0,
     iter_bit: false,
-    active: true,
 };
 
 pub enum CellAction {
@@ -30,7 +28,6 @@ impl Cell {
     pub fn new(element: Element) -> Self {
         let mut cell = Self {
             element,
-            active: true,
             ..Default::default()
         };
 
@@ -42,16 +39,13 @@ impl Cell {
         cell
     }
 
-    pub fn update(&mut self, api: PixelToChunkApi, dt: f32) -> Vec<CellAction> {
-        if self.iter_bit == api.iter_bit() || !self.active {
-            return vec![];
-        }
-        self.iter_bit = !self.iter_bit;
+    pub fn update(&self, api: PixelToChunkApi, dt: f32) -> Vec<CellAction> {
         match self.element {
             Element::Empty => { vec![] },
             Element::Stone => { vec![] },
             Element::Water => { update_liquid(*self, api, dt) },
             Element::Sand => { update_sand(*self, api, dt) },
+            Element::GlowingSand => { update_sand(*self, api, dt) },
         }
     }
 }
