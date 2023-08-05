@@ -20,8 +20,8 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::x11::{WindowBuilderExtX11, XWindowType};
 use winit::window::WindowBuilder;
 
-const CHUNK_SIZE: u32 = 120;
-const WORLD_SIZE: u32 = 2;
+const CHUNK_SIZE: u32 = 64;
+const WORLD_SIZE: u32 = 4;
 const SIZE: u32 = CHUNK_SIZE * WORLD_SIZE;
 const DELAY: u128 = 1;
 const PRINT_DELAY: bool = true;
@@ -38,7 +38,7 @@ fn main() {
     env_logger::init();
     let event_loop = EventLoop::new();
     let window = {
-        let size = LogicalSize::new(800, 800);
+        let size = LogicalSize::new(SIZE * 3, SIZE * 3);
         WindowBuilder::new()
             .with_title("Rust-physics")
             .with_inner_size(size)
@@ -81,7 +81,7 @@ fn main() {
                 let now = Instant::now();
                 if now.duration_since(input_state.time_instant).as_millis() > DELAY {
                     if PRINT_DELAY {
-                        dbg!(now.duration_since(input_state.time_instant));
+                        dbg!(1.0/(now.duration_since(input_state.time_instant).as_secs_f64()));
                     }
                     chunk_manager.update(now.duration_since(input_state.time_instant).as_secs_f32());
                     input_state.time_instant = now;
@@ -163,7 +163,6 @@ fn main() {
                                 }
                         
                                 if current_x == x2 && current_y == y2 { break; }
-                        
                                 let error2:i32 = error;
                         
                                 if error2 > -dx {

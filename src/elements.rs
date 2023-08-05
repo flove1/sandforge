@@ -19,8 +19,8 @@ pub fn update_sand(mut cell: Cell, mut api: PixelToChunkApi, _dt: f32) -> Vec<Ce
 
     if matches!(api.get(0, 1).element, Element::Empty ) {
         actions.push(CellAction::Swap(0, 1));
-    } else if matches!(api.get(dx, 0).element, Element::Empty ) {
-        actions.push(CellAction::Swap(dx, 0));
+    } else if matches!(api.get(dx, 1).element, Element::Empty ) {
+        actions.push(CellAction::Swap(dx, 1));
     } else if matches!(api.get(0, 1).element, Element::Water) {
         actions.push(CellAction::Swap(0, 1));
     }
