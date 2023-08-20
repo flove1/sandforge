@@ -2,43 +2,37 @@
 
 use std::time::Instant;
 
-mod cell;
-mod chunk;
-mod elements;
+mod sim;
 mod utils;
+mod vector;
 mod constants;
 
-use chunk::Chunk;
-use elements::Element;
+use crate::sim::elements::Element;
 
 use error_iter::ErrorIter as _;
 use log::error;
 use pixels::{Pixels, SurfaceTexture};
+use sim::world::World;
 use winit::dpi::{PhysicalPosition, LogicalSize};
 use winit::event::{Event, VirtualKeyCode, ElementState, MouseButton};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::x11::{WindowBuilderExtX11, XWindowType};
-use winit::window::{WindowBuilder, Window};
-
-const SIZE: u32 = 100;
-const DELAY: u128 = 10;
-
-fn screen_to_world(x: f32, y:f32,  window: &Window) -> (i32, i32) {
-    ((x as f32 / window.inner_size().width as f32 * SIZE as f32).round() as i32, (y as f32 / window.inner_size().height as f32 * SIZE as f32).round() as i32)
-}
+use winit::window::WindowBuilder;
+use crate::constants::*;
 
 struct InputState {
     mouse_keys_held: [ElementState; 3],
     last_mouse_position: Option<PhysicalPosition<f64>>,
     time_instant: Instant,
     selected_element: Element,
+    brush_size: i32,
 }
 
 fn main() {
     env_logger::init();
     let event_loop = EventLoop::new();
     let window = {
-        let size = LogicalSize::new(SIZE * 3, SIZE * 3);
+        let size = LogicalSize::new((CHUNK_SIZE * WORLD_SIZE * 2) as i32, (CHUNK_SIZE * WORLD_SIZE * 2) as i32);
         WindowBuilder::new()
             .with_title("Rust-physics")
             .with_inner_size(size)
@@ -51,23 +45,27 @@ fn main() {
     let mut pixels = {
         let window_size = window.inner_size();
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        Pixels::new(SIZE, SIZE, surface_texture).unwrap()
+        Pixels::new((CHUNK_SIZE * WORLD_SIZE) as u32, (CHUNK_SIZE * WORLD_SIZE) as u32, surface_texture).unwrap()
     };
 
-    let mut chunk = Chunk::new(SIZE, SIZE);
+    let mut world = World::new();
 
-    for i in 0..SIZE {
-        chunk.place(i as i32, 0, Element::Stone);
-        chunk.place(i as i32, (SIZE-1) as i32, Element::Stone);
-        chunk.place(0 as i32, i as i32, Element::Stone);
-        chunk.place((SIZE-1) as i32 as i32, i as i32, Element::Stone);
-    }
+    // for x in 0..CHUNK_SIZE * WORLD_SIZE {
+    //     world.place(x as i64, 0, Element::Stone);
+    //     world.place(x as i64, (CHUNK_SIZE * WORLD_SIZE - 1) as i64, Element::Stone);
+    // }
 
+    // for y in 0..CHUNK_SIZE * WORLD_SIZE {
+    //     world.place(0, y as i64, Element::Stone);
+    //     world.place((CHUNK_SIZE * WORLD_SIZE - 1) as i64, y as i64, Element::Stone);
+    // }
+    
     let mut input_state = InputState{
         mouse_keys_held: [ElementState::Released; 3],
         last_mouse_position: None,
         time_instant: Instant::now(),
         selected_element: Element::Sand,
+        brush_size: 1,
     };
 
     event_loop.run(move |event, _, control_flow| {
@@ -75,9 +73,12 @@ fn main() {
         
         match &event {
             Event::NewEvents(_) => {
+                world.update(0.0);
                 let now = Instant::now();
                 if now.duration_since(input_state.time_instant).as_millis() > DELAY {
-                    chunk.update(now.duration_since(input_state.time_instant).as_secs_f32());
+                    if PRINT_DELAY {
+                        dbg!(1.0/(now.duration_since(input_state.time_instant).as_secs_f64()));
+                    }
                     input_state.time_instant = now;
                 }
             }
@@ -95,31 +96,58 @@ fn main() {
                     return;
                 },
                 winit::event::WindowEvent::KeyboardInput { input, .. } => {
-                    match input.virtual_keycode.unwrap() {
-                        VirtualKeyCode::Escape | VirtualKeyCode::Q  => {
-                            control_flow.set_exit();
+                    if let Some(keycode) = input.virtual_keycode {
+                        match keycode {
+                            VirtualKeyCode::Escape | VirtualKeyCode::Q  => {
+                                control_flow.set_exit();
+                            },
+                            VirtualKeyCode::S => {
+                                input_state.selected_element = Element::Sand;
+                            },
+                            VirtualKeyCode::W => {
+                                input_state.selected_element = Element::Water;
+                            },
+                            VirtualKeyCode::D => {
+                                input_state.selected_element = Element::Stone;
+                            },
+                            VirtualKeyCode::E => {
+                                input_state.selected_element = Element::Empty;
+                            },
+                            VirtualKeyCode::G => {
+                                input_state.selected_element = Element::GlowingSand;
+                            },
+                            VirtualKeyCode::Plus => {
+                                input_state.brush_size = (input_state.brush_size + 1).min(9);
+                            },
+                            VirtualKeyCode::Minus => {
+                                input_state.brush_size = (input_state.brush_size - 1).max(1);
+                            },
+                            VirtualKeyCode::C => {
+                                // chunk.clear();
+                            }
+                            _ => {}
                         }
-                        VirtualKeyCode::S => {
-                            input_state.selected_element = Element::Sand;
-                        }
-                        VirtualKeyCode::W => {
-                            input_state.selected_element = Element::Water;
-                        }
-                        VirtualKeyCode::E => {
-                            input_state.selected_element = Element::Empty;
-                        }
-                        VirtualKeyCode::C => {
-                            chunk.clear();
-                        }
-                        _ => {}
                     }
                 },
                 winit::event::WindowEvent::CursorMoved { position, .. } => {
                     if input_state.mouse_keys_held[0] == ElementState::Pressed {
                         if let Some(last_position) = input_state.last_mouse_position {
-                            let (x1, y1) = screen_to_world(last_position.x as f32, last_position.y as f32, &window);
-                            let (x2, y2) = screen_to_world(position.x as f32, position.y as f32, &window);
-                
+                            let (x1, y1) = if let Ok((x, y)) = pixels.window_pos_to_pixel((last_position.x as f32, last_position.y as f32)) {
+                                (x as i32, y as i32)
+                            }
+                            else {
+                                input_state.last_mouse_position = Some(*position);
+                                return
+                            };
+
+                            let (x2, y2) = if let Ok((x, y)) = pixels.window_pos_to_pixel((position.x as f32, position.y as f32)) {
+                                (x as i32, y as i32)
+                            }
+                            else {
+                                input_state.last_mouse_position = Some(*position);
+                                return
+                            };
+
                             let dx:i32 = i32::abs(x2 - x1);
                             let dy:i32 = i32::abs(y2 - y1);
                             let sx:i32 = { if x1 < x2 { 1 } else { -1 } };
@@ -130,14 +158,13 @@ fn main() {
                             let mut current_y:i32 = y1;
 
                             loop {
-                                for x in -1..2 {
-                                    for y in -1..2 {
-                                chunk.place(current_x + x as i32, current_y + y as i32, input_state.selected_element);
+                                for x in (-input_state.brush_size+1)..(input_state.brush_size) {
+                                    for y in (-input_state.brush_size+1)..(input_state.brush_size) {
+                                        world.place((current_x + x) as i64, (current_y + y) as i64, input_state.selected_element);
                                     }
                                 }
                         
                                 if current_x == x2 && current_y == y2 { break; }
-                        
                                 let error2:i32 = error;
                         
                                 if error2 > -dx {
@@ -171,7 +198,7 @@ fn main() {
             }
 
             Event::RedrawRequested(_) => {
-                chunk.draw(pixels.frame_mut());
+                world.render(pixels.frame_mut());
                 if let Err(err) = pixels.render() {
                     log_error("pixels.render", err);
                     *control_flow = ControlFlow::Exit;
