@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use crate::chunk::*;
+use super::chunk::ChunkApi;
 use super::elements::*;
 
 #[derive(Default, Clone, Copy)]
@@ -18,11 +18,12 @@ pub static WALL_CELL: Cell = Cell {
     iter_bit: false,
 };
 
-pub enum CellAction {
-    Swap(i64, i64),
-    Set(i64, i64, Cell),
-    Update(Cell),
-}
+pub static EMPTY_CELL: Cell = Cell {
+    element: Element::Empty,
+    ra: 0,
+    rb: 0,
+    iter_bit: false,
+};
 
 impl Cell {
     pub fn new(element: Element) -> Self {
@@ -39,10 +40,10 @@ impl Cell {
         cell
     }
 
-    pub fn update(&self, api: PixelToChunkApi, dt: f32) -> Vec<CellAction> {
+    pub fn update(&self, api: ChunkApi, dt: f32) {
         match self.element {
-            Element::Empty => { vec![] },
-            Element::Stone => { vec![] },
+            Element::Empty => {},
+            Element::Stone => {},
             Element::Water => { update_liquid(*self, api, dt) },
             Element::Sand => { update_sand(*self, api, dt) },
             Element::GlowingSand => { update_sand(*self, api, dt) },

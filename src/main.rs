@@ -2,29 +2,23 @@
 
 use std::time::Instant;
 
-mod cell;
-mod chunk;
-mod elements;
+mod sim;
 mod utils;
+mod vector;
 mod constants;
 
-use chunk::ChunkManager;
-use elements::Element;
+use crate::sim::elements::Element;
 
 use error_iter::ErrorIter as _;
 use log::error;
 use pixels::{Pixels, SurfaceTexture};
+use sim::world::World;
 use winit::dpi::{PhysicalPosition, LogicalSize};
 use winit::event::{Event, VirtualKeyCode, ElementState, MouseButton};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::x11::{WindowBuilderExtX11, XWindowType};
 use winit::window::WindowBuilder;
-
-const CHUNK_SIZE: u32 = 64;
-const WORLD_SIZE: u32 = 4;
-const SIZE: u32 = CHUNK_SIZE * WORLD_SIZE;
-const DELAY: u128 = 1;
-const PRINT_DELAY: bool = true;
+use crate::constants::*;
 
 struct InputState {
     mouse_keys_held: [ElementState; 3],
@@ -38,7 +32,7 @@ fn main() {
     env_logger::init();
     let event_loop = EventLoop::new();
     let window = {
-        let size = LogicalSize::new(SIZE * 3, SIZE * 3);
+        let size = LogicalSize::new((CHUNK_SIZE * WORLD_SIZE * 2) as i32, (CHUNK_SIZE * WORLD_SIZE * 2) as i32);
         WindowBuilder::new()
             .with_title("Rust-physics")
             .with_inner_size(size)
@@ -51,20 +45,21 @@ fn main() {
     let mut pixels = {
         let window_size = window.inner_size();
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        Pixels::new(SIZE, SIZE, surface_texture).unwrap()
+        Pixels::new((CHUNK_SIZE * WORLD_SIZE) as u32, (CHUNK_SIZE * WORLD_SIZE) as u32, surface_texture).unwrap()
     };
 
-    let mut chunk_manager = ChunkManager::new(CHUNK_SIZE as i64, WORLD_SIZE as i64);
+    let mut world = World::new();
 
-    for x in 0..SIZE {
-        chunk_manager.place(x as i64, 0, Element::Stone);
-        chunk_manager.place(x as i64, (SIZE - 1) as i64, Element::Stone);
-    }
+    // for x in 0..CHUNK_SIZE * WORLD_SIZE {
+    //     world.place(x as i64, 0, Element::Stone);
+    //     world.place(x as i64, (CHUNK_SIZE * WORLD_SIZE - 1) as i64, Element::Stone);
+    // }
 
-    for y in 0..SIZE {
-        chunk_manager.place(0, y as i64, Element::Stone);
-        chunk_manager.place((SIZE - 1) as i64, y as i64, Element::Stone);
-    }
+    // for y in 0..CHUNK_SIZE * WORLD_SIZE {
+    //     world.place(0, y as i64, Element::Stone);
+    //     world.place((CHUNK_SIZE * WORLD_SIZE - 1) as i64, y as i64, Element::Stone);
+    // }
+    
     let mut input_state = InputState{
         mouse_keys_held: [ElementState::Released; 3],
         last_mouse_position: None,
@@ -78,12 +73,12 @@ fn main() {
         
         match &event {
             Event::NewEvents(_) => {
+                world.update(0.0);
                 let now = Instant::now();
                 if now.duration_since(input_state.time_instant).as_millis() > DELAY {
                     if PRINT_DELAY {
                         dbg!(1.0/(now.duration_since(input_state.time_instant).as_secs_f64()));
                     }
-                    chunk_manager.update(now.duration_since(input_state.time_instant).as_secs_f32());
                     input_state.time_instant = now;
                 }
             }
@@ -137,13 +132,20 @@ fn main() {
                 winit::event::WindowEvent::CursorMoved { position, .. } => {
                     if input_state.mouse_keys_held[0] == ElementState::Pressed {
                         if let Some(last_position) = input_state.last_mouse_position {
-                            let (x1, y1) = {
-                                let (x, y) = pixels.window_pos_to_pixel((last_position.x as f32, last_position.y as f32)).unwrap();
+                            let (x1, y1) = if let Ok((x, y)) = pixels.window_pos_to_pixel((last_position.x as f32, last_position.y as f32)) {
                                 (x as i32, y as i32)
+                            }
+                            else {
+                                input_state.last_mouse_position = Some(*position);
+                                return
                             };
-                            let (x2, y2) = {
-                                let (x, y) = pixels.window_pos_to_pixel((position.x as f32, position.y as f32)).unwrap();
+
+                            let (x2, y2) = if let Ok((x, y)) = pixels.window_pos_to_pixel((position.x as f32, position.y as f32)) {
                                 (x as i32, y as i32)
+                            }
+                            else {
+                                input_state.last_mouse_position = Some(*position);
+                                return
                             };
 
                             let dx:i32 = i32::abs(x2 - x1);
@@ -158,7 +160,7 @@ fn main() {
                             loop {
                                 for x in (-input_state.brush_size+1)..(input_state.brush_size) {
                                     for y in (-input_state.brush_size+1)..(input_state.brush_size) {
-                                        chunk_manager.place((current_x + x) as i64, (current_y + y) as i64, input_state.selected_element);
+                                        world.place((current_x + x) as i64, (current_y + y) as i64, input_state.selected_element);
                                     }
                                 }
                         
@@ -196,7 +198,7 @@ fn main() {
             }
 
             Event::RedrawRequested(_) => {
-                chunk_manager.render(pixels.frame_mut());
+                world.render(pixels.frame_mut());
                 if let Err(err) = pixels.render() {
                     log_error("pixels.render", err);
                     *control_flow = ControlFlow::Exit;
