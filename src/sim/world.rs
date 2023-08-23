@@ -1,21 +1,21 @@
-use std::{collections::HashMap, sync::Arc, thread};
+use std::{sync::Arc, thread};
 
-use crossbeam::atomic::AtomicCell;
+use dashmap::{DashMap, mapref::one::Ref};
 use rand::Rng;
 
 use crate::{vec2, vector::Vector2, constants::*};
 
-use super::{chunk::Chunk, elements::Element, helpers::get_cell_index, cell::Cell};
+use super::{chunk::Chunk, elements::Element, helpers::get_cell_index};
 
 pub struct World {
-    pub(super) chunks: HashMap<Vector2, Chunk>,
+    pub(super) chunks: DashMap<Vector2, Chunk>,
     pub(super) maximum_size: i64,
 }
 
 impl World {
     pub fn new() -> WorldApi {
-        let mut manager = Self {
-                chunks: HashMap::new(),
+        let manager = Self {
+                chunks: DashMap::new(),
                 maximum_size: (WORLD_SIZE * CHUNK_SIZE) as i64,
         };
         
@@ -29,43 +29,45 @@ impl World {
     }    
 
     pub(crate) fn place(&self, x: i64, y: i64, element: Element) {
-        let index = ((y % CHUNK_SIZE * CHUNK_SIZE) + (x % CHUNK_SIZE)) as i64;
+        if x < 0 || y < 0 || x > self.maximum_size || y > self.maximum_size {
+            return;
+        }
         let chunk_x = x / CHUNK_SIZE;
         let chunk_y = y / CHUNK_SIZE;
         if let Some(chunk) = self.get_chunk(chunk_x, chunk_y) {
-            chunk.place(index, element);
+            chunk.place(x % CHUNK_SIZE, y % CHUNK_SIZE, element);
         }
     }    
 
-    pub(crate) fn get_cell_from_pixel_index(&self, index: i64) -> Option<&AtomicCell<Cell>> {
-        let y = index % (CHUNK_ELEMENTS * WORLD_SIZE as i64) / self.maximum_size;
-        let x = index % CHUNK_SIZE as i64;
+    // pub(crate) fn get_cell_from_pixel_index(&self, index: i64) -> Option<&AtomicCell<Cell>> {
+    //     let y = index % (CHUNK_ELEMENTS * WORLD_SIZE as i64) / self.maximum_size;
+    //     let x = index % CHUNK_SIZE as i64;
 
-        let chunk_y = index / (CHUNK_ELEMENTS * WORLD_SIZE as i64);
-        let chunk_x = index % self.maximum_size / CHUNK_SIZE as i64;
+    //     let chunk_y = index / (CHUNK_ELEMENTS * WORLD_SIZE as i64);
+    //     let chunk_x = index % self.maximum_size / CHUNK_SIZE as i64;
 
-        if let Some(chunk) = self.get_chunk(chunk_x, chunk_y) {
-            Some(&chunk.cells[get_cell_index(x as i64, y as i64) as usize])
-        }
-        else {
-            None
-        }
-    }
+    //     if let Some(chunk) = self.get_chunk(chunk_x, chunk_y) {
+    //         Some(&chunk.cells[get_cell_index(x as i64, y as i64) as usize])
+    //     }
+    //     else {
+    //         None
+    //     }
+    // }
 
-    pub(crate) fn get_cell(&self, chunk_x: i64, chunk_y: i64, x: i64, y: i64) -> Option<&AtomicCell<Cell>> {
-        if let Some(chunk) = self.get_chunk(chunk_x, chunk_y) {
-            Some(&chunk.cells[get_cell_index(x, y)])
-        }
-        else {
-            None
-        }
-    }
+    // pub(crate) fn get_cell(&self, chunk_x: i64, chunk_y: i64, x: i64, y: i64) -> Option<&AtomicCell<Cell>> {
+    //     if let Some(chunk) = self.get_chunk(chunk_x, chunk_y) {
+    //         Some(&chunk.cells[get_cell_index(x, y)])
+    //     }
+    //     else {
+    //         None
+    //     }
+    // }
 
-    pub(crate) fn get_chunk(&self, x: i64, y: i64) -> Option<&Chunk> {
+    pub(crate) fn get_chunk(&self, x: i64, y: i64) -> Option<Ref<Vector2, Chunk>> {
         self.chunks.get(&vec2!(x, y))
     }
 
-    pub(crate) fn get_chunk_by_pixel(&self, x: i64, y: i64) -> Option<&Chunk> {
+    pub(crate) fn get_chunk_by_pixel(&self, x: i64, y: i64) -> Option<Ref<Vector2, Chunk>> {
         let chunk_x = x.div_euclid(CHUNK_SIZE);
         let chunk_y = y.div_euclid(CHUNK_SIZE);
         self.chunks.get(&vec2!(chunk_x, chunk_y))
@@ -105,8 +107,8 @@ impl WorldApi {
             thread::scope(|s| {
                 for x in x_range.iter() {
                     for y in y_range.iter() {
-                        let chunk = self.chunk_manager.get_chunk(*x, *y).unwrap();
                         s.spawn(|| {
+                            let chunk = self.chunk_manager.get_chunk(*x, *y).unwrap();
                             chunk.update(vec2!(*x, *y), self.chunk_manager.clone(), self.iter_bit);
                         });
                     }
@@ -215,10 +217,13 @@ impl WorldApi {
                 let chunk = self.chunk_manager.get_chunk(chunk_x, chunk_y).unwrap();
                 let x_offset = chunk_x * CHUNK_SIZE;
                 let y_offset = chunk_y * CHUNK_SIZE * self.chunk_manager.maximum_size;
+
+                let (dirty_rect_x, dirty_rect_y) = chunk.dirty_rect.lock().unwrap().get_ranges_render();
+
                 for x in 0..CHUNK_SIZE {
                     for y in 0..CHUNK_SIZE {
                         let pixel_index = ((y_offset + y * self.chunk_manager.maximum_size) + x + x_offset) * 4;
-                        let cell = &chunk.cells[get_cell_index(x as i64, y as i64)].load();
+                        let cell = chunk.cells[get_cell_index(x as i64, y as i64)].load();
                         let offset = rand::thread_rng().gen_range(0..25);
                         let rgba = match cell.element {
                             Element::Empty => [0x00, 0x00, 0x00, 0xff],
@@ -229,12 +234,53 @@ impl WorldApi {
                                 [0xe8, 0x6a, 0x17, 0xff]
                             },
                         };
-                        frame[pixel_index as usize] = rgba[0];
-                        frame[pixel_index as usize + 1] = rgba[1];
-                        frame[pixel_index as usize + 2] = rgba[2];
-                        frame[pixel_index as usize + 3] = rgba[3];
+                        if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
+                            frame[pixel_index as usize] = rgba[0].saturating_add(100);
+                            frame[pixel_index as usize + 1] = rgba[1].saturating_add(25);
+                            frame[pixel_index as usize + 2] = rgba[2].saturating_add(25);
+                            frame[pixel_index as usize + 3] = rgba[3].saturating_add(25);
+                        }
+                        else {
+                            frame[pixel_index as usize] = rgba[0];
+                            frame[pixel_index as usize + 1] = rgba[1];
+                            frame[pixel_index as usize + 2] = rgba[2];
+                            frame[pixel_index as usize + 3] = rgba[3];
+                        }
                     }
                 }
+
+                for x in 0..CHUNK_SIZE {
+                    let start_offset = ((x + x_offset + y_offset)*4) as usize;
+                    let end_offset = (((CHUNK_SIZE-1) * self.chunk_manager.maximum_size + x + x_offset + y_offset) * 4) as usize;
+                    frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
+                    frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
+                    frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
+                    frame[start_offset+3 as usize] = frame[start_offset+3 as usize].saturating_add(25);
+
+                    frame[end_offset as usize] = frame[end_offset as usize].saturating_add(25);
+                    frame[end_offset+1 as usize] = frame[end_offset+1 as usize].saturating_add(25);
+                    frame[end_offset+2 as usize] = frame[end_offset+2 as usize].saturating_add(25);
+                    frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
+                }
+
+                for y in 0..CHUNK_SIZE {
+                    let start_offset = ((y * self.chunk_manager.maximum_size + x_offset + y_offset)*4) as usize;
+                    let end_offset = ((y * self.chunk_manager.maximum_size + CHUNK_SIZE - 1 + x_offset + y_offset)*4) as usize;
+                    frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
+                    frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
+                    frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
+                    frame[start_offset+3 as usize] = frame[start_offset+3 as usize].saturating_add(25);
+
+                    frame[end_offset as usize] = frame[end_offset as usize].saturating_add(25);
+                    frame[end_offset+1 as usize] = frame[end_offset+1 as usize].saturating_add(25);
+                    frame[end_offset+2 as usize] = frame[end_offset+2 as usize].saturating_add(25);
+                    frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
+                }
+
+                // for y in 0..self.chunk_manager.maximum_size {
+                //     world.place(0, y as i64, Element::Stone);
+                //     world.place((CHUNK_SIZE * WORLD_SIZE - 1) as i64, y as i64, Element::Stone);
+                // }
             }
         }
 

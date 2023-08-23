@@ -26,9 +26,10 @@ pub static EMPTY_CELL: Cell = Cell {
 };
 
 impl Cell {
-    pub fn new(element: Element) -> Self {
+    pub fn new(element: Element, iter_bit: bool) -> Self {
         let mut cell = Self {
             element,
+            iter_bit,
             ..Default::default()
         };
 

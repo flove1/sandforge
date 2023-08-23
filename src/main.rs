@@ -30,9 +30,13 @@ struct InputState {
 
 fn main() {
     env_logger::init();
+    run();
+}
+
+fn run() {
     let event_loop = EventLoop::new();
     let window = {
-        let size = LogicalSize::new((CHUNK_SIZE * WORLD_SIZE * 2) as i32, (CHUNK_SIZE * WORLD_SIZE * 2) as i32);
+        let size = LogicalSize::new(((CHUNK_SIZE * WORLD_SIZE) as f64 * SCALE) as i32, ((CHUNK_SIZE * WORLD_SIZE) as f64 * SCALE) as i32);
         WindowBuilder::new()
             .with_title("Rust-physics")
             .with_inner_size(size)
@@ -68,17 +72,16 @@ fn main() {
         brush_size: 1,
     };
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run(move |event, _, control_flow| {        
         control_flow.set_poll();
-        
         match &event {
             Event::NewEvents(_) => {
-                world.update(0.0);
                 let now = Instant::now();
                 if now.duration_since(input_state.time_instant).as_millis() > DELAY {
                     if PRINT_DELAY {
                         dbg!(1.0/(now.duration_since(input_state.time_instant).as_secs_f64()));
                     }
+                    world.update(0.0);
                     input_state.time_instant = now;
                 }
             }
@@ -209,8 +212,7 @@ fn main() {
         }
 
         window.request_redraw();
-    })
-
+    });
 }
 
 fn log_error<E: std::error::Error + 'static>(method_name: &str, err: E) {

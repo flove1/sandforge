@@ -17,8 +17,8 @@ pub fn update_sand(mut cell: Cell, mut api: ChunkApi, _dt: f32) {
 
     if api.match_element(0, 1, Element::Empty) {
         api.swap(0, 1);
-    } else if api.match_element(dx, 1, Element::Empty) {
-        api.swap(dx, 1);
+    } else if api.match_element(dx, 0, Element::Empty) && api.match_element(dx, 1, Element::Empty) {
+        api.swap(dx, 0);
     } else if api.match_element(0, 1, Element::Water) {
         api.swap(0, 1);
     }
