@@ -1,2 +1,6 @@
 /target
 /.vscode
+
+flamegraph.svg
+perf.*
+profile.coz

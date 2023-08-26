@@ -8,28 +8,28 @@ pub struct Cell {
     pub element: Element,
     pub ra: u8,
     pub rb: u8,
-    pub iter_bit: bool,
+    pub clock: u8,
 }
 
 pub static WALL_CELL: Cell = Cell {
     element: Element::Stone,
     ra: 0,
     rb: 0,
-    iter_bit: false,
+    clock: 0,
 };
 
 pub static EMPTY_CELL: Cell = Cell {
     element: Element::Empty,
     ra: 0,
     rb: 0,
-    iter_bit: false,
+    clock: 0,
 };
 
 impl Cell {
-    pub fn new(element: Element, iter_bit: bool) -> Self {
+    pub fn new(element: Element, clock: u8) -> Self {
         let mut cell = Self {
             element,
-            iter_bit,
+            clock,
             ..Default::default()
         };
 
@@ -41,13 +41,16 @@ impl Cell {
         cell
     }
 
-    pub fn update(&self, api: ChunkApi, dt: f32) {
-        match self.element {
-            Element::Empty => {},
-            Element::Stone => {},
-            Element::Water => { update_liquid(*self, api, dt) },
-            Element::Sand => { update_sand(*self, api, dt) },
-            Element::GlowingSand => { update_sand(*self, api, dt) },
-        }
+    pub fn update<'a>(mut self, mut api: ChunkApi<'a>, dt: f32) -> ChunkApi<'a>  {
+        api = match self.element {
+            Element::Empty => { api },
+            Element::Stone => { api },
+            Element::Water => { update_liquid(&mut self, api, dt) },
+            Element::Sand => { update_sand(&mut self, api, dt) },
+            Element::GlowingSand => { update_sand(&mut self, api, dt) },
+        };
+
+        api.update(self);
+        return api;
     }
 }

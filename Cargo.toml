@@ -2,6 +2,10 @@
 inherits = "dev"
 incremental = false
 
+[profile.sand-release]
+inherits = "release"
+incremental = false
+
 [package]
 name = "sandforge"
 version = "0.1.0"
@@ -21,3 +25,7 @@ rand = "0.8.5"
 egui-winit = "0.22.0"
 crossbeam = "0.8.2"
 dashmap = "5.5.1"
+scoped_threadpool = "0.1.9"
+egui = "0.22.0"
+egui-wgpu = "0.22.0"
+fps_counter = "2.0.0"
