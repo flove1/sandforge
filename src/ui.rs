@@ -29,13 +29,7 @@ struct Gui {
 
 impl Framework {
     /// Create egui.
-    pub(crate) fn new<T>(
-        event_loop: &EventLoopWindowTarget<T>,
-        width: u32,
-        height: u32,
-        scale_factor: f32,
-        pixels: &pixels::Pixels,
-    ) -> Self {
+    pub(crate) fn new<T>(event_loop: &EventLoopWindowTarget<T>, width: u32, height: u32, scale_factor: f32, pixels: &pixels::Pixels,) -> Self {
         let max_texture_size = pixels.device().limits().max_texture_dimension_2d as usize;
 
         let egui_ctx = Context::default();
@@ -88,22 +82,15 @@ impl Framework {
         });
 
         self.textures.append(output.textures_delta);
-        self.egui_state
-            .handle_platform_output(window, &self.egui_ctx, output.platform_output);
+        self.egui_state.handle_platform_output(window, &self.egui_ctx, output.platform_output);
         self.paint_jobs = self.egui_ctx.tessellate(output.shapes);
     }
 
     /// Render egui.
-    pub(crate) fn render(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        render_target: &wgpu::TextureView,
-        context: &PixelsContext,
-    ) {
+    pub(crate) fn render(&mut self, encoder: &mut wgpu::CommandEncoder, render_target: &wgpu::TextureView, context: &PixelsContext) {
         // Upload all resources to the GPU.
         for (id, image_delta) in &self.textures.set {
-            self.renderer
-                .update_texture(&context.device, &context.queue, *id, image_delta);
+            self.renderer.update_texture(&context.device, &context.queue, *id, image_delta);
         }
         self.renderer.update_buffers(
             &context.device,
@@ -128,8 +115,7 @@ impl Framework {
                 depth_stencil_attachment: None,
             });
 
-            self.renderer
-                .render(&mut rpass, &self.paint_jobs, &self.screen_descriptor);
+            self.renderer.render(&mut rpass, &self.paint_jobs, &self.screen_descriptor);
         }
 
         // Cleanup
@@ -150,7 +136,7 @@ impl Gui {
     fn ui(&mut self, state_manager: &StateManager , ctx: &Context) {
         egui::TopBottomPanel::top("menubar_container").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
+                ui.menu_button("Info", |ui| {
                     if ui.button("About...").clicked() {
                         self.window_open = true;
                         ui.close_menu();

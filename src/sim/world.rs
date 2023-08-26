@@ -151,18 +151,20 @@ impl World {
             Some(chunk) => {
                 let mut active_lock = self.active_chunks.lock();
 
-                if !active_lock.contains(&chunk_position) {
-                    active_lock.insert(*chunk_position);
-                    chunk.maximize_dirty_rect();
-                }
-                else {
-                    chunk.update_dirty_rect(cell_position);
+                if chunk.cell_count.load(std::sync::atomic::Ordering::Acquire) > 0 {
+                    if !active_lock.contains(&chunk_position) {
+                        active_lock.insert(*chunk_position);
+                        chunk.maximize_dirty_rect();
+                    }
+                    else {
+                        chunk.update_dirty_rect(cell_position);
+                    }
+
                 }
             },
             None => {},
         }
     }
-
 
     pub fn refresh_chunk(&self, chunk_position: &Vector2) {
         match self.get_chunk(chunk_position) {
