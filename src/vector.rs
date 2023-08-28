@@ -50,6 +50,10 @@ impl Vector2 {
         self
     }
 
+    pub fn distance_to(&self, other: &Self) -> f64 {
+        (((other.x - self.x).pow(2) + (other.y - self.y).pow(2)) as f64).sqrt()
+    }
+
     pub fn to_index(&self, size: i64) -> usize {
         (self.y * size + self.x) as usize
     }
@@ -99,6 +103,67 @@ impl<'a, 'b> std::ops::Add<&'b Vector2> for &'a Vector2 {
         Vector2 {
             x: self.x + other.x,
             y: self.y + other.y,
+        }
+    }
+}
+
+#[derive(Default, PartialEq, PartialOrd, Clone, Copy, Debug)]
+pub struct Vector2F {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[macro_export]
+macro_rules! vec2f {
+    ($x:expr, $y:expr) => {
+        Vector2F{
+            x: $x, 
+            y: $y
+        }
+    };
+}
+
+impl Vector2F {
+    pub fn is_between(&mut self, min: f64, max: f64) -> bool {
+        self.x >= min && self.x <= max && self.y >= min && self.y <= max
+    }
+
+    pub fn add(&self, x: f64, y: f64) -> Self {
+        Self { 
+            x: self.x + x,
+            y: self.y + y,
+        }
+    }
+
+    pub fn inc(&mut self, x: f64, y: f64) {
+        self.x += x;
+        self.y += y;
+    }
+
+    pub fn clamp(mut self, min: f64, max: f64) -> Self {
+        self.x = self.x.clamp(min, max);
+        self.y = self.y.clamp(min, max);
+        self
+    }
+
+    pub fn distance_to_point(&self, other: &Self) -> f64 {
+        ((other.x - self.x).powi(2) + (other.y - self.y).powi(2)).sqrt()
+    }
+
+    pub fn distance_to_line(&self, line_start: &Self, line_end: &Self) -> f64 {
+        let line_length = line_start.distance_to_point(line_end);
+        let numerator = ((line_end.y - line_start.y) * self.x - (line_end.x - line_start.x) * self.y + line_end.x * line_start.y - line_end.y * line_start.x).abs();
+        numerator / line_length
+    }
+    
+    pub fn is_zero(&self) -> bool {
+        self.x.abs() < 0.001 && self.y.abs() < 0.001
+    }
+    
+    pub fn round(&self) -> Vector2 {
+        Vector2 {
+            x: self.x.round() as i64,
+            y: self.y.round() as i64,
         }
     }
 }

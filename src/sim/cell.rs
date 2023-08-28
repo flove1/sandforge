@@ -34,7 +34,7 @@ impl Cell {
         };
 
         match cell.element {
-            Element::Sand => {cell.ra = rand::thread_rng().gen_range(0..25)},
+            Element::Sand | Element::Wood => {cell.ra = rand::thread_rng().gen_range(0..25)},
             _ => {},
         }
 
@@ -48,6 +48,7 @@ impl Cell {
             Element::Water => { update_liquid(&mut self, api, dt) },
             Element::Sand => { update_sand(&mut self, api, dt) },
             Element::GlowingSand => { update_sand(&mut self, api, dt) },
+            Element::Wood => { api },
         };
 
         api.update(self);

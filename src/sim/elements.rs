@@ -9,6 +9,7 @@ pub enum Element {
     Water,
     Sand,
     GlowingSand,
+    Wood,
 }
 
 
@@ -20,6 +21,7 @@ impl ToString for Element {
             Element::Water => String::from("Water"),
             Element::Sand => String::from("Sand"),
             Element::GlowingSand => String::from("Glowing Sand"),
+            Element::Wood => String::from("Wood"),
         }
     }
 }

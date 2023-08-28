@@ -1,14 +1,17 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicU8};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crossbeam::atomic::AtomicCell;
+use delaunator::Point;
 use egui_winit::egui::epaint::ahash::HashSet;
+use parking_lot::Mutex;
 use rand::Rng;
 
 use super::cell::*;
 use super::elements::Element;
 use super::helpers::get_cell_index;
+use super::objects::marching_squares;
 use super::world::World;
 
 use crate::{constants::*, vec2};
@@ -22,6 +25,7 @@ pub struct Chunk {
     pub(super) cell_count: AtomicU64,
     pub(super) position: Vector2,
     pub(super) frame_idling: AtomicU8,
+    pub(super) objects: Mutex<Vec<Vec<Vec<(i64, i64)>>>>
 }
 
 #[derive(Default, Clone, Copy)]
@@ -89,7 +93,7 @@ impl Rect {
         clone
     }
 
-    fn is_empty_rect(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.corners == None
     }
 }
@@ -111,10 +115,32 @@ impl Chunk {
         chunk
     }
 
+    //================
+    // Global methods
+    //================
+
     pub(crate) fn place(&self, x: i64, y: i64, element: Element) {
-        let mut queue = self.placing_queue.lock().unwrap();
+        let mut queue = self.placing_queue.lock();
         queue.push_back((vec2!(x, y), element));
     }
+
+    pub(crate) fn update_dirty_rect(&self, position: &Vector2) {
+        let mut rect_lock = self.dirty_rect.lock();
+
+        rect_lock.update(&position.add(-DIRTY_CHUNK_OFFSET, -DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1));
+        rect_lock.update(&position.add(DIRTY_CHUNK_OFFSET, DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1));
+    }
+
+    pub(crate) fn maximize_dirty_rect(&self) {
+        let mut rect_lock = self.dirty_rect.lock();
+
+        rect_lock.update(&vec2!(0, 0));
+        rect_lock.update(&vec2!(CHUNK_SIZE-1, CHUNK_SIZE-1));
+    }
+
+    //==================
+    // Work through api
+    //==================
 
     pub(crate) fn get_cell(&self, cell_position: Vector2) -> Cell {
         self.cells[cell_position.to_index(CHUNK_SIZE)].load()
@@ -136,26 +162,122 @@ impl Chunk {
         self.update_dirty_rect(&cell_position_2);
         self.cells[index_1].store(self.cells[index_2].swap(self.cells[index_1].load()));
     }
+    
+    //===========
+    // Colliders
+    //===========
 
-    pub(crate) fn update_dirty_rect(&self, position: &Vector2) {
-        let mut rect_lock = self.dirty_rect.lock().unwrap();
-
-        rect_lock.update(&position.add(-DIRTY_CHUNK_OFFSET, -DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1));
-        rect_lock.update(&position.add(DIRTY_CHUNK_OFFSET, DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1));
+    fn label_cell(&self, x: i64, y: i64, label: i32, labeled_cells: &mut Vec<i32>) {
+        if x < 0 || x > CHUNK_SIZE - 1 || y < 0 || y > CHUNK_SIZE - 1 {
+            return;
+        }
+    
+        let index = get_cell_index(x, y);
+        if labeled_cells[index] != 0 || self.cells[index].load().element != Element::Wood {
+            return;
+        }
+    
+        dbg!(x, y);
+        labeled_cells[index] = label;
+    
+        self.label_cell(x + 1, y, label, labeled_cells);
+        self.label_cell(x - 1, y, label, labeled_cells);
+        self.label_cell(x, y + 1, label, labeled_cells);
+        self.label_cell(x, y - 1, label, labeled_cells);
     }
 
-    pub(crate) fn maximize_dirty_rect(&self) {
-        let mut rect_lock = self.dirty_rect.lock().unwrap();
-
-        rect_lock.update(&vec2!(0, 0));
-        rect_lock.update(&vec2!(CHUNK_SIZE-1, CHUNK_SIZE-1));
+    pub fn distance_between_points(&self, p1: &Point, p2: &Point) -> f64 {
+        ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt()
     }
+
+    pub fn distance_to_line(&self, point: &Point, line_start: &Point, line_end: &Point) -> f64 {
+        let line_length = self.distance_between_points(line_start, line_end);
+        let numerator = ((line_end.y - line_start.y) * point.x - (line_end.x - line_start.x) * point.y + line_end.x * line_start.y - line_end.y * line_start.x).abs();
+        numerator / line_length
+    }
+
+    fn douglas_peucker(&self, points: &[Point]) -> Vec<Point> {
+        if points.len() <= 2 {
+            return points.to_vec();
+        }
+
+        let mut dmax = 0.0;
+        let mut index = 0;
+
+        for i in 1..(points.len() - 1) {
+            let d = self.distance_to_line(&points[i], &points[0], &points[points.len() - 1]);
+            if d > dmax {
+                index = i;
+                dmax = d;
+            }
+        }
+
+        let mut result = Vec::new();
+        if dmax >= 0.1 {
+            let mut result_1 = self.douglas_peucker(&points[..=index]);
+            let mut result_2 = self.douglas_peucker(&points[index..]);
+            result.append(&mut result_1);
+            result.append(&mut result_2);
+        } else {
+            result.push(points[0].clone());
+            result.push(points[points.len() - 1].clone());
+        }
+
+        result
+    }
+
+    pub fn create_collider(&self) {
+        let mut labeled_cells = vec![0; CHUNK_SIZE.pow(2) as usize];
+        let mut label = 0;
+        
+        // Connected-component labeling
+        for x in 0..CHUNK_SIZE {
+            for y in 0..CHUNK_SIZE {
+                let index = get_cell_index(x, y);
+                if labeled_cells[index] == 0 && self.cells[get_cell_index(x, y)].load().element == Element::Wood {
+                    label += 1;
+                    self.label_cell(x, y, label, &mut labeled_cells);
+                }
+            }
+        }
+
+        let mut lock = self.objects.lock();
+        lock.clear();
+        lock.append(&mut marching_squares(label, &mut labeled_cells, CHUNK_SIZE));
+        
+        // let mut contours: Vec<Vec<Point>> = vec![vec![]; label];
+        // let mut figures: Vec<Vec<Point>> = vec![vec![]; label];
+        
+        // Marching squares algorithm
+        // for x in 0..CHUNK_SIZE {
+        //     for y in 0..CHUNK_SIZE {
+        //         let index = get_cell_index(x, y);
+        //         if labeled_cells[index] != 0 {
+        //             figures[labeled_cells[index] - 1].push(Point { x: x as f64, y: y as f64 });
+        //             if self.cell_is_contour(x, y, &mut labeled_cells) {
+        //                 contours[labeled_cells[index] - 1].push(Point { x: x as f64, y: y as f64 });
+        //             }
+        //         }
+        //     }
+        // }
+
+        // Process contours with Douglas-Peucker algorithm
+        // let mut objects: Vec<Vec<Point>> = vec![];
+        // for contour in contours.iter() {
+        //     objects.push(self.douglas_peucker(&contour));
+        //     cdt::triangulate_contours(&[(0.5, 0.5), ], contours)
+        // }
+    }
+
+    //==========
+    // Updating
+    //==========
     
     pub(crate) fn process_previous_updates(&self, clock: u8) -> Option<Rect> {
-        let mut queue = self.placing_queue.lock().unwrap();
-        let mut dirty_rect = self.dirty_rect.lock().unwrap();
+        let mut queue = self.placing_queue.lock();
+        let mut dirty_rect = self.dirty_rect.lock();
 
-        if queue.is_empty() && dirty_rect.is_empty_rect() {
+        if queue.is_empty() && dirty_rect.is_empty() {
             return None;
         }
 
@@ -242,6 +364,7 @@ impl Chunk {
         return updated_count;
     }
 }
+
 pub struct ChunkApi<'a> {
     pub(super) cell_position: Vector2,
     pub(super) chunk: &'a Chunk,
@@ -250,7 +373,7 @@ pub struct ChunkApi<'a> {
 }
 
 impl<'a> ChunkApi<'a> {
-    pub fn get(&mut self, dx: i64, dy: i64) -> Cell {
+    pub fn get(&self, dx: i64, dy: i64) -> Cell {
         let mut cell_position = self.cell_position.add(dx, dy);
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) {
@@ -261,7 +384,7 @@ impl<'a> ChunkApi<'a> {
         }
     }
 
-    pub fn match_element(&mut self, dx: i64, dy: i64, element: Element) -> bool {
+    pub fn match_element(&self, dx: i64, dy: i64, element: Element) -> bool {
         let mut cell_position = self.cell_position.add(dx, dy);
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) {
@@ -325,7 +448,7 @@ impl<'a> ChunkApi<'a> {
             self.chunk_manager.update_cell(self.chunk.position, self.cell_position, cell);
         }
     }
-
+    
     pub fn rand_int(&mut self, n: i64) -> i64 {
         rand::thread_rng().gen_range(0..n)
     }

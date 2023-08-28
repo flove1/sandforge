@@ -26,6 +26,7 @@ use crate::constants::*;
 
 fn main() {
     env_logger::init();
+
     run();
 }
 
@@ -61,6 +62,48 @@ fn run() {
     let mut world = World::new();
     let mut state_manager = StateManager::new();
 
+    if IS_BENCHMARK {
+        let mut results = vec![];
+
+        for _ in 0..100 {
+            for x in 0..(CHUNK_SIZE * WORLD_SIZE) {
+                for y in 0..CHUNK_SIZE {
+                    world.place(x, y, Element::Sand);
+                }
+            }
+    
+            for x in 0..(CHUNK_SIZE * WORLD_SIZE) {
+                for y in CHUNK_SIZE * (WORLD_SIZE/2)..(CHUNK_SIZE * (WORLD_SIZE/2 + 1)) {
+                    world.place(x, y, Element::Sand);
+                }
+            }
+    
+            let start = Instant::now();
+    
+            loop {
+                world.needs_update(DELAY);
+                
+                let (_, _, pixels_count) = world.update();
+                if pixels_count == 0 {
+                    let result = Instant::now().duration_since(start).as_millis();
+                    println!("time took: {}", result as f64 / 1000.0);
+                    results.push(result);
+                    break;
+                }
+            }
+        }
+
+        let sum: u128 = results.iter().sum();
+        let min: u128 = *results.iter().min().unwrap();
+        let max: u128 = *results.iter().max().unwrap();
+        println!("\ntest count: {}",  results.len());
+        println!("avg time: {}",  sum as f64 / results.len() as f64 / 1000.0);
+        println!("min time: {}",  min as f64 / 1000.0);
+        println!("max time: {}",  max as f64 / 1000.0);
+
+        return;
+    }
+    
     event_loop.run(move |event, _, control_flow| {        
         control_flow.set_poll();
 
@@ -95,6 +138,9 @@ fn run() {
                                             },
                                             VirtualKeyCode::W => {
                                                 state_manager.element = Element::Water;
+                                            },
+                                            VirtualKeyCode::A => {
+                                                state_manager.element = Element::Wood;
                                             },
                                             VirtualKeyCode::D => {
                                                 state_manager.element = Element::Stone;
@@ -196,7 +242,7 @@ fn run() {
             Event::RedrawRequested(_) => {
                 let now = Instant::now();
                 if world.needs_update(now.duration_since(state_manager.previous_frame.instant).as_millis()) {
-                    let (chunks_updated, pixels_updated) = world.update();
+                    let (chunks_updated, pixels_updated, _) = world.update();
                     state_manager.previous_frame.update(chunks_updated, pixels_updated, now);
                 }
 

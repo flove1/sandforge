@@ -44,6 +44,8 @@ impl Framework {
         let textures = TexturesDelta::default();
         let gui = Gui::new();
 
+        // pixels.
+
         Self {
             egui_ctx,
             egui_state,
@@ -136,12 +138,9 @@ impl Gui {
     fn ui(&mut self, state_manager: &StateManager , ctx: &Context) {
         egui::TopBottomPanel::top("menubar_container").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                ui.menu_button("Info", |ui| {
-                    if ui.button("About...").clicked() {
-                        self.window_open = true;
-                        ui.close_menu();
-                    }
-                })
+                if ui.button("Info").clicked() {
+                    self.window_open = !self.window_open;
+                }
             });
         });
 

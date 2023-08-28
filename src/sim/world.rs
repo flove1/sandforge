@@ -1,7 +1,7 @@
 use std::{sync::Arc, collections::HashSet};
 
 use dashmap::{DashMap, mapref::one::Ref};
-use egui_winit::egui::mutex::Mutex;
+use parking_lot::Mutex;
 use rand::Rng;
 use scoped_threadpool::Pool;
 
@@ -18,7 +18,7 @@ pub struct World {
 
 impl World {
     pub fn new() -> WorldApi {
-        let manager = Self {
+        let world = Self {
                 chunks: DashMap::new(),
                 maximum_size: (WORLD_SIZE * CHUNK_SIZE) as i64,
                 active_chunks: Mutex::new(HashSet::new()),
@@ -27,15 +27,22 @@ impl World {
         
         for x in 0..WORLD_SIZE {
             for y in 0..WORLD_SIZE {
-                manager.chunks.insert(vec2!(x, y), Chunk::new(vec2!(x, y)));
+                world.chunks.insert(vec2!(x, y), Chunk::new(vec2!(x, y)));
+            }
+        }
+        
+        for x in 0..WORLD_SIZE {
+            for y in 0..WORLD_SIZE {
+                world.chunks.insert(vec2!(x, y), Chunk::new(vec2!(x, y)));
             }
         }
 
         WorldApi{
-            chunk_manager: Arc::new(manager), 
+            chunk_manager: Arc::new(world), 
             clock: 0, 
             previous_update_ms: 0, pool: 
-            Pool::new(4)
+            Pool::new(4),
+            pixel_count: 0,
         }
     }    
 
@@ -191,22 +198,23 @@ pub struct WorldApi {
     previous_update_ms: u128,
     clock: u8,
     pool: Pool,
+    pixel_count: u128,
 }
 
 impl WorldApi {
     pub fn needs_update(&mut self, dt: u128) -> bool {
         self.previous_update_ms += dt;
-        self.previous_update_ms > DELAY
+        self.previous_update_ms >= DELAY
     }
 
-    pub fn update(&mut self) -> (u128, u128) {
-        let mut chunk_count: u128 = 0;
-        let mut pixel_count: u128 = 0;
-
-        while self.previous_update_ms > DELAY {
+    pub fn update(&mut self) -> (u128, u128, u128) {
+        let mut chunks_count: u128 = 0;
+        let mut updated_pixels_count: u128 = 0;
+        while self.previous_update_ms >= DELAY {
+            self.pixel_count = 0;
             self.previous_update_ms -= DELAY;
             let active_chunks = self.chunk_manager.active_chunks.lock().clone();
-            chunk_count += active_chunks.len() as u128;
+            chunks_count += active_chunks.len() as u128;
         
             let iter_range: Vec<i8> = if self.clock % 2 == 0 { (0..4).collect() } else { (0..4).rev().collect() };
 
@@ -224,9 +232,12 @@ impl WorldApi {
                     s.execute(|| {
                         for position in  positions {
                             let chunk = self.chunk_manager.chunks.get(position).unwrap();
-                            pixel_count += chunk.update(self.chunk_manager.clone(), self.clock);
-    
-                            if chunk.cell_count.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                            updated_pixels_count += chunk.update(self.chunk_manager.clone(), self.clock);
+                            let pixel_count = chunk.cell_count.load(std::sync::atomic::Ordering::Relaxed);
+                            
+                            self.pixel_count += pixel_count as u128;
+
+                            if pixel_count == 0 {
                                 self.chunk_manager.release_chunk(position);
                             }
                         }
@@ -235,7 +246,7 @@ impl WorldApi {
             }
         }
 
-        (chunk_count, pixel_count)
+        (chunks_count, updated_pixels_count, self.pixel_count)
         
     }
 
@@ -252,7 +263,7 @@ impl WorldApi {
             let x_offset = chunk_position.x * CHUNK_SIZE;
             let y_offset = chunk_position.y * CHUNK_SIZE * self.chunk_manager.maximum_size;
 
-            let (dirty_rect_x, dirty_rect_y) = chunk.dirty_rect.lock().unwrap().get_ranges_render();
+            let (dirty_rect_x, dirty_rect_y) = chunk.dirty_rect.lock().get_ranges_render();
 
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {
@@ -264,14 +275,13 @@ impl WorldApi {
                         Element::Stone => [0x77, 0x77, 0x77, 0xff],
                         Element::Sand => [0xf2_u8.saturating_add(cell.ra), 0xf1_u8.saturating_add(cell.ra), 0xa3_u8.saturating_add(cell.ra), 0xff],
                         Element::Water => [0x47 + offset, 0x7C + offset, 0xB8 + offset, 0xff],
-                        Element::GlowingSand => {
-                            [0xe8, 0x6a, 0x17, 0xff]
-                        },
+                        Element::GlowingSand => [0xe8, 0x6a, 0x17, 0xff],
+                        Element::Wood => [0x6a_u8.saturating_add(cell.ra), 0x4b_u8.saturating_add(cell.ra), 0x35_u8.saturating_add(cell.ra), 0xff],
                     };
 
                     if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
-                        frame[pixel_index as usize] = rgba[0].saturating_add(25);
-                        frame[pixel_index as usize + 1] = rgba[1].saturating_add(50);
+                        frame[pixel_index as usize] = rgba[0].saturating_add(50);
+                        frame[pixel_index as usize + 1] = rgba[1].saturating_add(25);
                         frame[pixel_index as usize + 2] = rgba[2].saturating_add(25);
                         frame[pixel_index as usize + 3] = rgba[3].saturating_add(25);
                     }
@@ -311,6 +321,56 @@ impl WorldApi {
                 frame[end_offset+2 as usize] = frame[end_offset+2 as usize].saturating_add(25);
                 frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
             }
+
+            let objects = chunk.objects.lock().clone();
+
+            for object in objects.iter() {
+                for boundary in object{
+                    for vertice in boundary {
+                        let pixel_index = (((y_offset + vertice.1 * self.chunk_manager.maximum_size) + x_offset + vertice.0) * 4) as usize;
+
+                        frame[pixel_index + 1] = frame[pixel_index + 1].saturating_add(50);
+                    }
+                    
+                    // let mut previous_point = vertices[2].round();
+
+                    // for point in vertices.iter().map(|point| point.round()) {
+                    //     let dx:i64 = i64::abs(point.x - previous_point.x);
+                    //     let dy:i64 = i64::abs(point.y - previous_point.y);
+                    //     let sx:i64 = { if previous_point.x < point.x { 1 } else { -1 } };
+                    //     let sy:i64 = { if previous_point.y < point.y { 1 } else { -1 } };
+                    
+                    //     let mut error:i64 = (if dx > dy  { dx } else { -dy }) / 2 ;
+                    //     let mut current_x:i64 = previous_point.x;
+                    //     let mut current_y:i64 = previous_point.y;
+
+                    //     loop {
+                    //         let pixel_index = ((y_offset + current_y * self.chunk_manager.maximum_size) + x_offset + current_x) * 4;
+
+                    //         frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(50);
+                            
+                    //         if current_x == point.x && current_y == point.y { break; }
+                    //         let error2:i64 = error;
+                    
+                    //         if error2 > -dx {
+                    //             error -= dy;
+                    //             current_x += sx;
+                    //         }
+                    //         if error2 < dy {
+                    //             error += dx;
+                    //             current_y += sy;
+                    //         }
+                    //     }
+
+                    //     previous_point = point;
+                    // }
+                }
+
+                // for point in object.iter().map(|point| point.round()) {
+                //     let pixel_index = (((y_offset + point.y * self.chunk_manager.maximum_size) + x_offset + point.x) * 4) as usize;
+                //     frame[pixel_index + 1] = frame[pixel_index + 1].saturating_add(50);
+                // }
+            }
         }
 
         for chunk_position in suspended_lock.clone() {
@@ -329,9 +389,8 @@ impl WorldApi {
                         Element::Stone => [0x77, 0x77, 0x77, 0xff],
                         Element::Sand => [0xf2_u8.saturating_add(cell.ra), 0xf1_u8.saturating_add(cell.ra), 0xa3_u8.saturating_add(cell.ra), 0xff],
                         Element::Water => [0x47 + offset, 0x7C + offset, 0xB8 + offset, 0xff],
-                        Element::GlowingSand => {
-                            [0xe8, 0x6a, 0x17, 0xff]
-                        },
+                        Element::GlowingSand => [0xe8, 0x6a, 0x17, 0xff],
+                        Element::Wood => [0x6a_u8.saturating_add(cell.ra), 0x4b_u8.saturating_add(cell.ra), 0x35_u8.saturating_add(cell.ra), 0xff],
                     };
 
                     frame[pixel_index as usize] = rgba[0];
