@@ -13,26 +13,18 @@ pub struct World {
     pub(super) chunks: DashMap<Vector2, Chunk>,
     pub(super) active_chunks: Mutex<HashSet<Vector2>>,
     pub(super) suspended_chunks: Mutex<HashSet<Vector2>>,
-    pub(super) maximum_size: i64,
 }
 
 impl World {
     pub fn new() -> WorldApi {
         let world = Self {
                 chunks: DashMap::new(),
-                maximum_size: (WORLD_SIZE * CHUNK_SIZE) as i64,
                 active_chunks: Mutex::new(HashSet::new()),
                 suspended_chunks: Mutex::new(HashSet::new()),
         };
         
-        for x in 0..WORLD_SIZE {
-            for y in 0..WORLD_SIZE {
-                world.chunks.insert(vec2!(x, y), Chunk::new(vec2!(x, y)));
-            }
-        }
-        
-        for x in 0..WORLD_SIZE {
-            for y in 0..WORLD_SIZE {
+        for x in 0..WORLD_WIDTH {
+            for y in 0..WORLD_HEIGHT {
                 world.chunks.insert(vec2!(x, y), Chunk::new(vec2!(x, y)));
             }
         }
@@ -47,7 +39,7 @@ impl World {
     }    
 
     pub(crate) fn place(&self, x: i64, y: i64, element: Element) {
-        if x < 0 || y < 0 || x > self.maximum_size || y > self.maximum_size {
+        if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
             return;
         }
         let position = vec2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
@@ -261,13 +253,13 @@ impl WorldApi {
         for chunk_position in active_lock.iter() {
             let chunk = self.chunk_manager.get_chunk(chunk_position).unwrap();
             let x_offset = chunk_position.x * CHUNK_SIZE;
-            let y_offset = chunk_position.y * CHUNK_SIZE * self.chunk_manager.maximum_size;
+            let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
             let (dirty_rect_x, dirty_rect_y) = chunk.dirty_rect.lock().get_ranges_render();
 
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {
-                    let pixel_index = ((y_offset + y * self.chunk_manager.maximum_size) + x_offset + x) * 4;
+                    let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
                     let cell = chunk.cells[get_cell_index(x as i64, y as i64)].load();
                     let offset = rand::thread_rng().gen_range(0..25);
                     let rgba = match cell.element {
@@ -296,7 +288,7 @@ impl WorldApi {
 
             for x in 0..CHUNK_SIZE {
                 let start_offset = ((x + x_offset + y_offset)*4) as usize;
-                let end_offset = (((CHUNK_SIZE-1) * self.chunk_manager.maximum_size + x + x_offset + y_offset) * 4) as usize;
+                let end_offset = (((CHUNK_SIZE-1) * (WORLD_WIDTH * CHUNK_SIZE) + x + x_offset + y_offset) * 4) as usize;
                 frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
                 frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
                 frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
@@ -309,8 +301,8 @@ impl WorldApi {
             }
 
             for y in 0..CHUNK_SIZE {
-                let start_offset = ((y * self.chunk_manager.maximum_size + x_offset + y_offset)*4) as usize;
-                let end_offset = ((y * self.chunk_manager.maximum_size + CHUNK_SIZE - 1 + x_offset + y_offset)*4) as usize;
+                let start_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + x_offset + y_offset)*4) as usize;
+                let end_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + CHUNK_SIZE - 1 + x_offset + y_offset)*4) as usize;
                 frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
                 frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
                 frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
@@ -327,7 +319,7 @@ impl WorldApi {
             for object in objects.iter() {
                 for boundary in object{
                     for vertice in boundary {
-                        let pixel_index = (((y_offset + vertice.1 * self.chunk_manager.maximum_size) + x_offset + vertice.0) * 4) as usize;
+                        let pixel_index = (((y_offset + vertice.1 * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + vertice.0) * 4) as usize;
 
                         frame[pixel_index + 1] = frame[pixel_index + 1].saturating_add(50);
                     }
@@ -345,7 +337,7 @@ impl WorldApi {
                     //     let mut current_y:i64 = previous_point.y;
 
                     //     loop {
-                    //         let pixel_index = ((y_offset + current_y * self.chunk_manager.maximum_size) + x_offset + current_x) * 4;
+                    //         let pixel_index = ((y_offset + current_y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + current_x) * 4;
 
                     //         frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(50);
                             
@@ -367,7 +359,7 @@ impl WorldApi {
                 }
 
                 // for point in object.iter().map(|point| point.round()) {
-                //     let pixel_index = (((y_offset + point.y * self.chunk_manager.maximum_size) + x_offset + point.x) * 4) as usize;
+                //     let pixel_index = (((y_offset + point.y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + point.x) * 4) as usize;
                 //     frame[pixel_index + 1] = frame[pixel_index + 1].saturating_add(50);
                 // }
             }
@@ -377,11 +369,11 @@ impl WorldApi {
             suspended_lock.remove(&chunk_position);
             let chunk = self.chunk_manager.get_chunk(&chunk_position).unwrap();
             let x_offset = chunk_position.x * CHUNK_SIZE;
-            let y_offset = chunk_position.y * CHUNK_SIZE * self.chunk_manager.maximum_size;
+            let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {
-                    let pixel_index = ((y_offset + y * self.chunk_manager.maximum_size) + x + x_offset) * 4;
+                    let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x + x_offset) * 4;
                     let cell = chunk.cells[get_cell_index(x as i64, y as i64)].load();
                     let offset = rand::thread_rng().gen_range(0..25);
                     let rgba = match cell.element {

@@ -33,7 +33,7 @@ fn main() {
 fn run() {
     let event_loop = EventLoop::new();
     let window = {
-        let size = LogicalSize::new(((CHUNK_SIZE * WORLD_SIZE) as f64 * SCALE) as i32, ((CHUNK_SIZE * WORLD_SIZE) as f64 * SCALE) as i32);
+        let size = LogicalSize::new(((WORLD_WIDTH * CHUNK_SIZE) as f64 * SCALE) as i32, ((WORLD_HEIGHT * CHUNK_SIZE) as f64 * SCALE) as i32);
         WindowBuilder::new()
             .with_title("Rust-physics")
             .with_inner_size(size)
@@ -47,7 +47,7 @@ fn run() {
         let window_size = window.inner_size();
         let scale_factor = window.scale_factor() as f32;
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        let pixels = Pixels::new((CHUNK_SIZE * WORLD_SIZE) as u32, (CHUNK_SIZE * WORLD_SIZE) as u32, surface_texture).unwrap();
+        let pixels = Pixels::new((WORLD_WIDTH * CHUNK_SIZE) as u32, (WORLD_HEIGHT * CHUNK_SIZE) as u32, surface_texture).unwrap();
         let framework = Framework::new(
             &event_loop,
             window_size.width,
@@ -65,15 +65,15 @@ fn run() {
     if IS_BENCHMARK {
         let mut results = vec![];
 
-        for _ in 0..100 {
-            for x in 0..(CHUNK_SIZE * WORLD_SIZE) {
+        for _ in 0..10 {
+            for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
                 for y in 0..CHUNK_SIZE {
                     world.place(x, y, Element::Sand);
                 }
             }
     
-            for x in 0..(CHUNK_SIZE * WORLD_SIZE) {
-                for y in CHUNK_SIZE * (WORLD_SIZE/2)..(CHUNK_SIZE * (WORLD_SIZE/2 + 1)) {
+            for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
+                for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
                     world.place(x, y, Element::Sand);
                 }
             }
