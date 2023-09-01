@@ -42,6 +42,7 @@ impl World {
         if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
             return;
         }
+
         let position = vec2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
         if let Some(chunk) = self.get_chunk(&position) {
             self.refresh_chunk(&position);
@@ -52,30 +53,50 @@ impl World {
     pub(crate) fn update_cell(&self, chunk_position: Vector2, cell_position: Vector2, cell: Cell) {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
 
-        if let Some(chunk) = self.get_chunk(&(chunk_position + chunk_offset)) {
-            chunk.update_cell(cell_position, cell);
-        }
+        let chunk = {
+            let result = self.get_chunk(&(chunk_position + chunk_offset));
+
+            if result.is_none() {
+                return;
+            }
+
+            result.unwrap()
+        };
+
+        chunk.set_cell(cell_position, cell);
     }    
 
     pub(crate) fn set_cell(&self, chunk_position: Vector2, cell_position: Vector2, cell: Cell) {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
 
-        if let Some(chunk) = self.get_chunk(&(chunk_position + chunk_offset)) {
-            chunk.set_cell(cell_position, cell);
-            self.refresh_chunk_at_cell(&chunk_position, &cell_position);
-        }
+        let chunk = {
+            let result = self.get_chunk(&(chunk_position + chunk_offset));
+
+            if result.is_none() {
+                return;
+            }
+
+            result.unwrap()
+        };
+
+        chunk.set_cell(cell_position, cell);
+        self.refresh_chunk_at_cell(&chunk_position, &cell_position);
     }    
 
     pub(crate) fn get_cell(&self, chunk_position: Vector2, cell_position: Vector2) -> Cell {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
-        match self.get_chunk(&(chunk_position + chunk_offset)) {
-            Some(chunk) => {
-                chunk.get_cell(cell_position)
-            },
-            None => {
-                EMPTY_CELL
-            },
-        }
+
+        let chunk = {
+            let result = self.get_chunk(&(chunk_position + chunk_offset));
+
+            if result.is_none() {
+                return EMPTY_CELL;
+            }
+
+            result.unwrap()
+        };
+
+        chunk.get_cell(cell_position)
     }    
 
     pub(crate) fn swap_cells(&self, chunk_position: Vector2, cell_position: Vector2, new_cell_position: Vector2) {
@@ -83,55 +104,67 @@ impl World {
         let (new_cell_position, new_chunk_offset) = new_cell_position.wrap(0, CHUNK_SIZE);
 
         if chunk_offset == new_chunk_offset {
-            match self.get_chunk(&(chunk_position + chunk_offset)) {
-                Some(chunk) => chunk.swap_cells(cell_position, new_cell_position),
-                None => {},
-            }
+            let chunk = {
+                let result = self.get_chunk(&(chunk_position + chunk_offset));
+
+                if result.is_none() {
+                    return;
+                }
+
+                result.unwrap()
+            };
+
+            chunk.swap_cells(cell_position, new_cell_position);
+            chunk.update_dirty_rect(&cell_position);
+            chunk.update_dirty_rect(&new_cell_position);
         }
         else {
-            let result_1 = self.get_chunk(&(chunk_position + chunk_offset));
-            let result_2 = self.get_chunk(&(chunk_position + new_chunk_offset));
-            if result_1.is_none() && result_2.is_none() {
-                return ;
+            let chunk = {
+                let result = self.get_chunk(&(chunk_position + chunk_offset));
+
+                if result.is_none() {
+                    return;
+                }
+
+                result.unwrap()
+            };
+
+            let new_chunk = {
+                let result = self.get_chunk(&(chunk_position + new_chunk_offset));
+
+                if result.is_none() {
+                    chunk.set_cell(cell_position, EMPTY_CELL);
+                    chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+
+                    chunk.update_dirty_rect(&cell_position);
+                    return;
+                }
+
+                result.unwrap()
+            };
+
+            let cell_1 = chunk.get_cell(cell_position);
+            let cell_2 = new_chunk.get_cell(new_cell_position);
+
+            if cell_1.element == Element::Empty {
+                chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                new_chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+
+                self.refresh_chunk_at_cell(&(chunk_position + chunk_offset), &cell_position);
+            }
+            else if cell_2.element == Element::Empty {
+                chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                new_chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                
+                self.refresh_chunk_at_cell(&(chunk_position + new_chunk_offset), &new_cell_position);
+            }
+            else {
+                self.refresh_chunk_at_cell(&(chunk_position + chunk_offset), &cell_position);
+                self.refresh_chunk_at_cell(&(chunk_position + new_chunk_offset), &new_cell_position);
             }
 
-            match result_1 {
-                Some(chunk) => {
-                    match result_2 {
-                        Some(new_chunk) => {
-                            let cell_1 = chunk.get_cell(cell_position);
-                            let cell_2 = new_chunk.get_cell(new_cell_position);
-
-                            if cell_1.element == Element::Empty {
-                                chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                                new_chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-                                
-                                self.refresh_chunk_at_cell(&(chunk_position + chunk_offset), &cell_position);
-                            }
-                            else if cell_2.element == Element::Empty {
-                                chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-                                new_chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-
-                                self.refresh_chunk_at_cell(&(chunk_position + new_chunk_offset), &new_cell_position);
-                            }
-                            else {
-                                self.refresh_chunk_at_cell(&(chunk_position + chunk_offset), &cell_position);
-                                self.refresh_chunk_at_cell(&(chunk_position + new_chunk_offset), &new_cell_position);
-                            }
-
-                            chunk.update_cell(cell_position, cell_2);
-                            new_chunk.update_cell(new_cell_position, cell_1);
-                        },
-                        None => {
-                            chunk.set_cell(cell_position, EMPTY_CELL);
-                            chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-                        },
-                    }
-                },
-                None => {
-                    panic!()
-                },
-            }
+            chunk.set_cell(cell_position, cell_2);
+            new_chunk.set_cell(new_cell_position, cell_1);
         }
     }    
 
@@ -146,36 +179,46 @@ impl World {
     }
 
     pub fn refresh_chunk_at_cell(&self, chunk_position: &Vector2, cell_position: &Vector2) {
-        match self.get_chunk(chunk_position) {
-            Some(chunk) => {
-                let mut active_lock = self.active_chunks.lock();
+        let chunk = {
+            let result = self.get_chunk(chunk_position);
 
-                if chunk.cell_count.load(std::sync::atomic::Ordering::Acquire) > 0 {
-                    if !active_lock.contains(&chunk_position) {
-                        active_lock.insert(*chunk_position);
-                        chunk.maximize_dirty_rect();
-                    }
-                    else {
-                        chunk.update_dirty_rect(cell_position);
-                    }
+            if result.is_none() {
+                return;
+            }
 
-                }
-            },
-            None => {},
+            result.unwrap()
+        };
+        
+        let mut active_lock = self.active_chunks.lock();
+
+        if chunk.cell_count.load(std::sync::atomic::Ordering::Acquire) > 0 {
+            if !active_lock.contains(&chunk_position) {
+                active_lock.insert(*chunk_position);
+                chunk.maximize_dirty_rect();
+            }
+            else {
+                chunk.update_dirty_rect(cell_position);
+            }
+
         }
     }
 
     pub fn refresh_chunk(&self, chunk_position: &Vector2) {
-        match self.get_chunk(chunk_position) {
-            Some(chunk) => {
-                let mut active_lock = self.active_chunks.lock();
+        let chunk = {
+            let result = self.get_chunk(chunk_position);
 
-                if !active_lock.contains(&chunk_position) {
-                    active_lock.insert(*chunk_position);
-                    chunk.maximize_dirty_rect();
-                }
-            },
-            None => {},
+            if result.is_none() {
+                return;
+            }
+
+            result.unwrap()
+        };
+        
+        let mut active_lock = self.active_chunks.lock();
+
+        if !active_lock.contains(&chunk_position) {
+            active_lock.insert(*chunk_position);
+            chunk.maximize_dirty_rect();
         }
     }
 
@@ -196,15 +239,15 @@ pub struct WorldApi {
 impl WorldApi {
     pub fn needs_update(&mut self, dt: u128) -> bool {
         self.previous_update_ms += dt;
-        self.previous_update_ms >= DELAY
+        self.previous_update_ms >= DELAY_MS
     }
 
     pub fn update(&mut self) -> (u128, u128, u128) {
         let mut chunks_count: u128 = 0;
         let mut updated_pixels_count: u128 = 0;
-        while self.previous_update_ms >= DELAY {
+        while self.previous_update_ms >= DELAY_MS {
             self.pixel_count = 0;
-            self.previous_update_ms -= DELAY;
+            self.previous_update_ms -= DELAY_MS;
             let active_chunks = self.chunk_manager.active_chunks.lock().clone();
             chunks_count += active_chunks.len() as u128;
         

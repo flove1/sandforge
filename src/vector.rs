@@ -26,7 +26,7 @@ impl Vector2 {
         }
     }
 
-    pub fn inc(&mut self, x: i64, y: i64) {
+    pub fn change(&mut self, x: i64, y: i64) {
         self.x += x;
         self.y += y;
     }
@@ -47,6 +47,7 @@ impl Vector2 {
     pub fn clamp(mut self, min: i64, max: i64) -> Self {
         self.x = self.x.clamp(min, max);
         self.y = self.y.clamp(min, max);
+        
         self
     }
 

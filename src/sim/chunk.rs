@@ -35,30 +35,76 @@ pub struct Rect {
 }
 
 impl Rect {
-    pub fn update(&mut self, position: &Vector2) {
-        match &mut self.corners {
-            Some(corners) => {
-                if position.x < corners[0] {
-                    corners[0] = position.x;
-                }
+    pub fn new() -> Self {
+        Self { ..Default::default() }
+    }
+
+    pub fn combine(&mut self, other: Self) {
+        if other.is_empty() {
+            return;
+        }
+
+        if self.is_empty() {
+            self.corners = other.corners;
+            return;
+        }
+
+
+        let corners_1 = self.corners.as_mut().unwrap();
+        let corners_2 = other.corners.unwrap();
         
-                if position.y < corners[1] {
-                    corners[1] = position.y;
-                }
-                
-                if position.x+1 >= corners[2] {
-                    corners[2] = position.x+1;
-                }
-                
-                if position.y+1 >= corners[3] {
-                    corners[3] = position.y+1;
-                }
-            }
-            None => {
-                self.corners = Some([position.x, position.y, position.x+1, position.y+1]);
-                return;
-            }
-        };
+        if corners_1[0] > corners_2[0] {
+            corners_1[0] = corners_2[0];
+        }
+
+        if corners_1[1] > corners_2[1] {
+            corners_1[1] = corners_2[1];
+        }
+
+        if corners_1[2] < corners_2[2] {
+            corners_1[2] = corners_2[2];
+        }
+
+        if corners_1[3] < corners_2[3] {
+            corners_1[3] = corners_2[3];
+        }
+    }
+
+    pub fn update(&mut self, position: &Vector2) {
+        if self.is_empty() {
+            self.corners = Some([position.x, position.y, position.x+1, position.y+1]);
+            return;
+        }
+
+        let corners = self.corners.as_mut().unwrap();
+
+        if corners[0] > position.x {
+            corners[0] = position.x;
+        }
+
+        if corners[1] > position.y {
+            corners[1] = position.y;
+        }
+        
+        if corners[2] < position.x+1 {
+            corners[2] = position.x+1;
+        }
+        
+        if corners[3] < position.y+1 {
+            corners[3] = position.y+1;
+        }
+    }
+
+
+    pub fn update_at_corners(&mut self, center_position: &Vector2) {
+        let corners_position = [
+            &center_position.add(-DIRTY_CHUNK_OFFSET, -DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1),
+            &center_position.add(DIRTY_CHUNK_OFFSET, DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1),
+        ];
+
+        for position in corners_position {
+            self.update(position);
+        }
     }
 
     pub fn get_ranges(&self, clock: u8) -> (Vec<i64>, Vec<i64>) {
@@ -93,8 +139,8 @@ impl Rect {
         clone
     }
 
-    fn is_empty(&self) -> bool {
-        self.corners == None
+    pub fn is_empty(&self) -> bool {
+        self.corners.is_none()
     }
 }
 
@@ -126,9 +172,7 @@ impl Chunk {
 
     pub(crate) fn update_dirty_rect(&self, position: &Vector2) {
         let mut rect_lock = self.dirty_rect.lock();
-
-        rect_lock.update(&position.add(-DIRTY_CHUNK_OFFSET, -DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1));
-        rect_lock.update(&position.add(DIRTY_CHUNK_OFFSET, DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1));
+        rect_lock.update_at_corners(position);
     }
 
     pub(crate) fn maximize_dirty_rect(&self) {
@@ -148,18 +192,11 @@ impl Chunk {
 
     pub(crate) fn set_cell(&self, cell_position: Vector2, cell: Cell) {
         self.cells[cell_position.to_index(CHUNK_SIZE)].store(cell);
-        self.update_dirty_rect(&cell_position);
-    }
-
-    pub(crate) fn update_cell(&self, cell_position: Vector2, cell: Cell) {
-        self.cells[cell_position.to_index(CHUNK_SIZE)].store(cell);
     }
 
     pub(crate) fn swap_cells(&self, cell_position_1: Vector2, cell_position_2: Vector2) {
         let index_1 = cell_position_1.to_index(CHUNK_SIZE);
         let index_2 = cell_position_2.to_index(CHUNK_SIZE);
-        self.update_dirty_rect(&cell_position_1);
-        self.update_dirty_rect(&cell_position_2);
         self.cells[index_1].store(self.cells[index_2].swap(self.cells[index_1].load()));
     }
     
@@ -177,7 +214,6 @@ impl Chunk {
             return;
         }
     
-        dbg!(x, y);
         labeled_cells[index] = label;
     
         self.label_cell(x + 1, y, label, labeled_cells);
@@ -283,14 +319,14 @@ impl Chunk {
 
         while !queue.is_empty() {
             let (cell_position, element) = queue.pop_front().unwrap();
-            let index = (cell_position.y * CHUNK_SIZE + cell_position.x) as usize;
+            let index = get_cell_index(cell_position.x, cell_position.y);
 
             if self.cells[index].load().element == Element::Empty && element != Element::Empty {
-                self.update_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
+                self.set_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
                 self.cell_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             else if self.cells[index].load().element != Element::Empty && element == Element::Empty {
-                self.update_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
+                self.set_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
                 self.cell_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             }
 
@@ -337,6 +373,7 @@ impl Chunk {
             chunk: self,
             chunk_manager: manager.clone(),
             clock,
+            dirty_rect: Rect::new(),
         };
 
         let mut updated_count: u128 = 0;
@@ -344,14 +381,13 @@ impl Chunk {
         for x in x_range.iter() {
             for y in y_range.iter() {
                 let cell = self.cells[get_cell_index(*x, *y)].load();
-                // drop(cells_lock);
             
                 if cell.clock == clock || cell.element == Element::Empty {
                     continue;
                 }
 
                 if clock_range.contains(&cell.clock) {
-                    self.update_dirty_rect(&vec2!(*x, *y));
+                    api.dirty_rect.update(&vec2!(*x, *y));
                     continue;
                 }
 
@@ -361,11 +397,14 @@ impl Chunk {
                 updated_count += 1;
             }
         }
+
+        self.dirty_rect.lock().combine(api.dirty_rect);
         return updated_count;
     }
 }
 
 pub struct ChunkApi<'a> {
+    pub(super) dirty_rect: Rect,
     pub(super) cell_position: Vector2,
     pub(super) chunk: &'a Chunk,
     pub(super) chunk_manager: Arc<World>,
@@ -400,6 +439,7 @@ impl<'a> ChunkApi<'a> {
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) {
             self.chunk.set_cell(cell_position, cell);
+            self.dirty_rect.update_at_corners(&cell_position);
         }
         else {
             self.chunk_manager.set_cell(self.chunk.position, cell_position, cell);
@@ -412,6 +452,9 @@ impl<'a> ChunkApi<'a> {
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) && new_cell_position.is_between(0, CHUNK_SIZE - 1) {
             self.chunk.swap_cells(cell_position, new_cell_position);
+
+            self.dirty_rect.update_at_corners(&cell_position);
+            self.dirty_rect.update_at_corners(&new_cell_position);
 
             let chunk_offset = vec2!(
                 if cell_position.x == 0 { -1 }
@@ -435,14 +478,14 @@ impl<'a> ChunkApi<'a> {
             self.chunk_manager.swap_cells(self.chunk.position, cell_position, new_cell_position);
         }
 
-        self.cell_position.inc(dx, dy);
+        self.cell_position.change(dx, dy);
     }
 
     pub fn update(&mut self, mut cell: Cell) {
         cell.clock = self.clock;
 
         if self.cell_position.is_between(0, CHUNK_SIZE - 1) {
-            self.chunk.update_cell(self.cell_position, cell);
+            self.chunk.set_cell(self.cell_position, cell);
         }
         else {
             self.chunk_manager.update_cell(self.chunk.position, self.cell_position, cell);

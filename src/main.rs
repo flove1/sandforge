@@ -81,7 +81,7 @@ fn run() {
             let start = Instant::now();
     
             loop {
-                world.needs_update(DELAY);
+                world.needs_update(DELAY_MS);
                 
                 let (_, _, pixels_count) = world.update();
                 if pixels_count == 0 {
