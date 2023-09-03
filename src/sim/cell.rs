@@ -34,7 +34,7 @@ impl Cell {
         };
 
         match cell.element {
-            Element::Sand | Element::Wood => {cell.ra = rand::thread_rng().gen_range(0..25)},
+            Element::Water | Element::Sand | Element::Wood => {cell.ra = rand::thread_rng().gen_range(0..25)},
             _ => {},
         }
 

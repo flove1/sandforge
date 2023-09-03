@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use rand::Rng;
 use scoped_threadpool::Pool;
 
-use crate::{vec2, vector::Vector2, constants::*};
+use crate::{vec2, vector::Vector2, constants::*, renderer::Vertex};
 
 use super::{chunk::Chunk, elements::Element, helpers::get_cell_index, cell::{EMPTY_CELL, Cell}};
 
@@ -261,7 +261,7 @@ impl WorldApi {
                         1 => active_chunks.iter().filter(|v| v.x%2 == 0 && v.y%2 == 1).collect(),
                         2 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 0).collect(),
                         3 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 1).collect(),
-                        _ => panic!("how"),
+                        _ => panic!("must be in range of 0..4"),
                     };
     
                     s.execute(|| {
@@ -289,9 +289,11 @@ impl WorldApi {
         self.chunk_manager.place(x, y, element);
     }
 
-    pub fn render(&self, frame: &mut [u8]) {
+    pub fn render(&self, frame: &mut [u8]) -> Vec<Vec<Vertex>> {
         let active_lock = self.chunk_manager.active_chunks.lock();
         let mut suspended_lock = self.chunk_manager.suspended_chunks.lock();
+        
+        let mut boundaries: Vec<Vec<Vertex>> = vec![];
 
         for chunk_position in active_lock.iter() {
             let chunk = self.chunk_manager.get_chunk(chunk_position).unwrap();
@@ -304,7 +306,7 @@ impl WorldApi {
                 for y in 0..CHUNK_SIZE {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
                     let cell = chunk.cells[get_cell_index(x as i64, y as i64)].load();
-                    let offset = rand::thread_rng().gen_range(0..25);
+                    let offset = rand::thread_rng().gen_range(0..10);
                     let rgba = match cell.element {
                         Element::Empty => [0x00, 0x00, 0x00, 0xff],
                         Element::Stone => [0x77, 0x77, 0x77, 0xff],
@@ -357,54 +359,17 @@ impl WorldApi {
                 frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
             }
 
-            let objects = chunk.objects.lock().clone();
+            let chunk_boundaries = chunk.objects.lock().clone();
 
-            for object in objects.iter() {
-                for boundary in object{
-                    for vertice in boundary {
-                        let pixel_index = (((y_offset + vertice.1 * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + vertice.0) * 4) as usize;
-
-                        frame[pixel_index + 1] = frame[pixel_index + 1].saturating_add(50);
-                    }
-                    
-                    // let mut previous_point = vertices[2].round();
-
-                    // for point in vertices.iter().map(|point| point.round()) {
-                    //     let dx:i64 = i64::abs(point.x - previous_point.x);
-                    //     let dy:i64 = i64::abs(point.y - previous_point.y);
-                    //     let sx:i64 = { if previous_point.x < point.x { 1 } else { -1 } };
-                    //     let sy:i64 = { if previous_point.y < point.y { 1 } else { -1 } };
-                    
-                    //     let mut error:i64 = (if dx > dy  { dx } else { -dy }) / 2 ;
-                    //     let mut current_x:i64 = previous_point.x;
-                    //     let mut current_y:i64 = previous_point.y;
-
-                    //     loop {
-                    //         let pixel_index = ((y_offset + current_y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + current_x) * 4;
-
-                    //         frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(50);
-                            
-                    //         if current_x == point.x && current_y == point.y { break; }
-                    //         let error2:i64 = error;
-                    
-                    //         if error2 > -dx {
-                    //             error -= dy;
-                    //             current_x += sx;
-                    //         }
-                    //         if error2 < dy {
-                    //             error += dx;
-                    //             current_y += sy;
-                    //         }
-                    //     }
-
-                    //     previous_point = point;
-                    // }
-                }
-
-                // for point in object.iter().map(|point| point.round()) {
-                //     let pixel_index = (((y_offset + point.y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + point.x) * 4) as usize;
-                //     frame[pixel_index + 1] = frame[pixel_index + 1].saturating_add(50);
-                // }
+            // Convert from chunk coordinates to screen coordinates
+            for boundary in chunk_boundaries.iter() {
+                boundaries.push(boundary.iter().map(|point| Vertex {
+                    position: [
+                        (((point.0 as f32 + (chunk_position.x * CHUNK_SIZE) as f32) / (CHUNK_SIZE * WORLD_WIDTH) as f32) - 0.5) * 2.0, 
+                        ((-(point.1 as f32 + (chunk_position.y * CHUNK_SIZE) as f32) / (CHUNK_SIZE * WORLD_HEIGHT) as f32) + 0.5) * 2.0
+                    ]
+                })
+                .collect());
             }
         }
 
@@ -435,5 +400,7 @@ impl WorldApi {
                 }
             }
         }
+
+        boundaries
     }
 }

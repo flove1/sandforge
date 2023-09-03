@@ -49,7 +49,7 @@ pub fn update_liquid<'a>(cell: &mut Cell, mut api: ChunkApi<'a>, _dt: f32) -> Ch
         api.swap(0, 1);
         if api.once_in(20) {
             //randomize direction when falling sometimes
-            cell.ra = 100 + api.rand_int(50) as u8;
+            cell.ra = api.rand_int(20) as u8;
         }
 
         return api;

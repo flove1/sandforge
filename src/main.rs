@@ -8,6 +8,7 @@ mod vector;
 mod constants;
 mod ui;
 mod input;
+mod renderer;
 
 use crate::sim::elements::Element;
 
@@ -15,6 +16,7 @@ use error_iter::ErrorIter as _;
 use input::StateManager;
 use log::error;
 use pixels::{Pixels, SurfaceTexture};
+use renderer::MeshRenderer;
 use sim::world::World;
 use ui::Framework;
 use winit::dpi::LogicalSize;
@@ -27,7 +29,12 @@ use crate::constants::*;
 fn main() {
     env_logger::init();
 
-    run();
+    if IS_BENCHMARK {
+        benchmark();
+    }
+    else {
+        run();
+    }
 }
 
 fn run() {
@@ -58,52 +65,12 @@ fn run() {
 
         (pixels, framework)
     };
-    
+
     let mut world = World::new();
     let mut state_manager = StateManager::new();
 
-    if IS_BENCHMARK {
-        let mut results = vec![];
+    let mut mesh_renderer = MeshRenderer::new(&pixels, window.inner_size().width, window.inner_size().height).unwrap();
 
-        for _ in 0..10 {
-            for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
-                for y in 0..CHUNK_SIZE {
-                    world.place(x, y, Element::Sand);
-                }
-            }
-    
-            for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
-                for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
-                    world.place(x, y, Element::Sand);
-                }
-            }
-    
-            let start = Instant::now();
-    
-            loop {
-                world.needs_update(DELAY_MS);
-                
-                let (_, _, pixels_count) = world.update();
-                if pixels_count == 0 {
-                    let result = Instant::now().duration_since(start).as_millis();
-                    println!("time took: {}", result as f64 / 1000.0);
-                    results.push(result);
-                    break;
-                }
-            }
-        }
-
-        let sum: u128 = results.iter().sum();
-        let min: u128 = *results.iter().min().unwrap();
-        let max: u128 = *results.iter().max().unwrap();
-        println!("\ntest count: {}",  results.len());
-        println!("avg time: {}",  sum as f64 / results.len() as f64 / 1000.0);
-        println!("min time: {}",  min as f64 / 1000.0);
-        println!("max time: {}",  max as f64 / 1000.0);
-
-        return;
-    }
-    
     event_loop.run(move |event, _, control_flow| {        
         control_flow.set_poll();
 
@@ -244,21 +211,25 @@ fn run() {
                 if world.needs_update(now.duration_since(state_manager.previous_frame.instant).as_millis()) {
                     let (chunks_updated, pixels_updated, _) = world.update();
                     state_manager.previous_frame.update(chunks_updated, pixels_updated, now);
+
+                    let object_boundaries = world.render(pixels.frame_mut());
+                    mesh_renderer.update(pixels.device(), &object_boundaries);
                 }
 
                 state_manager.previous_frame.tick();
 
-                world.render(pixels.frame_mut());
-                framework.prepare(&state_manager, &window);
-
-                let framework_result = pixels.render_with(|encoder, render_target, context| {
+                let render_result = pixels.render_with(|encoder, render_target, context| {
                     context.scaling_renderer.render(encoder, render_target);
+    
+                    mesh_renderer.render(encoder, render_target);
+
+                    framework.prepare(&state_manager, &window);
                     framework.render(encoder, render_target, context);
 
                     Ok(())
                 });
 
-                if let Err(err) = framework_result {
+                if let Err(err) = render_result {
                     for source in err.sources() {
                         error!("{source}");
                     }
@@ -270,4 +241,48 @@ fn run() {
 
         window.request_redraw();
     });
+}
+
+fn benchmark() {
+    let mut world = World::new();
+
+    let mut results = vec![];
+
+    for _ in 0..10 {
+        for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
+            for y in 0..CHUNK_SIZE {
+                world.place(x, y, Element::Sand);
+            }
+        }
+
+        for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
+            for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
+                world.place(x, y, Element::Sand);
+            }
+        }
+
+        let start = Instant::now();
+
+        loop {
+            world.needs_update(DELAY_MS);
+            
+            let (_, _, pixels_count) = world.update();
+            if pixels_count == 0 {
+                let result = Instant::now().duration_since(start).as_millis();
+                println!("time took: {}", result as f64 / 1000.0);
+                results.push(result);
+                break;
+            }
+        }
+    }
+
+    let sum: u128 = results.iter().sum();
+    let min: u128 = *results.iter().min().unwrap();
+    let max: u128 = *results.iter().max().unwrap();
+    println!("\ntest count: {}",  results.len());
+    println!("avg time: {}",  sum as f64 / results.len() as f64 / 1000.0);
+    println!("min time: {}",  min as f64 / 1000.0);
+    println!("max time: {}",  max as f64 / 1000.0);
+
+    return;
 }

@@ -507,6 +507,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 
 [[package]]
+name = "earcutr"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0812b44697951d35fde8fcb0da81c9de7e809e825a66bbf1ecb79d9829d4ca3d"
+dependencies = [
+ "itertools",
+ "num-traits",
+]
+
+[[package]]
 name = "ecolor"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -556,6 +566,12 @@ dependencies = [
  "webbrowser",
  "winit",
 ]
+
+[[package]]
+name = "either"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a26ae43d7bcc3b814de94796a5e736d4029efb0ee900c12e2d54c993ad1a1e07"
 
 [[package]]
 name = "emath"
@@ -893,6 +909,15 @@ dependencies = [
  "hermit-abi",
  "rustix",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "itertools"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+dependencies = [
+ "either",
 ]
 
 [[package]]
@@ -1570,11 +1595,13 @@ dependencies = [
 name = "sandforge"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cdt",
  "cfg-if",
  "crossbeam",
  "dashmap",
  "delaunator",
+ "earcutr",
  "egui",
  "egui-wgpu",
  "egui-winit",

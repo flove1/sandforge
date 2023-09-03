@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, AtomicU8};
 use std::sync::Arc;
 
 use crossbeam::atomic::AtomicCell;
-use delaunator::Point;
 use egui_winit::egui::epaint::ahash::HashSet;
 use parking_lot::Mutex;
 use rand::Rng;
@@ -14,6 +13,7 @@ use super::helpers::get_cell_index;
 use super::objects::marching_squares;
 use super::world::World;
 
+use crate::renderer::Vertex;
 use crate::{constants::*, vec2};
 use crate::vector::Vector2;
 
@@ -25,7 +25,7 @@ pub struct Chunk {
     pub(super) cell_count: AtomicU64,
     pub(super) position: Vector2,
     pub(super) frame_idling: AtomicU8,
-    pub(super) objects: Mutex<Vec<Vec<Vec<(i64, i64)>>>>
+    pub(super) objects: Mutex<Vec<Vec<(f64, f64)>>>
 }
 
 #[derive(Default, Clone, Copy)]
@@ -222,46 +222,6 @@ impl Chunk {
         self.label_cell(x, y - 1, label, labeled_cells);
     }
 
-    pub fn distance_between_points(&self, p1: &Point, p2: &Point) -> f64 {
-        ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt()
-    }
-
-    pub fn distance_to_line(&self, point: &Point, line_start: &Point, line_end: &Point) -> f64 {
-        let line_length = self.distance_between_points(line_start, line_end);
-        let numerator = ((line_end.y - line_start.y) * point.x - (line_end.x - line_start.x) * point.y + line_end.x * line_start.y - line_end.y * line_start.x).abs();
-        numerator / line_length
-    }
-
-    fn douglas_peucker(&self, points: &[Point]) -> Vec<Point> {
-        if points.len() <= 2 {
-            return points.to_vec();
-        }
-
-        let mut dmax = 0.0;
-        let mut index = 0;
-
-        for i in 1..(points.len() - 1) {
-            let d = self.distance_to_line(&points[i], &points[0], &points[points.len() - 1]);
-            if d > dmax {
-                index = i;
-                dmax = d;
-            }
-        }
-
-        let mut result = Vec::new();
-        if dmax >= 0.1 {
-            let mut result_1 = self.douglas_peucker(&points[..=index]);
-            let mut result_2 = self.douglas_peucker(&points[index..]);
-            result.append(&mut result_1);
-            result.append(&mut result_2);
-        } else {
-            result.push(points[0].clone());
-            result.push(points[points.len() - 1].clone());
-        }
-
-        result
-    }
-
     pub fn create_collider(&self) {
         let mut labeled_cells = vec![0; CHUNK_SIZE.pow(2) as usize];
         let mut label = 0;
@@ -377,6 +337,8 @@ impl Chunk {
         };
 
         let mut updated_count: u128 = 0;
+
+        self.create_collider();
 
         for x in x_range.iter() {
             for y in y_range.iter() {

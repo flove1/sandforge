@@ -108,6 +108,7 @@ impl<'a, 'b> std::ops::Add<&'b Vector2> for &'a Vector2 {
     }
 }
 
+
 #[derive(Default, PartialEq, PartialOrd, Clone, Copy, Debug)]
 pub struct Vector2F {
     pub x: f64,
