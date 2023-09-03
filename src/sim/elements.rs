@@ -26,7 +26,7 @@ impl ToString for Element {
     }
 }
 
-pub fn update_sand<'a>(_cell: &Cell, mut api: ChunkApi<'a>, _dt: f32) -> ChunkApi<'a> {
+pub fn update_sand<'a, 'b>(_cell: &Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
     let dx = api.rand_dir();
 
     if api.match_element(0, 1, Element::Empty) {
@@ -42,7 +42,7 @@ pub fn update_sand<'a>(_cell: &Cell, mut api: ChunkApi<'a>, _dt: f32) -> ChunkAp
     api
 }
 
-pub fn update_liquid<'a>(cell: &mut Cell, mut api: ChunkApi<'a>, _dt: f32) -> ChunkApi<'a> {
+pub fn update_liquid<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
     let mut dx = api.rand_dir();
 
     if api.match_element(0, 1, Element::Empty) {

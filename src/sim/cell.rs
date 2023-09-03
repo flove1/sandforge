@@ -41,7 +41,9 @@ impl Cell {
         cell
     }
 
-    pub fn update<'a>(mut self, mut api: ChunkApi<'a>, dt: f32) -> ChunkApi<'a>  {
+    pub fn update<'a, 'b>(mut self, mut api: ChunkApi<'a, 'b>, dt: f32, clock: u8) -> ChunkApi<'a, 'b>  {
+        self.clock = clock;
+
         api = match self.element {
             Element::Empty => { api },
             Element::Stone => { api },

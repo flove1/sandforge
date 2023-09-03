@@ -43,9 +43,9 @@ impl World {
             return;
         }
 
-        let position = vec2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
-        if let Some(chunk) = self.get_chunk(&position) {
-            self.refresh_chunk(&position);
+        let chunk_position = vec2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
+        if let Some(chunk) = self.get_chunk(&chunk_position) {
+            self.activate_chunk(&chunk_position);
             chunk.place(x % CHUNK_SIZE, y % CHUNK_SIZE, element);
         }
     }
@@ -63,7 +63,7 @@ impl World {
             result.unwrap()
         };
 
-        chunk.set_cell(cell_position, cell);
+        chunk.chunk_data.lock().set_cell(cell_position, cell);
     }    
 
     pub(crate) fn set_cell(&self, chunk_position: Vector2, cell_position: Vector2, cell: Cell) {
@@ -79,8 +79,14 @@ impl World {
             result.unwrap()
         };
 
-        chunk.set_cell(cell_position, cell);
-        self.refresh_chunk_at_cell(&chunk_position, &cell_position);
+        let mut data = chunk.chunk_data.lock();
+        if self.activate_chunk(&(chunk_position + chunk_offset)) {
+            data.maximize_dirty_rect();
+        }
+        else {
+            data.update_dirty_rect(&cell_position);
+        }
+        data.set_cell(cell_position, cell);
     }    
 
     pub(crate) fn get_cell(&self, chunk_position: Vector2, cell_position: Vector2) -> Cell {
@@ -96,76 +102,45 @@ impl World {
             result.unwrap()
         };
 
-        chunk.get_cell(cell_position)
+        let data = chunk.chunk_data.lock();
+        data.get_cell(cell_position)
     }    
 
-    pub(crate) fn swap_cells(&self, chunk_position: Vector2, cell_position: Vector2, new_cell_position: Vector2) {
-        let (cell_position,chunk_offset ) = cell_position.wrap(0, CHUNK_SIZE);
-        let (new_cell_position, new_chunk_offset) = new_cell_position.wrap(0, CHUNK_SIZE);
+    pub(crate) fn replace_cell(&self, chunk_position: Vector2, cell_offset: Vector2, cell: Cell) -> Cell {
+        let (cell_position,chunk_offset ) = cell_offset.wrap(0, CHUNK_SIZE);
 
-        if chunk_offset == new_chunk_offset {
-            let chunk = {
-                let result = self.get_chunk(&(chunk_position + chunk_offset));
+        if chunk_offset.is_zero() {
+            panic!();
+        }
+        let chunk = {
+            let result = self.get_chunk(&(chunk_position + chunk_offset));
 
-                if result.is_none() {
-                    return;
-                }
+            if result.is_none() {
+                return EMPTY_CELL;
+            }
 
-                result.unwrap()
-            };
+            result.unwrap()
+        };
 
-            chunk.swap_cells(cell_position, new_cell_position);
-            chunk.update_dirty_rect(&cell_position);
-            chunk.update_dirty_rect(&new_cell_position);
+        let mut data = chunk.chunk_data.lock();
+
+        let old_cell = data.replace_cell(cell_position, cell);
+
+        if old_cell.element != Element::Empty && cell.element == Element::Empty {
+            chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::Acquire);
+        }
+        else if old_cell.element == Element::Empty && cell.element != Element::Empty {
+            chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+        }
+
+        if self.activate_chunk(&(chunk_position + chunk_offset)) {
+            data.maximize_dirty_rect();
         }
         else {
-            let chunk = {
-                let result = self.get_chunk(&(chunk_position + chunk_offset));
-
-                if result.is_none() {
-                    return;
-                }
-
-                result.unwrap()
-            };
-
-            let new_chunk = {
-                let result = self.get_chunk(&(chunk_position + new_chunk_offset));
-
-                if result.is_none() {
-                    chunk.set_cell(cell_position, EMPTY_CELL);
-                    chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-
-                    chunk.update_dirty_rect(&cell_position);
-                    return;
-                }
-
-                result.unwrap()
-            };
-
-            let cell_1 = chunk.get_cell(cell_position);
-            let cell_2 = new_chunk.get_cell(new_cell_position);
-
-            if cell_1.element == Element::Empty {
-                chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                new_chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-
-                self.refresh_chunk_at_cell(&(chunk_position + chunk_offset), &cell_position);
-            }
-            else if cell_2.element == Element::Empty {
-                chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-                new_chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                
-                self.refresh_chunk_at_cell(&(chunk_position + new_chunk_offset), &new_cell_position);
-            }
-            else {
-                self.refresh_chunk_at_cell(&(chunk_position + chunk_offset), &cell_position);
-                self.refresh_chunk_at_cell(&(chunk_position + new_chunk_offset), &new_cell_position);
-            }
-
-            chunk.set_cell(cell_position, cell_2);
-            new_chunk.set_cell(new_cell_position, cell_1);
+            data.update_dirty_rect(&cell_position);
         }
+
+        old_cell
     }    
 
     pub(crate) fn get_chunk(&self, position: &Vector2) -> Option<Ref<Vector2, Chunk>> {
@@ -176,6 +151,27 @@ impl World {
         let chunk_x = x.div_euclid(CHUNK_SIZE);
         let chunk_y = y.div_euclid(CHUNK_SIZE);
         self.chunks.get(&vec2!(chunk_x, chunk_y))
+    }
+
+    /// Returns true if chunk was activated
+    pub fn activate_chunk(&self, chunk_position: &Vector2) -> bool {
+        if self.get_chunk(chunk_position).is_none() {
+            return false;
+        }
+        
+        let mut active_lock = self.active_chunks.lock();
+
+        if active_lock.contains(&chunk_position) {
+            return false;
+        }
+
+        active_lock.insert(*chunk_position);
+        return true;
+    }
+
+    pub fn release_chunk(&self, chunk_position: &Vector2) {
+        self.active_chunks.lock().remove(chunk_position);
+        self.suspended_chunks.lock().insert(*chunk_position);
     }
 
     pub fn refresh_chunk_at_cell(&self, chunk_position: &Vector2, cell_position: &Vector2) {
@@ -199,32 +195,7 @@ impl World {
             else {
                 chunk.update_dirty_rect(cell_position);
             }
-
         }
-    }
-
-    pub fn refresh_chunk(&self, chunk_position: &Vector2) {
-        let chunk = {
-            let result = self.get_chunk(chunk_position);
-
-            if result.is_none() {
-                return;
-            }
-
-            result.unwrap()
-        };
-        
-        let mut active_lock = self.active_chunks.lock();
-
-        if !active_lock.contains(&chunk_position) {
-            active_lock.insert(*chunk_position);
-            chunk.maximize_dirty_rect();
-        }
-    }
-
-    pub fn release_chunk(&self, chunk_position: &Vector2) {
-        self.active_chunks.lock().remove(chunk_position);
-        self.suspended_chunks.lock().insert(*chunk_position);
     }
 }
 
@@ -300,12 +271,13 @@ impl WorldApi {
             let x_offset = chunk_position.x * CHUNK_SIZE;
             let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
-            let (dirty_rect_x, dirty_rect_y) = chunk.dirty_rect.lock().get_ranges_render();
+            let chunk_data = chunk.chunk_data.lock();
+            let (dirty_rect_x, dirty_rect_y) = chunk_data.dirty_rect.get_ranges_render();
 
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
-                    let cell = chunk.cells[get_cell_index(x as i64, y as i64)].load();
+                    let cell = chunk_data.cells[get_cell_index(x as i64, y as i64)];
                     let offset = rand::thread_rng().gen_range(0..10);
                     let rgba = match cell.element {
                         Element::Empty => [0x00, 0x00, 0x00, 0xff],
@@ -359,7 +331,7 @@ impl WorldApi {
                 frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
             }
 
-            let chunk_boundaries = chunk.objects.lock().clone();
+            let chunk_boundaries = chunk_data.objects.clone();
 
             // Convert from chunk coordinates to screen coordinates
             for boundary in chunk_boundaries.iter() {
@@ -379,10 +351,12 @@ impl WorldApi {
             let x_offset = chunk_position.x * CHUNK_SIZE;
             let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
+            let chunk_data = chunk.chunk_data.lock();
+
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x + x_offset) * 4;
-                    let cell = chunk.cells[get_cell_index(x as i64, y as i64)].load();
+                    let cell = chunk_data.cells[get_cell_index(x as i64, y as i64)];
                     let offset = rand::thread_rng().gen_range(0..25);
                     let rgba = match cell.element {
                         Element::Empty => [0x00, 0x00, 0x00, 0xff],

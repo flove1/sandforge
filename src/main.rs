@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-use std::time::Instant;
+use std::thread;
+use std::time::{Instant, Duration};
 
 mod sim;
 mod utils;
@@ -15,6 +16,7 @@ use crate::sim::elements::Element;
 use error_iter::ErrorIter as _;
 use input::StateManager;
 use log::error;
+use parking_lot::deadlock;
 use pixels::{Pixels, SurfaceTexture};
 use renderer::MeshRenderer;
 use sim::world::World;
@@ -29,12 +31,16 @@ use crate::constants::*;
 fn main() {
     env_logger::init();
 
+    thread::spawn(|| {deadlock_checker()});
+
     if IS_BENCHMARK {
         benchmark();
     }
     else {
         run();
     }
+
+    
 }
 
 fn run() {
@@ -241,6 +247,25 @@ fn run() {
 
         window.request_redraw();
     });
+}
+
+fn deadlock_checker() {
+    loop {
+        thread::sleep(Duration::from_secs(10));
+        let deadlocks = deadlock::check_deadlock();
+        if deadlocks.is_empty() {
+            continue;
+        }
+
+        println!("{} deadlocks detected", deadlocks.len());
+        for (i, threads) in deadlocks.iter().enumerate() {
+            println!("Deadlock #{}", i);
+            for t in threads {
+                println!("Thread Id {:#?}", t.thread_id());
+                println!("{:#?}", t.backtrace());
+            }
+        }
+    }
 }
 
 fn benchmark() {

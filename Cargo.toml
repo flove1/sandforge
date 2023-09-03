@@ -31,6 +31,6 @@ egui-wgpu = "0.22.0"
 fps_counter = "2.0.0"
 delaunator = "1.0.2"
 cdt = "0.1.0"
-parking_lot = "0.12.1"
+parking_lot = {version = "0.12.1", features = ["deadlock_detection"]}
 bytemuck = "1.13.1"
 earcutr = "0.4.2"
