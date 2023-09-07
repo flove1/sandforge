@@ -1,26 +1,25 @@
-use std::{sync::Arc, collections::HashSet};
+use std::{sync::Arc, ops::{AddAssign, SubAssign}, collections::BTreeMap};
 
-use dashmap::{DashMap, mapref::one::Ref};
+use dashmap::{DashMap, mapref::one::Ref, DashSet};
 use parking_lot::Mutex;
 use rand::Rng;
-use scoped_threadpool::Pool;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 
 use crate::{vec2, vector::Vector2, constants::*, renderer::Vertex};
-
 use super::{chunk::Chunk, elements::Element, helpers::get_cell_index, cell::{EMPTY_CELL, Cell}};
 
 pub struct World {
     pub(super) chunks: DashMap<Vector2, Chunk>,
-    pub(super) active_chunks: Mutex<HashSet<Vector2>>,
-    pub(super) suspended_chunks: Mutex<HashSet<Vector2>>,
+    pub(super) active_chunks: DashSet<Vector2>,
+    pub(super) suspended_chunks: DashSet<Vector2>,
 }
 
 impl World {
     pub fn new() -> WorldApi {
         let world = Self {
-                chunks: DashMap::new(),
-                active_chunks: Mutex::new(HashSet::new()),
-                suspended_chunks: Mutex::new(HashSet::new()),
+            chunks: DashMap::with_shard_amount(8),
+            active_chunks: DashSet::new(),
+            suspended_chunks: DashSet::new(),
         };
         
         for x in 0..WORLD_WIDTH {
@@ -29,12 +28,11 @@ impl World {
             }
         }
 
-        WorldApi{
+        WorldApi {
             chunk_manager: Arc::new(world), 
             clock: 0, 
-            previous_update_ms: 0, pool: 
-            Pool::new(4),
-            pixel_count: 0,
+            previous_update_ms: 0, 
+            pool: ThreadPoolBuilder::new().num_threads(4).build().unwrap(),
         }
     }    
 
@@ -63,7 +61,7 @@ impl World {
             result.unwrap()
         };
 
-        chunk.chunk_data.lock().set_cell(cell_position, cell);
+        chunk.chunk_data.write().unwrap().set_cell(cell_position, cell);
     }    
 
     pub(crate) fn set_cell(&self, chunk_position: Vector2, cell_position: Vector2, cell: Cell) {
@@ -79,7 +77,7 @@ impl World {
             result.unwrap()
         };
 
-        let mut data = chunk.chunk_data.lock();
+        let mut data = chunk.chunk_data.write().unwrap();
         if self.activate_chunk(&(chunk_position + chunk_offset)) {
             data.maximize_dirty_rect();
         }
@@ -102,7 +100,7 @@ impl World {
             result.unwrap()
         };
 
-        let data = chunk.chunk_data.lock();
+        let data = chunk.chunk_data.read().unwrap();
         data.get_cell(cell_position)
     }    
 
@@ -122,15 +120,15 @@ impl World {
             result.unwrap()
         };
 
-        let mut data = chunk.chunk_data.lock();
+        let mut data = chunk.chunk_data.write().unwrap();
 
         let old_cell = data.replace_cell(cell_position, cell);
 
         if old_cell.element != Element::Empty && cell.element == Element::Empty {
-            chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::Acquire);
+            chunk.cell_count.lock().unwrap().sub_assign(1);
         }
         else if old_cell.element == Element::Empty && cell.element != Element::Empty {
-            chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+            chunk.cell_count.lock().unwrap().add_assign(1);
         }
 
         if self.activate_chunk(&(chunk_position + chunk_offset)) {
@@ -159,22 +157,20 @@ impl World {
             return false;
         }
         
-        let mut active_lock = self.active_chunks.lock();
-
-        if active_lock.contains(&chunk_position) {
+        if self.active_chunks.contains(&chunk_position) {
             return false;
         }
 
-        active_lock.insert(*chunk_position);
+        self.active_chunks.insert(*chunk_position);
         return true;
     }
 
     pub fn release_chunk(&self, chunk_position: &Vector2) {
-        self.active_chunks.lock().remove(chunk_position);
-        self.suspended_chunks.lock().insert(*chunk_position);
+        self.active_chunks.remove(chunk_position);
+        self.suspended_chunks.insert(*chunk_position);
     }
 
-    pub fn refresh_chunk_at_cell(&self, chunk_position: &Vector2, cell_position: &Vector2) {
+    pub fn refresh_chunk(&self, chunk_position: &Vector2, cell_position: &Vector2) {
         let chunk = {
             let result = self.get_chunk(chunk_position);
 
@@ -185,11 +181,9 @@ impl World {
             result.unwrap()
         };
         
-        let mut active_lock = self.active_chunks.lock();
-
-        if chunk.cell_count.load(std::sync::atomic::Ordering::Acquire) > 0 {
-            if !active_lock.contains(&chunk_position) {
-                active_lock.insert(*chunk_position);
+        if chunk.cell_count.lock().unwrap().gt(&0) {
+            if !self.active_chunks.contains(&chunk_position) {
+                self.active_chunks.insert(*chunk_position);
                 chunk.maximize_dirty_rect();
             }
             else {
@@ -203,8 +197,7 @@ pub struct WorldApi {
     chunk_manager: Arc<World>,
     previous_update_ms: u128,
     clock: u8,
-    pool: Pool,
-    pixel_count: u128,
+    pool: ThreadPool,
 }
 
 impl WorldApi {
@@ -213,47 +206,112 @@ impl WorldApi {
         self.previous_update_ms >= DELAY_MS
     }
 
-    pub fn update(&mut self) -> (u128, u128, u128) {
-        let mut chunks_count: u128 = 0;
-        let mut updated_pixels_count: u128 = 0;
+    pub fn update(&mut self) -> (u128, u128) {
+        let mut chunks_count = 0;
+        let mut pixels_count = 0;
         while self.previous_update_ms >= DELAY_MS {
-            self.pixel_count = 0;
             self.previous_update_ms -= DELAY_MS;
-            let active_chunks = self.chunk_manager.active_chunks.lock().clone();
-            chunks_count += active_chunks.len() as u128;
+            let (updated_chunk_count, updated_pixels_count) = self.update_iteration();
+            chunks_count += updated_chunk_count;
+            pixels_count += updated_pixels_count;
+        }
+
+        (chunks_count, pixels_count)
+    }
+
+    pub fn update_iteration(&mut self) -> (u128, u128){
+        self.clock = self.clock.wrapping_add(1);
+        let updated_pixels = Mutex::new(0);
         
-            let iter_range: Vec<i8> = if self.clock % 2 == 0 { (0..4).collect() } else { (0..4).rev().collect() };
+        let positions: Vec<Vector2> = self.chunk_manager.active_chunks.iter().map(|v| *v).collect();
 
-            for iteration in iter_range {
-                self.clock = self.clock.wrapping_add(1);
-                self.pool.scoped(|s| {
-                    let positions: Vec<&Vector2> = match iteration {
-                        0 => active_chunks.iter().filter(|v| v.x%2 == 0 && v.y%2 == 0).collect(),
-                        1 => active_chunks.iter().filter(|v| v.x%2 == 0 && v.y%2 == 1).collect(),
-                        2 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 0).collect(),
-                        3 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 1).collect(),
-                        _ => panic!("must be in range of 0..4"),
-                    };
-    
-                    s.execute(|| {
-                        for position in  positions {
+        let chunk_count = positions.len();
+
+        let mut groups: BTreeMap<i64, Vec<Vector2>> = BTreeMap::new();
+
+        for position in positions {
+            groups.entry(position.y).or_insert(Vec::with_capacity(WORLD_WIDTH as usize)).push(position);
+        }
+
+        for (_, group) in groups.iter_mut().rev() {
+            #[cfg(feature = "multithreading")]  
+            for iteration in 0..3 {
+                group.sort_by(|v1, v2| {
+                    if v1.x > v2.x {
+                        std::cmp::Ordering::Greater
+                    }
+                    else {
+                        std::cmp::Ordering::Less
+                    }
+                });
+                self.pool.scope(|s| {
+                    for position in group.iter().filter(|v| v.x % 3 == iteration % 3) {
+                        s.spawn(|_| {
                             let chunk = self.chunk_manager.chunks.get(position).unwrap();
-                            updated_pixels_count += chunk.update(self.chunk_manager.clone(), self.clock);
-                            let pixel_count = chunk.cell_count.load(std::sync::atomic::Ordering::Relaxed);
+                            updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
                             
-                            self.pixel_count += pixel_count as u128;
-
-                            if pixel_count == 0 {
+                            if chunk.cell_count.lock().unwrap().eq(&0) {
                                 self.chunk_manager.release_chunk(position);
                             }
-                        }
-                    })
+                        });
+                    }
                 });
+            }
+
+            #[cfg(not(feature = "multithreading"))]
+            for position in group.iter() {
+                let chunk = self.chunk_manager.chunks.get(position).unwrap();
+                updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
+                
+                if chunk.cell_count.lock().unwrap().eq(&0) {
+                    self.chunk_manager.release_chunk(position);
+                }
             }
         }
 
-        (chunks_count, updated_pixels_count, self.pixel_count)
-        
+        (chunk_count as u128, updated_pixels.into_inner())
+
+        // let active_chunks = self.chunk_manager.active_chunks.clone();
+        // for iteration in 0..4 {
+
+        //     let positions: Vec<Vector2> = match iteration {
+        //         0 => active_chunks.iter().filter(|v| v.x%2 == 0 && v.y%2 == 0).map(|v| *v).collect(),
+        //         1 => active_chunks.iter().filter(|v| v.x%2 == 0 && v.y%2 == 1).map(|v| *v).collect(),
+        //         2 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 0).map(|v| *v).collect(),
+        //         3 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 1).map(|v| *v).collect(),
+        //         _ => panic!("must be in range of 0..4"),
+        //     };
+
+        //     #[cfg(feature = "multithreading")]
+        //     {    
+        //         self.pool.scope(|s| {
+        //             for position_chunked in  positions.chunks(16) {
+        //                 s.spawn(|_| {
+        //                     for position in position_chunked.iter() {
+        //                         let chunk = self.chunk_manager.chunks.get(&position).unwrap();
+        //                         updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
+                                
+        //                         if chunk.cell_count.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        //                             self.chunk_manager.release_chunk(&position);
+        //                         }
+        //                     }
+        //                 });
+        //             }
+        //         });
+        //     }
+
+        //     #[cfg(not(feature = "multithreading"))]
+        //     for position in positions.iter() {
+        //         let chunk = self.chunk_manager.chunks.get(&position).unwrap();
+        //         updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
+                
+        //         if chunk.cell_count.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        //             self.chunk_manager.release_chunk(&position);
+        //         }
+        //     }
+        // }
+
+        // (active_chunks.len() as u128, updated_pixels.into_inner())
     }
 
     pub fn place(&self, x: i64, y: i64, element: Element) {
@@ -261,17 +319,16 @@ impl WorldApi {
     }
 
     pub fn render(&self, frame: &mut [u8]) -> Vec<Vec<Vertex>> {
-        let active_lock = self.chunk_manager.active_chunks.lock();
-        let mut suspended_lock = self.chunk_manager.suspended_chunks.lock();
-        
         let mut boundaries: Vec<Vec<Vertex>> = vec![];
 
-        for chunk_position in active_lock.iter() {
-            let chunk = self.chunk_manager.get_chunk(chunk_position).unwrap();
+        for chunk_position in self.chunk_manager.active_chunks.clone() {
+            let chunk = self.chunk_manager.get_chunk(&chunk_position).unwrap();
             let x_offset = chunk_position.x * CHUNK_SIZE;
             let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
-            let chunk_data = chunk.chunk_data.lock();
+            let chunk_data = chunk.chunk_data.read().unwrap();
+
+            #[cfg(feature = "dirty_chunk_rendering")]
             let (dirty_rect_x, dirty_rect_y) = chunk_data.dirty_rect.get_ranges_render();
 
             for x in 0..CHUNK_SIZE {
@@ -279,6 +336,7 @@ impl WorldApi {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
                     let cell = chunk_data.cells[get_cell_index(x as i64, y as i64)];
                     let offset = rand::thread_rng().gen_range(0..10);
+
                     let rgba = match cell.element {
                         Element::Empty => [0x00, 0x00, 0x00, 0xff],
                         Element::Stone => [0x77, 0x77, 0x77, 0xff],
@@ -288,21 +346,22 @@ impl WorldApi {
                         Element::Wood => [0x6a_u8.saturating_add(cell.ra), 0x4b_u8.saturating_add(cell.ra), 0x35_u8.saturating_add(cell.ra), 0xff],
                     };
 
+                    frame[pixel_index as usize] = rgba[0];
+                    frame[pixel_index as usize + 1] = rgba[1];
+                    frame[pixel_index as usize + 2] = rgba[2];
+                    frame[pixel_index as usize + 3] = rgba[3];
+
+                    #[cfg(feature = "dirty_chunk_rendering")]
                     if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
-                        frame[pixel_index as usize] = rgba[0].saturating_add(50);
-                        frame[pixel_index as usize + 1] = rgba[1].saturating_add(25);
-                        frame[pixel_index as usize + 2] = rgba[2].saturating_add(25);
-                        frame[pixel_index as usize + 3] = rgba[3].saturating_add(25);
-                    }
-                    else {
-                        frame[pixel_index as usize] = rgba[0];
-                        frame[pixel_index as usize + 1] = rgba[1];
-                        frame[pixel_index as usize + 2] = rgba[2];
-                        frame[pixel_index as usize + 3] = rgba[3];
+                        frame[pixel_index as usize] = frame[pixel_index as usize].saturating_add(50);
+                        frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(25);
+                        frame[pixel_index as usize + 2] = frame[pixel_index as usize + 2].saturating_add(25);
+                        frame[pixel_index as usize + 3] = frame[pixel_index as usize + 3].saturating_add(25);
                     }
                 }
             }
 
+            #[cfg(feature = "chunk_border_rendering")]
             for x in 0..CHUNK_SIZE {
                 let start_offset = ((x + x_offset + y_offset)*4) as usize;
                 let end_offset = (((CHUNK_SIZE-1) * (WORLD_WIDTH * CHUNK_SIZE) + x + x_offset + y_offset) * 4) as usize;
@@ -317,6 +376,7 @@ impl WorldApi {
                 frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
             }
 
+            #[cfg(feature = "chunk_border_rendering")]
             for y in 0..CHUNK_SIZE {
                 let start_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + x_offset + y_offset)*4) as usize;
                 let end_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + CHUNK_SIZE - 1 + x_offset + y_offset)*4) as usize;
@@ -345,13 +405,13 @@ impl WorldApi {
             }
         }
 
-        for chunk_position in suspended_lock.clone() {
-            suspended_lock.remove(&chunk_position);
+        for chunk_position in self.chunk_manager.suspended_chunks.clone() {
+            self.chunk_manager.suspended_chunks.remove(&chunk_position);
             let chunk = self.chunk_manager.get_chunk(&chunk_position).unwrap();
             let x_offset = chunk_position.x * CHUNK_SIZE;
             let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
-            let chunk_data = chunk.chunk_data.lock();
+            let chunk_data = chunk.chunk_data.read().unwrap();
 
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {

@@ -1,10 +1,8 @@
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicU8};
-use std::sync::Arc;
+use std::ops::{AddAssign, SubAssign};
+use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
 
-use egui_winit::egui::epaint::ahash::HashSet;
-use parking_lot::{Mutex, MutexGuard};
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 
 use super::cell::*;
 use super::elements::Element;
@@ -18,12 +16,11 @@ use crate::vector::Vector2;
 #[derive(Default)]
 pub struct Chunk {
     placing_queue: Mutex<VecDeque<(Vector2, Element)>>,
-    pub(super) chunk_data: Mutex<ChunkData>,
+    pub(super) chunk_data: RwLock<ChunkData>,
     pub(super) position: Vector2,
-    pub(super) frame_idling: AtomicU8,
-    pub(super) cell_count: AtomicU64,
+    pub(super) frame_idling: Mutex<u8>,
+    pub(super) cell_count: Mutex<u64>,
 }
-
 
 #[derive(Default)]
 pub struct ChunkData {
@@ -188,7 +185,7 @@ impl  ChunkData {
 impl Chunk {
     pub(crate) fn new(position: Vector2) -> Self {
         Self {
-            chunk_data: Mutex::new(ChunkData {
+            chunk_data: RwLock::new(ChunkData {
                 cells: vec![Cell::default(); CHUNK_SIZE.pow(2) as usize],
                 dirty_rect: Rect::default(),
                 objects: vec![],
@@ -204,16 +201,15 @@ impl Chunk {
     //================
 
     pub(crate) fn place(&self, x: i64, y: i64, element: Element) {
-        let mut queue = self.placing_queue.lock();
-        queue.push_back((vec2!(x, y), element));
+        self.placing_queue.lock().unwrap().push_back((vec2!(x, y), element));
     }
 
     pub(crate) fn update_dirty_rect(&self, position: &Vector2) {
-        self.chunk_data.lock().dirty_rect.update_at_corners(position);
+        self.chunk_data.write().unwrap().dirty_rect.update_at_corners(position);
     }
 
     pub(crate) fn maximize_dirty_rect(&self) {
-        let mut data = self.chunk_data.lock();
+        let mut data = self.chunk_data.write().unwrap();
         data.dirty_rect.update(&vec2!(0, 0));
         data.dirty_rect.update(&vec2!(CHUNK_SIZE-1, CHUNK_SIZE-1));
     }
@@ -222,7 +218,7 @@ impl Chunk {
     // Colliders
     //===========
 
-    fn label_cell<'a>(&self, x: i64, y: i64, label: i32, labeled_cells: &mut Vec<i32>, data: &MutexGuard<'a, ChunkData>) {
+    fn label_cell<'a>(&self, x: i64, y: i64, label: i32, labeled_cells: &mut Vec<i32>, data: &RwLockWriteGuard<'a, ChunkData>) {
         if x < 0 || x > CHUNK_SIZE - 1 || y < 0 || y > CHUNK_SIZE - 1 {
             return;
         }
@@ -241,7 +237,7 @@ impl Chunk {
     }
 
     pub fn create_collider(&self) {
-        let mut data = self.chunk_data.lock();
+        let mut data = self.chunk_data.write().unwrap();
 
         let mut labeled_cells = vec![0; CHUNK_SIZE.pow(2) as usize];
         let mut label = 0;
@@ -289,8 +285,8 @@ impl Chunk {
     //==========
     
     pub(crate) fn process_previous_updates(&self, clock: u8) -> Option<Rect> {
-        let mut data = self.chunk_data.lock();
-        let mut queue = self.placing_queue.lock();
+        let mut data = self.chunk_data.write().unwrap();
+        let mut queue = self.placing_queue.lock().unwrap();
 
         if queue.is_empty() && data.dirty_rect.is_empty() {
             return None;
@@ -302,11 +298,11 @@ impl Chunk {
 
             if data.cells[index].element == Element::Empty && element != Element::Empty {
                 data.set_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
-                self.cell_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.cell_count.lock().unwrap().add_assign(1);
             }
             else if data.cells[index].element != Element::Empty && element == Element::Empty {
                 data.set_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
-                self.cell_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                self.cell_count.lock().unwrap().sub_assign(1);
             }
 
             data.update_dirty_rect(&cell_position);
@@ -317,17 +313,18 @@ impl Chunk {
 
     pub(crate) fn update(&self, manager: Arc<World>, clock: u8) -> u128 {
         let (x_range, y_range) = {
+            let mut frame_idle = self.frame_idling.lock().unwrap();
             match self.process_previous_updates(clock) {
                 Some(dirty_rect) => {
-                    self.frame_idling.store(0, std::sync::atomic::Ordering::Release);
+                    *frame_idle = 0;
                     dirty_rect.get_ranges(clock)
                 },
                 None => {
-                    if self.frame_idling.load(std::sync::atomic::Ordering::Acquire) >= IDLE_FRAME_THRESHOLD {
+                    if frame_idle.ge(&IDLE_FRAME_THRESHOLD)  {
                         return 0;
                     }
                     else {
-                        self.frame_idling.fetch_add(1, std::sync::atomic::Ordering::Release);
+                        frame_idle.sub_assign(1);
 
                         (
                             if clock % 2 == 0 { (0..CHUNK_SIZE).collect() } else { (0..CHUNK_SIZE).rev().collect() },
@@ -338,17 +335,7 @@ impl Chunk {
             }
         };
 
-        let clock_range: HashSet<u8> = {
-            if clock < 3 {
-                (0..clock).chain(clock.wrapping_sub(3)..=255).collect()
-            }
-            else {
-                (clock.wrapping_sub(3)..clock).collect()
-            }
-        };
-            
-
-        let mut data = self.chunk_data.lock();
+        let mut data = self.chunk_data.write().unwrap();
         let mut updated_count: u128 = 0;
         
         let mut api = ChunkApi { 
@@ -357,19 +344,20 @@ impl Chunk {
             chunk_data: &mut data,
             chunk_manager: manager.clone(),
             clock,
+            rng: rand::rngs::SmallRng::from_entropy()
         };
 
         // self.create_collider();
 
         for x in x_range.iter() {
-            for y in y_range.iter() {
+            for y in y_range.iter().rev() {
                 let cell = api.chunk_data.cells[get_cell_index(*x, *y)];
             
-                if cell.clock == clock || cell.element == Element::Empty {
+                if cell.element == Element::Empty {
                     continue;
                 }
 
-                if clock_range.contains(&cell.clock) {
+                if cell.clock == clock {
                     api.chunk_data.dirty_rect.update(&vec2!(*x, *y));
                     continue;
                 }
@@ -385,12 +373,17 @@ impl Chunk {
     }
 }
 
+//========================================================
+// API to allow cells to easily interact with other cells
+//========================================================
+
 pub struct ChunkApi<'a, 'b> {
     pub(super) cell_position: Vector2,
     pub(super) chunk: &'a Chunk,
     pub(super) chunk_data: &'b mut ChunkData,
     pub(super) chunk_manager: Arc<World>,
     pub(super) clock: u8,
+    pub(super) rng: rand::rngs::SmallRng,
 }
 
 impl<'a, 'b> ChunkApi<'a, 'b> {
@@ -440,17 +433,17 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                 // Update chunks if cell is updated close to their border
                 let chunk_offset = vec2!(
                     if cell_position.x == 0 { -1 }
-                    else if cell_position.x >= CHUNK_SIZE - 1 { 1 }
+                    else if cell_position.x == CHUNK_SIZE - 1 { 1 }
                     else { 0 },
     
                     if cell_position.y == 0 { -1 }
-                    else if cell_position.y >= CHUNK_SIZE - 1 { 1 }
+                    else if cell_position.y == CHUNK_SIZE - 1 { 1 }
                     else { 0 }
                 );
     
                 if !chunk_offset.is_zero() {
                     let (cell_position, _) = (cell_position + chunk_offset).wrap(0, CHUNK_SIZE);
-                    self.chunk_manager.refresh_chunk_at_cell(
+                    self.chunk_manager.refresh_chunk(
                         &(self.chunk.position + chunk_offset),
                         &cell_position,
                     );
@@ -461,10 +454,10 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                 let new_cell = self.chunk_manager.replace_cell(self.chunk.position, new_cell_position, old_cell);
 
                 if old_cell.element != Element::Empty && new_cell.element == Element::Empty {
-                    self.chunk.cell_count.fetch_sub(1, std::sync::atomic::Ordering::Acquire);
+                    self.chunk.cell_count.lock().unwrap().sub_assign(1);
                 }
                 else if old_cell.element == Element::Empty && new_cell.element != Element::Empty {
-                    self.chunk.cell_count.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+                    self.chunk.cell_count.lock().unwrap().add_assign(1);
                 }
 
                 self.chunk_data.set_cell(cell_position, new_cell);
@@ -486,11 +479,11 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
     }
     
     pub fn rand_int(&mut self, n: i64) -> i64 {
-        rand::thread_rng().gen_range(0..n)
+        self.rng.gen_range(0..n)
     }
  
-    pub fn rand_dir(&self) -> i64 {
-        let i = rand::thread_rng().gen_range(0..1000);
+    pub fn rand_dir(&mut self) -> i64 {
+        let i = self.rand_int(1000);
         if i%2 == 0 {
             -1
         }

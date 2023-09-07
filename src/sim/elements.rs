@@ -12,7 +12,6 @@ pub enum Element {
     Wood,
 }
 
-
 impl ToString for Element {
     fn to_string(&self) -> String {
         match self {
@@ -28,16 +27,16 @@ impl ToString for Element {
 
 pub fn update_sand<'a, 'b>(_cell: &Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
     let dx = api.rand_dir();
-
-    if api.match_element(0, 1, Element::Empty) {
-        api.swap(0, 1);
-    } 
-    else if api.match_element(dx, 1, Element::Empty) {
+    
+    if api.match_element(dx, 1, Element::Empty) {
         api.swap(dx, 1);
     } 
     else if api.match_element(0, 1, Element::Water) {
         api.swap(0, 1);
     }
+    else if api.match_element(0, 1, Element::Empty) {
+        api.swap(0, 1);
+    } 
 
     api
 }
@@ -45,6 +44,13 @@ pub fn update_sand<'a, 'b>(_cell: &Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) ->
 pub fn update_liquid<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
     let mut dx = api.rand_dir();
 
+    if api.match_element(dx, 0, Element::Empty) && api.match_element(dx, 1, Element::Empty){
+        api.swap(dx, 0);
+    }
+    else if api.match_element(-dx, 0, Element::Empty) && api.match_element(-dx, 1, Element::Empty){
+        api.swap(-dx, 0);
+    }
+    
     if api.match_element(0, 1, Element::Empty) {
         api.swap(0, 1);
         if api.once_in(20) {
@@ -52,14 +58,6 @@ pub fn update_liquid<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f3
             cell.ra = api.rand_int(20) as u8;
         }
 
-        return api;
-    } 
-    else if api.match_element(dx, 0, Element::Empty) && api.match_element(dx, 1, Element::Empty){
-        api.swap(dx, 1);
-        return api;
-    }
-    else if api.match_element(-dx, 0, Element::Empty) && api.match_element(-dx, 1, Element::Empty) {
-        api.swap(-dx, 1);
         return api;
     }
 

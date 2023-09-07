@@ -5,7 +5,6 @@ use pixels::{wgpu, PixelsContext};
 use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 
-use crate::constants::INFO_MENU_OPEN;
 use crate::input::StateManager;
 
 pub(crate) struct Framework {
@@ -113,7 +112,7 @@ impl Framework {
 
 impl Gui {
     fn new() -> Self {
-        Self { window_open: INFO_MENU_OPEN }
+        Self { window_open: true }
     }
 
     fn ui(&mut self, state_manager: &StateManager , ctx: &Context) {

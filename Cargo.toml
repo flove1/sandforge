@@ -1,17 +1,30 @@
-[profile.sand-dev]
-inherits = "dev"
-incremental = false
-
-[profile.sand-release]
-inherits = "release"
-incremental = false
-
 [package]
 name = "sandforge"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+bench = []
+dirty_chunk_rendering = []
+chunk_border_rendering = []
+multithreading = []
+
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmark"
+harness = false
+
+[profile.release-debugged]
+inherits = "release"
+debug = true
+
+[profile.release-optimized]
+inherits = "release"
+panic = "abort"
+codegen-units = 1
+lto = true
 
 [dependencies]
 winit = "0.28.6"
@@ -21,7 +34,7 @@ env_logger = "0.10"
 error-iter = "0.4.1"
 cfg-if = "1"
 log = "0.4"
-rand = "0.8.5"
+rand = { version = "0.8.4", features = ["small_rng"] }
 egui-winit = "0.22.0"
 crossbeam = "0.8.2"
 dashmap = "5.5.1"
@@ -31,6 +44,9 @@ egui-wgpu = "0.22.0"
 fps_counter = "2.0.0"
 delaunator = "1.0.2"
 cdt = "0.1.0"
-parking_lot = {version = "0.12.1", features = ["deadlock_detection"]}
+parking_lot = { version = "0.12.1", features = ["deadlock_detection"] }
 bytemuck = "1.13.1"
 earcutr = "0.4.2"
+rayon = "1.7.0"
+flame = "0.2.2"
+flamer = "0.5.0"
