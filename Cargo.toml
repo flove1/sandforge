@@ -28,17 +28,13 @@ lto = true
 
 [dependencies]
 winit = "0.28.6"
-winit_input_helper = "0.14.1"
 pixels = "0.13.0"
 env_logger = "0.10"
 error-iter = "0.4.1"
-cfg-if = "1"
 log = "0.4"
 rand = { version = "0.8.4", features = ["small_rng"] }
 egui-winit = "0.22.0"
-crossbeam = "0.8.2"
-dashmap = "5.5.1"
-scoped_threadpool = "0.1.9"
+dashmap = { version = "5.5.1", features = ["inline"] }
 egui = "0.22.0"
 egui-wgpu = "0.22.0"
 fps_counter = "2.0.0"
@@ -47,6 +43,5 @@ cdt = "0.1.0"
 parking_lot = { version = "0.12.1", features = ["deadlock_detection"] }
 bytemuck = "1.13.1"
 earcutr = "0.4.2"
-rayon = "1.7.0"
-flame = "0.2.2"
-flamer = "0.5.0"
+threadpool = "1.8.1"
+ahash = "0.8.3"

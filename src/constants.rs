@@ -1,7 +1,7 @@
-pub const CHUNK_SIZE: i64 = 128;
+pub const CHUNK_SIZE: i64 = 64;
 pub const CHUNK_ELEMENTS: i64 = CHUNK_SIZE.pow(2);
-pub const WORLD_WIDTH: i64 = 4;
-pub const WORLD_HEIGHT: i64 = 4;
+pub const WORLD_WIDTH: i64 = 16;
+pub const WORLD_HEIGHT: i64 = 16;
 pub const SCALE: f64 = 0.5;
 
 pub const GRAVITY: f32 = 9.0;

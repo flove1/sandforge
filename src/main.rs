@@ -1,6 +1,10 @@
 #[cfg(feature = "bench")] 
 fn main() {
-    sandforge::bench();
+    let mut world = sandforge::bench_init();
+
+    sandforge::bench_fill(&mut world);
+
+    sandforge::bench_until_empty(&mut world);
 }
 
 #[cfg(not(feature = "bench"))] 

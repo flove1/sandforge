@@ -19,7 +19,7 @@ use log::error;
 use parking_lot::deadlock;
 use pixels::{Pixels, SurfaceTexture};
 use renderer::MeshRenderer;
-use sim::world::World;
+use sim::world::{World, WorldApi};
 use ui::Framework;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, VirtualKeyCode, ElementState, MouseButton};
@@ -253,8 +253,11 @@ pub fn deadlock_checker() {
     }
 }
 
-pub fn bench() {
-    let mut world = World::new();
+pub fn bench_init() -> WorldApi {
+    World::new()
+}
+
+pub fn bench_fill(world: &mut WorldApi) {
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
         for y in 0..CHUNK_SIZE {
             world.place(x, y, Element::Sand);
@@ -266,7 +269,9 @@ pub fn bench() {
             world.place(x, y, Element::Sand);
         }
     }
+}
 
+pub fn bench_until_empty(world: &mut WorldApi) {
     loop {
         
         let (_, pixels_count) = world.update_iteration();
@@ -274,4 +279,10 @@ pub fn bench() {
             return ;
         }
     };
+}
+
+pub fn bench_number_of_updated(world: &mut WorldApi, n: usize) {
+    for _ in 0..n {
+        world.update_iteration();
+    }
 }

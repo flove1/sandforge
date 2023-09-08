@@ -1,15 +1,15 @@
-use std::{sync::Arc, ops::{AddAssign, SubAssign}, collections::BTreeMap};
+use std::{sync::{Arc, Mutex}, ops::{AddAssign, SubAssign}, collections::{BTreeMap, BTreeSet}};
 
+use ahash::RandomState;
 use dashmap::{DashMap, mapref::one::Ref, DashSet};
-use parking_lot::Mutex;
 use rand::Rng;
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use threadpool::ThreadPool;
 
 use crate::{vec2, vector::Vector2, constants::*, renderer::Vertex};
 use super::{chunk::Chunk, elements::Element, helpers::get_cell_index, cell::{EMPTY_CELL, Cell}};
 
 pub struct World {
-    pub(super) chunks: DashMap<Vector2, Chunk>,
+    pub(super) chunks: DashMap<Vector2, Chunk, RandomState>,
     pub(super) active_chunks: DashSet<Vector2>,
     pub(super) suspended_chunks: DashSet<Vector2>,
 }
@@ -17,7 +17,7 @@ pub struct World {
 impl World {
     pub fn new() -> WorldApi {
         let world = Self {
-            chunks: DashMap::with_shard_amount(8),
+            chunks: DashMap::with_hasher_and_shard_amount(RandomState::new(), 8),
             active_chunks: DashSet::new(),
             suspended_chunks: DashSet::new(),
         };
@@ -32,9 +32,9 @@ impl World {
             chunk_manager: Arc::new(world), 
             clock: 0, 
             previous_update_ms: 0, 
-            pool: ThreadPoolBuilder::new().num_threads(4).build().unwrap(),
+            pool: ThreadPool::new(4),
         }
-    }    
+    }
 
     pub(crate) fn place(&self, x: i64, y: i64, element: Element) {
         if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
@@ -42,127 +42,101 @@ impl World {
         }
 
         let chunk_position = vec2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
-        if let Some(chunk) = self.get_chunk(&chunk_position) {
-            self.activate_chunk(&chunk_position);
+        if let Some(chunk) = self.chunks.get(&chunk_position) {
             chunk.place(x % CHUNK_SIZE, y % CHUNK_SIZE, element);
+            self.active_chunks.insert(chunk_position);
         }
     }
 
     pub(crate) fn update_cell(&self, chunk_position: Vector2, cell_position: Vector2, cell: Cell) {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
+        let new_chunk_position = chunk_position + chunk_offset;
 
-        let chunk = {
-            let result = self.get_chunk(&(chunk_position + chunk_offset));
+        if !self.chunks.contains_key(&new_chunk_position) {
+            return;
+        }
 
-            if result.is_none() {
-                return;
-            }
+        let chunk = self.chunks.get(&new_chunk_position).unwrap();
+        let mut chunk_data = chunk.chunk_data.write().unwrap();
 
-            result.unwrap()
-        };
-
-        chunk.chunk_data.write().unwrap().set_cell(cell_position, cell);
+        chunk_data.set_cell(cell_position, cell);
     }    
 
     pub(crate) fn set_cell(&self, chunk_position: Vector2, cell_position: Vector2, cell: Cell) {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
+        let new_chunk_position = chunk_position + chunk_offset;
 
-        let chunk = {
-            let result = self.get_chunk(&(chunk_position + chunk_offset));
+        if !self.chunks.contains_key(&new_chunk_position) {
+            return;
+        }
 
-            if result.is_none() {
-                return;
-            }
+        let is_chunk_activated = self.active_chunks.insert(new_chunk_position);        
+        
+        let chunk = self.chunks.get(&new_chunk_position).unwrap();
+        let mut chunk_data = chunk.chunk_data.write().unwrap();
 
-            result.unwrap()
-        };
-
-        let mut data = chunk.chunk_data.write().unwrap();
-        if self.activate_chunk(&(chunk_position + chunk_offset)) {
-            data.maximize_dirty_rect();
+        if is_chunk_activated {
+            chunk_data.maximize_dirty_rect();
         }
         else {
-            data.update_dirty_rect(&cell_position);
+            chunk_data.update_dirty_rect(&cell_position);
         }
-        data.set_cell(cell_position, cell);
+
+        chunk_data.set_cell(cell_position, cell);
     }    
 
     pub(crate) fn get_cell(&self, chunk_position: Vector2, cell_position: Vector2) -> Cell {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
+        let new_chunk_position = chunk_position + chunk_offset;
 
-        let chunk = {
-            let result = self.get_chunk(&(chunk_position + chunk_offset));
+        if !self.chunks.contains_key(&new_chunk_position) {
+            return EMPTY_CELL;
+        }
 
-            if result.is_none() {
-                return EMPTY_CELL;
-            }
-
-            result.unwrap()
-        };
-
-        let data = chunk.chunk_data.read().unwrap();
-        data.get_cell(cell_position)
+        self.chunks.get(&new_chunk_position).unwrap()
+            .chunk_data.read().unwrap().get_cell(cell_position)
     }    
 
     pub(crate) fn replace_cell(&self, chunk_position: Vector2, cell_offset: Vector2, cell: Cell) -> Cell {
         let (cell_position,chunk_offset ) = cell_offset.wrap(0, CHUNK_SIZE);
-
+        let new_chunk_position = chunk_position + chunk_offset;
+        
         if chunk_offset.is_zero() {
             panic!();
         }
-        let chunk = {
-            let result = self.get_chunk(&(chunk_position + chunk_offset));
 
-            if result.is_none() {
-                return EMPTY_CELL;
-            }
+        if !self.chunks.contains_key(&new_chunk_position) {
+            return EMPTY_CELL;
+        }
 
-            result.unwrap()
-        };
+        let is_chunk_activated = self.active_chunks.insert(new_chunk_position);
 
-        let mut data = chunk.chunk_data.write().unwrap();
-
-        let old_cell = data.replace_cell(cell_position, cell);
-
+        let chunk = self.chunks.get(&new_chunk_position).unwrap();
+        let mut chunk_data = chunk.chunk_data.write().unwrap();
+    
+        if is_chunk_activated {
+            chunk_data.maximize_dirty_rect();
+        }    
+        else {
+            chunk_data.update_dirty_rect(&cell_position);
+        }
+        
+        let old_cell = chunk_data.replace_cell(cell_position, cell);
         if old_cell.element != Element::Empty && cell.element == Element::Empty {
             chunk.cell_count.lock().unwrap().sub_assign(1);
         }
         else if old_cell.element == Element::Empty && cell.element != Element::Empty {
             chunk.cell_count.lock().unwrap().add_assign(1);
         }
-
-        if self.activate_chunk(&(chunk_position + chunk_offset)) {
-            data.maximize_dirty_rect();
-        }
-        else {
-            data.update_dirty_rect(&cell_position);
-        }
-
+        
         old_cell
-    }    
-
-    pub(crate) fn get_chunk(&self, position: &Vector2) -> Option<Ref<Vector2, Chunk>> {
-        self.chunks.get(position)
+        
     }
 
-    pub(crate) fn get_chunk_by_pixel(&self, x: i64, y: i64) -> Option<Ref<Vector2, Chunk>> {
+    pub(crate) fn get_chunk_by_pixel(&self, x: i64, y: i64) -> Option<Ref<Vector2, Chunk, RandomState>> {
         let chunk_x = x.div_euclid(CHUNK_SIZE);
         let chunk_y = y.div_euclid(CHUNK_SIZE);
         self.chunks.get(&vec2!(chunk_x, chunk_y))
-    }
-
-    /// Returns true if chunk was activated
-    pub fn activate_chunk(&self, chunk_position: &Vector2) -> bool {
-        if self.get_chunk(chunk_position).is_none() {
-            return false;
-        }
-        
-        if self.active_chunks.contains(&chunk_position) {
-            return false;
-        }
-
-        self.active_chunks.insert(*chunk_position);
-        return true;
     }
 
     pub fn release_chunk(&self, chunk_position: &Vector2) {
@@ -172,7 +146,7 @@ impl World {
 
     pub fn refresh_chunk(&self, chunk_position: &Vector2, cell_position: &Vector2) {
         let chunk = {
-            let result = self.get_chunk(chunk_position);
+            let result = self.chunks.get(chunk_position);
 
             if result.is_none() {
                 return;
@@ -221,47 +195,56 @@ impl WorldApi {
 
     pub fn update_iteration(&mut self) -> (u128, u128){
         self.clock = self.clock.wrapping_add(1);
-        let updated_pixels = Mutex::new(0);
+        let updated_pixels = Arc::new(Mutex::new(0));
         
         let positions: Vec<Vector2> = self.chunk_manager.active_chunks.iter().map(|v| *v).collect();
 
         let chunk_count = positions.len();
 
-        let mut groups: BTreeMap<i64, Vec<Vector2>> = BTreeMap::new();
+        let mut groups: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
 
         for position in positions {
-            groups.entry(position.y).or_insert(Vec::with_capacity(WORLD_WIDTH as usize)).push(position);
+            groups.entry(position.x).or_insert(BTreeSet::new()).insert(position.y);
         }
 
-        for (_, group) in groups.iter_mut().rev() {
-            #[cfg(feature = "multithreading")]  
+        #[cfg(feature = "multithreading")]
+        {
             for iteration in 0..3 {
-                group.sort_by(|v1, v2| {
-                    if v1.x > v2.x {
-                        std::cmp::Ordering::Greater
-                    }
-                    else {
-                        std::cmp::Ordering::Less
-                    }
-                });
-                self.pool.scope(|s| {
-                    for position in group.iter().filter(|v| v.x % 3 == iteration % 3) {
-                        s.spawn(|_| {
-                            let chunk = self.chunk_manager.chunks.get(position).unwrap();
-                            updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
-                            
-                            if chunk.cell_count.lock().unwrap().eq(&0) {
-                                self.chunk_manager.release_chunk(position);
-                            }
-                        });
-                    }
-                });
-            }
+                for (x, group) in groups.iter_mut().filter(|(x, _)| *x % 3 == iteration % 3).rev() {
+                    self.pool.execute({
+                        let manager = self.chunk_manager.clone();
+                        let updated_pixels = updated_pixels.clone();
+                        let clock = self.clock;
+                        let x = *x;
+                        let group = group.clone();
+                        move || {
+                            for y in group {
+                                let position = vec2!(x, y);
+                                
+                                // println!("{} {}", x, y);
+                                // std::thread::sleep(Duration::from_secs(2));
 
-            #[cfg(not(feature = "multithreading"))]
-            for position in group.iter() {
+                                let chunk = manager.chunks.get(&position).unwrap();
+                                updated_pixels.lock().unwrap().add_assign(chunk.update(manager.clone(), clock));
+    
+                                if chunk.cell_count.lock().unwrap().eq(&0) {
+                                    manager.release_chunk(&position);
+                                }
+                            }
+                        }
+                    });
+                }
+
+                self.pool.join();
+            }
+        }
+
+        #[cfg(not(feature = "multithreading"))]
+        for (x, group) in groups.iter_mut().rev() {   
+            for y in group.iter().rev() {
+                let position = &vec2!(*x, *y);
                 let chunk = self.chunk_manager.chunks.get(position).unwrap();
-                updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
+                updated_pixels.lock().unwrap().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
                 
                 if chunk.cell_count.lock().unwrap().eq(&0) {
                     self.chunk_manager.release_chunk(position);
@@ -269,49 +252,8 @@ impl WorldApi {
             }
         }
 
-        (chunk_count as u128, updated_pixels.into_inner())
-
-        // let active_chunks = self.chunk_manager.active_chunks.clone();
-        // for iteration in 0..4 {
-
-        //     let positions: Vec<Vector2> = match iteration {
-        //         0 => active_chunks.iter().filter(|v| v.x%2 == 0 && v.y%2 == 0).map(|v| *v).collect(),
-        //         1 => active_chunks.iter().filter(|v| v.x%2 == 0 && v.y%2 == 1).map(|v| *v).collect(),
-        //         2 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 0).map(|v| *v).collect(),
-        //         3 => active_chunks.iter().filter(|v| v.x%2 == 1 && v.y%2 == 1).map(|v| *v).collect(),
-        //         _ => panic!("must be in range of 0..4"),
-        //     };
-
-        //     #[cfg(feature = "multithreading")]
-        //     {    
-        //         self.pool.scope(|s| {
-        //             for position_chunked in  positions.chunks(16) {
-        //                 s.spawn(|_| {
-        //                     for position in position_chunked.iter() {
-        //                         let chunk = self.chunk_manager.chunks.get(&position).unwrap();
-        //                         updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
-                                
-        //                         if chunk.cell_count.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-        //                             self.chunk_manager.release_chunk(&position);
-        //                         }
-        //                     }
-        //                 });
-        //             }
-        //         });
-        //     }
-
-        //     #[cfg(not(feature = "multithreading"))]
-        //     for position in positions.iter() {
-        //         let chunk = self.chunk_manager.chunks.get(&position).unwrap();
-        //         updated_pixels.lock().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
-                
-        //         if chunk.cell_count.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-        //             self.chunk_manager.release_chunk(&position);
-        //         }
-        //     }
-        // }
-
-        // (active_chunks.len() as u128, updated_pixels.into_inner())
+        let lock = Arc::try_unwrap(updated_pixels).expect("Lock still has multiple owners");
+        (chunk_count as u128, lock.into_inner().unwrap())
     }
 
     pub fn place(&self, x: i64, y: i64, element: Element) {
@@ -322,7 +264,7 @@ impl WorldApi {
         let mut boundaries: Vec<Vec<Vertex>> = vec![];
 
         for chunk_position in self.chunk_manager.active_chunks.clone() {
-            let chunk = self.chunk_manager.get_chunk(&chunk_position).unwrap();
+            let chunk = self.chunk_manager.chunks.get(&chunk_position).unwrap();
             let x_offset = chunk_position.x * CHUNK_SIZE;
             let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
@@ -407,7 +349,7 @@ impl WorldApi {
 
         for chunk_position in self.chunk_manager.suspended_chunks.clone() {
             self.chunk_manager.suspended_chunks.remove(&chunk_position);
-            let chunk = self.chunk_manager.get_chunk(&chunk_position).unwrap();
+            let chunk = self.chunk_manager.chunks.get(&chunk_position).unwrap();
             let x_offset = chunk_position.x * CHUNK_SIZE;
             let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
 
