@@ -6,6 +6,7 @@ use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 
 use crate::input::StateManager;
+use crate::sim::elements::Element;
 
 pub(crate) struct Framework {
     egui_ctx: Context,
@@ -19,7 +20,8 @@ pub(crate) struct Framework {
 }
 
 struct Gui {
-    window_open: bool,
+    info_open: bool,
+    elements_open: bool,
 }
 
 impl Framework {
@@ -27,6 +29,30 @@ impl Framework {
         let max_texture_size = pixels.device().limits().max_texture_dimension_2d as usize;
 
         let egui_ctx = Context::default();
+
+        let mut fonts = egui::FontDefinitions::default();
+
+        fonts.font_data.insert(
+            "pixel font".to_owned(),
+            egui::FontData::from_static(include_bytes!(
+                "../assets/font.ttf"
+            )),
+        );
+
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "pixel font".to_owned());
+        
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("pixel font".to_owned());
+
+        egui_ctx.set_fonts(fonts);
+
         let mut egui_state = egui_winit::State::new(event_loop);
         egui_state.set_max_texture_side(max_texture_size);
         egui_state.set_pixels_per_point(scale_factor);
@@ -50,6 +76,25 @@ impl Framework {
     }
 
     pub(crate) fn handle_event(&mut self, event: &winit::event::WindowEvent) -> EventResponse {
+        match event {
+            winit::event::WindowEvent::KeyboardInput { input, .. } => {
+                if let winit::event::ElementState::Released = input.state {
+                    if let Some(keycode) = input.virtual_keycode {
+                        match keycode {
+                            winit::event::VirtualKeyCode::F1 => {
+                                self.gui.info_open = !self.gui.info_open;
+                            },
+                            winit::event::VirtualKeyCode::F2 => {
+                                self.gui.elements_open = !self.gui.elements_open;
+                            },
+                            _ => {}
+                        }
+                    }
+                }  
+            },
+            _ => {}
+        }
+
         self.egui_state.on_event(&self.egui_ctx, event)
     }
 
@@ -63,7 +108,7 @@ impl Framework {
         self.screen_descriptor.pixels_per_point = scale_factor as f32;
     }
 
-    pub(crate) fn prepare(&mut self, state_manager: &StateManager, window: &Window) {
+    pub(crate) fn prepare(&mut self, state_manager: &mut StateManager, window: &Window) {
         let raw_input = self.egui_state.take_egui_input(window);
         let output = self.egui_ctx.run(raw_input, |egui_ctx| {
             self.gui.ui(state_manager, egui_ctx);
@@ -112,29 +157,137 @@ impl Framework {
 
 impl Gui {
     fn new() -> Self {
-        Self { window_open: true }
+        Self { 
+            info_open: false, 
+            elements_open: false,
+        }
     }
 
-    fn ui(&mut self, state_manager: &StateManager , ctx: &Context) {
+    fn ui(&mut self, state_manager: &mut StateManager , ctx: &Context) {
         egui::TopBottomPanel::top("menubar_container").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 if ui.button("Info").clicked() {
-                    self.window_open = !self.window_open;
+                    self.info_open = !self.info_open;
+                }
+
+                ui.separator();
+
+                if ui.button("Elements").clicked() {
+                    self.elements_open = !self.elements_open;
                 }
             });
         });
 
         egui::Window::new("Info")
-            .open(&mut self.window_open)
+            .open(&mut self.info_open)
+            .auto_sized()
+            .title_bar(false)
+            .anchor(egui::Align2::LEFT_TOP, egui::Vec2 { x: ctx.pixels_per_point() * 8.0, y: ctx.pixels_per_point() * 8.0 })
             .show(ctx, |ui| {
-                ui.label(format!("Frame count: {}", state_manager.previous_frame.fps));
-                ui.label(format!("Chunks updated: {}", state_manager.previous_frame.chunks_updated));
-                ui.label(format!("Pixels updated: {}", state_manager.previous_frame.pixels_updated));
+                ui.set_max_width(ctx.pixels_per_point() * 80.0);
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("Frame count: {}", state_manager.previous_frame.fps)
+                );
 
                 ui.separator();
 
-                ui.label(format!("Brush size: {}", state_manager.brush_size));
-                ui.label(format!("Element : {}", state_manager.element.to_string()));
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("Chunks updated: {}", state_manager.previous_frame.chunks_updated)
+                );
+
+                ui.separator();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("Pixels updated: {}", state_manager.previous_frame.pixels_updated)
+                );
+
+                ui.separator();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,format!("Brush size: {}", state_manager.brush_size)
+                );
             });
+
+
+        egui::Window::new("Elements")
+        .open(&mut self.elements_open)
+        .auto_sized()
+        .title_bar(false)
+        .anchor(egui::Align2::RIGHT_TOP, egui::Vec2 { x: - ctx.pixels_per_point() * 8.0, y: ctx.pixels_per_point() * 8.0 })
+        .show(ctx, |ui| {
+            ui.set_max_width(ctx.pixels_per_point() * 80.0);
+
+            let mut empty = true;
+            for element in Element::iterator() {
+                if !empty {
+                    ui.separator();
+                }
+                else {
+                    empty = false;
+                }
+
+                let color = element.color();
+
+                let (rect, response) = ui.allocate_exact_size(egui::Vec2 { x: ui.available_width(), y: ctx.pixels_per_point() * 16.0 }, egui::Sense { click: true, drag: false, focusable: true });
+                
+                ui.allocate_ui_at_rect(rect, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        ui.horizontal(|ui| {    
+                            let (rect, _) = ui.allocate_exact_size(egui::Vec2 { x: ctx.pixels_per_point() * 12.0, y: ctx.pixels_per_point() * 12.0 }, egui::Sense { click: false, drag: false, focusable: false });
+        
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::Rounding::default().at_most(0.5), 
+                                egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
+                            );
+
+                            if &state_manager.element == element {
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    egui::Rounding::default().at_most(0.5), 
+                                    egui::Stroke::new(ctx.pixels_per_point(), egui::Color32::GOLD)
+                                );
+                            }
+                            
+                            ui.vertical(|ui| {
+                                ui.add_space(ctx.pixels_per_point() * 4.0);
+                                ui.colored_label(
+                                    {
+                                        if &state_manager.element == element {
+                                            egui::Color32::GOLD
+                                        }
+                                        else {
+                                            egui::Color32::WHITE
+                                        } 
+                                    },
+                                    element.to_string()
+                                );
+                            });
+                            
+                        });
+                    })
+                });
+
+                if response.clicked() {
+                    state_manager.element = *element;
+                }
+            }
+
+            ui.add_space(ctx.pixels_per_point() * 8.0);
+            
+            ui.horizontal_top(|ui| {
+                ui.add_space(ctx.pixels_per_point() * 4.0);
+
+                ui.add(
+                    egui::widgets::Slider::new(&mut state_manager.brush_size, 1..=32)
+                        .show_value(true)
+                        .trailing_fill(true)
+                );
+            })
+        });
     }
 }

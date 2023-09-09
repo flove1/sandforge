@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::ops::{AddAssign, SubAssign};
 use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
 
@@ -7,7 +6,7 @@ use rand::{Rng, SeedableRng};
 use super::cell::*;
 use super::elements::Element;
 use super::helpers::get_cell_index;
-use super::objects::marching_squares;
+use super::colliders::marching_squares;
 use super::world::World;
 
 use crate::{constants::*, vec2};
@@ -15,10 +14,9 @@ use crate::vector::Vector2;
 
 #[derive(Default)]
 pub struct Chunk {
-    placing_queue: Mutex<VecDeque<(Vector2, Element)>>,
+    placing_queue: Mutex<Vec<(Vector2, Element)>>,
     pub(super) chunk_data: RwLock<ChunkData>,
     pub(super) position: Vector2,
-    pub(super) frame_idling: Mutex<u8>,
     pub(super) cell_count: Mutex<u64>,
 }
 
@@ -70,7 +68,7 @@ impl Rect {
         }
     }
 
-    pub fn update(&mut self, position: &Vector2) {
+    pub fn update_position(&mut self, position: &Vector2) {
         if self.is_empty() {
             self.corners = Some([position.x, position.y, position.x+1, position.y+1]);
             return;
@@ -96,14 +94,14 @@ impl Rect {
     }
 
 
-    pub fn update_at_corners(&mut self, center_position: &Vector2) {
+    pub fn update(&mut self, center_position: &Vector2) {
         let corners_position = [
             &center_position.add(-DIRTY_CHUNK_OFFSET, -DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1),
             &center_position.add(DIRTY_CHUNK_OFFSET, DIRTY_CHUNK_OFFSET).clamp(0, CHUNK_SIZE-1),
         ];
 
         for position in corners_position {
-            self.update(position);
+            self.update_position(position);
         }
     }
 
@@ -172,12 +170,12 @@ impl  ChunkData {
     }
 
     pub(crate) fn update_dirty_rect(&mut self, position: &Vector2) {
-        self.dirty_rect.update_at_corners(position);
+        self.dirty_rect.update(position);
     }
 
     pub(crate) fn maximize_dirty_rect(&mut self) {
-        self.dirty_rect.update(&vec2!(0, 0));
-        self.dirty_rect.update(&vec2!(CHUNK_SIZE-1, CHUNK_SIZE-1));
+        self.dirty_rect.update_position(&vec2!(0, 0));
+        self.dirty_rect.update_position(&vec2!(CHUNK_SIZE-1, CHUNK_SIZE-1));
     }
     
 }
@@ -190,7 +188,6 @@ impl Chunk {
                 dirty_rect: Rect::default(),
                 objects: vec![],
             }),
-            placing_queue: Mutex::new(VecDeque::new()),
             position,
             ..Default::default()
         }
@@ -201,17 +198,17 @@ impl Chunk {
     //================
 
     pub(crate) fn place(&self, x: i64, y: i64, element: Element) {
-        self.placing_queue.lock().unwrap().push_back((vec2!(x, y), element));
+        self.placing_queue.lock().unwrap().push((vec2!(x, y), element));
     }
 
     pub(crate) fn update_dirty_rect(&self, position: &Vector2) {
-        self.chunk_data.write().unwrap().dirty_rect.update_at_corners(position);
+        self.chunk_data.write().unwrap().dirty_rect.update(position);
     }
 
     pub(crate) fn maximize_dirty_rect(&self) {
         let mut data = self.chunk_data.write().unwrap();
-        data.dirty_rect.update(&vec2!(0, 0));
-        data.dirty_rect.update(&vec2!(CHUNK_SIZE-1, CHUNK_SIZE-1));
+        data.dirty_rect.update_position(&vec2!(0, 0));
+        data.dirty_rect.update_position(&vec2!(CHUNK_SIZE-1, CHUNK_SIZE-1));
     }
     
     //===========
@@ -255,36 +252,13 @@ impl Chunk {
 
         data.objects.clear();
         data.objects.append(&mut marching_squares(label, &mut labeled_cells, CHUNK_SIZE));
-        
-        // let mut contours: Vec<Vec<Point>> = vec![vec![]; label];
-        // let mut figures: Vec<Vec<Point>> = vec![vec![]; label];
-        
-        // Marching squares algorithm
-        // for x in 0..CHUNK_SIZE {
-        //     for y in 0..CHUNK_SIZE {
-        //         let index = get_cell_index(x, y);
-        //         if labeled_cells[index] != 0 {
-        //             figures[labeled_cells[index] - 1].push(Point { x: x as f64, y: y as f64 });
-        //             if self.cell_is_contour(x, y, &mut labeled_cells) {
-        //                 contours[labeled_cells[index] - 1].push(Point { x: x as f64, y: y as f64 });
-        //             }
-        //         }
-        //     }
-        // }
-
-        // Process contours with Douglas-Peucker algorithm
-        // let mut objects: Vec<Vec<Point>> = vec![];
-        // for contour in contours.iter() {
-        //     objects.push(self.douglas_peucker(&contour));
-        //     cdt::triangulate_contours(&[(0.5, 0.5), ], contours)
-        // }
     }
 
     //==========
     // Updating
     //==========
     
-    pub(crate) fn process_previous_updates(&self, clock: u8) -> Option<Rect> {
+    pub(crate) fn process_placing(&self, clock: u8) -> Option<Rect> {
         let mut data = self.chunk_data.write().unwrap();
         let mut queue = self.placing_queue.lock().unwrap();
 
@@ -292,8 +266,7 @@ impl Chunk {
             return None;
         }
 
-        while !queue.is_empty() {
-            let (cell_position, element) = queue.pop_front().unwrap();
+        for (cell_position, element) in queue.drain(..) {
             let index = get_cell_index(cell_position.x, cell_position.y);
 
             if data.cells[index].element == Element::Empty && element != Element::Empty {
@@ -311,30 +284,20 @@ impl Chunk {
         Some(data.dirty_rect.retrieve())
     }
 
+    // It may be possible to remove locks and iterating so it doesn't overlap but it is definitely will be hard
     pub(crate) fn update(&self, manager: Arc<World>, clock: u8) -> u128 {
         let (x_range, y_range) = {
-            let mut frame_idle = self.frame_idling.lock().unwrap();
-            match self.process_previous_updates(clock) {
+            match self.process_placing(clock) {
                 Some(dirty_rect) => {
-                    *frame_idle = 0;
                     dirty_rect.get_ranges(clock)
                 },
                 None => {
-                    if frame_idle.ge(&IDLE_FRAME_THRESHOLD)  {
-                        return 0;
-                    }
-                    else {
-                        frame_idle.sub_assign(1);
-
-                        (
-                            if clock % 2 == 0 { (0..CHUNK_SIZE).collect() } else { (0..CHUNK_SIZE).rev().collect() },
-                            (0..CHUNK_SIZE).collect()
-                        )
-                    }
+                    return 0;
                 },
             }
         };
-
+        
+        self.create_collider();
         let mut data = self.chunk_data.write().unwrap();
         let mut updated_count: u128 = 0;
         
@@ -346,8 +309,6 @@ impl Chunk {
             clock,
             rng: rand::rngs::SmallRng::from_entropy()
         };
-
-        // self.create_collider();
 
         for x in x_range.iter() {
             for y in y_range.iter().rev() {
@@ -523,9 +484,5 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
 
     pub fn once_in(&mut self, n: i64) -> bool {
         self.rand_int(n) == 0
-    }
-
-    pub fn iter_bit(&self) -> bool {
-        self.clock % 2 == 0
     }
  }

@@ -1,7 +1,7 @@
 use std::{sync::{Arc, Mutex}, ops::{AddAssign, SubAssign}, collections::{BTreeMap, BTreeSet}};
 
 use ahash::RandomState;
-use dashmap::{DashMap, mapref::one::Ref, DashSet};
+use dashmap::{DashMap, DashSet};
 use rand::Rng;
 use threadpool::ThreadPool;
 
@@ -129,14 +129,7 @@ impl World {
             chunk.cell_count.lock().unwrap().add_assign(1);
         }
         
-        old_cell
-        
-    }
-
-    pub(crate) fn get_chunk_by_pixel(&self, x: i64, y: i64) -> Option<Ref<Vector2, Chunk, RandomState>> {
-        let chunk_x = x.div_euclid(CHUNK_SIZE);
-        let chunk_y = y.div_euclid(CHUNK_SIZE);
-        self.chunks.get(&vec2!(chunk_x, chunk_y))
+        old_cell   
     }
 
     pub fn release_chunk(&self, chunk_position: &Vector2) {
@@ -207,6 +200,7 @@ impl WorldApi {
             groups.entry(position.x).or_insert(BTreeSet::new()).insert(position.y);
         }
 
+        // Non optimized due to lock contention (?)
         #[cfg(feature = "multithreading")]
         {
             for iteration in 0..3 {
@@ -278,15 +272,22 @@ impl WorldApi {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
                     let cell = chunk_data.cells[get_cell_index(x as i64, y as i64)];
                     let offset = rand::thread_rng().gen_range(0..10);
-
-                    let rgba = match cell.element {
-                        Element::Empty => [0x00, 0x00, 0x00, 0xff],
-                        Element::Stone => [0x77, 0x77, 0x77, 0xff],
-                        Element::Sand => [0xf2_u8.saturating_add(cell.ra), 0xf1_u8.saturating_add(cell.ra), 0xa3_u8.saturating_add(cell.ra), 0xff],
-                        Element::Water => [0x47 + offset, 0x7C + offset, 0xB8 + offset, 0xff],
-                        Element::GlowingSand => [0xe8, 0x6a, 0x17, 0xff],
-                        Element::Wood => [0x6a_u8.saturating_add(cell.ra), 0x4b_u8.saturating_add(cell.ra), 0x35_u8.saturating_add(cell.ra), 0xff],
-                    };
+                
+                    let mut rgba = cell.element.color();
+                    match cell.element {
+                        Element::Sand | Element::Wood => {
+                            for color in rgba.iter_mut() {
+                                *color = color.saturating_add(cell.ra);
+                            }
+                        }
+                        
+                        Element::Water => {
+                            for color in rgba.iter_mut() {
+                                *color = color.saturating_add(offset);
+                            }
+                        }
+                        _ => {}
+                    }
 
                     frame[pixel_index as usize] = rgba[0];
                     frame[pixel_index as usize + 1] = rgba[1];
@@ -360,14 +361,22 @@ impl WorldApi {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x + x_offset) * 4;
                     let cell = chunk_data.cells[get_cell_index(x as i64, y as i64)];
                     let offset = rand::thread_rng().gen_range(0..25);
-                    let rgba = match cell.element {
-                        Element::Empty => [0x00, 0x00, 0x00, 0xff],
-                        Element::Stone => [0x77, 0x77, 0x77, 0xff],
-                        Element::Sand => [0xf2_u8.saturating_add(cell.ra), 0xf1_u8.saturating_add(cell.ra), 0xa3_u8.saturating_add(cell.ra), 0xff],
-                        Element::Water => [0x47 + offset, 0x7C + offset, 0xB8 + offset, 0xff],
-                        Element::GlowingSand => [0xe8, 0x6a, 0x17, 0xff],
-                        Element::Wood => [0x6a_u8.saturating_add(cell.ra), 0x4b_u8.saturating_add(cell.ra), 0x35_u8.saturating_add(cell.ra), 0xff],
-                    };
+
+                    let mut rgba = cell.element.color();
+                    match cell.element {
+                        Element::Sand | Element::Wood => {
+                            for color in rgba.iter_mut() {
+                                *color = color.saturating_add(cell.ra);
+                            }
+                        }
+                        
+                        Element::Water => {
+                            for color in rgba.iter_mut() {
+                                *color = color.saturating_add(offset);
+                            }
+                        }
+                        _ => {}
+                    }
 
                     frame[pixel_index as usize] = rgba[0];
                     frame[pixel_index as usize + 1] = rgba[1];

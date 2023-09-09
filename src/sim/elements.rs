@@ -1,3 +1,5 @@
+use std::slice::Iter;
+
 use super::cell::Cell;
 use super::chunk::ChunkApi;
 
@@ -10,6 +12,31 @@ pub enum Element {
     Sand,
     GlowingSand,
     Wood,
+}
+
+impl Element {
+    pub fn color(&self) -> [u8; 4] {
+        match self {
+            Element::Empty => [0x00, 0x00, 0x00, 0xff],
+            Element::Stone => [0x77, 0x77, 0x77, 0xff],
+            Element::Sand => [0xf2, 0xf1, 0xa3, 0xff],
+            Element::Water => [0x47, 0x7C, 0xB8, 0xff],
+            Element::GlowingSand => [0xe8, 0x6a, 0x17, 0xff],
+            Element::Wood => [0x6a, 0x4b, 0x35, 0xff],
+        }
+    }
+
+    pub fn iterator() -> Iter<'static, Element> {
+        static ELEMENTS: [Element; 6] = [
+            Element::Empty,
+            Element::Stone,
+            Element::Sand,
+            Element::Water,
+            Element::GlowingSand,
+            Element::Wood,
+        ];
+        ELEMENTS.iter()
+    }
 }
 
 impl ToString for Element {
@@ -28,15 +55,18 @@ impl ToString for Element {
 pub fn update_sand<'a, 'b>(_cell: &Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
     let dx = api.rand_dir();
     
-    if api.match_element(dx, 1, Element::Empty) {
+    if api.match_element(0, 1, Element::Empty) {
+        api.swap(0, 1);
+    } 
+    else if api.match_element(dx, 1, Element::Empty) {
         api.swap(dx, 1);
+    } 
+    else if api.match_element(-dx, 1, Element::Empty) {
+        api.swap(-dx, 1);
     } 
     else if api.match_element(0, 1, Element::Water) {
         api.swap(0, 1);
     }
-    else if api.match_element(0, 1, Element::Empty) {
-        api.swap(0, 1);
-    } 
 
     api
 }

@@ -32,7 +32,6 @@ fn is_set(x: i64, y: i64, matrix: &mut [i32]) -> bool {
     }
 }
 
-
 pub fn marching_squares(object_count: i32, matrix: &mut [i32], size: i64) -> Vec<Vec<(f64, f64)>> {
     let mut visited = vec![false; size.pow(2) as usize];
 
@@ -43,7 +42,7 @@ pub fn marching_squares(object_count: i32, matrix: &mut [i32], size: i64) -> Vec
             if matrix[index] > 0 && !visited[index] {
                 {
                     let mask = classify_cell(x, y, matrix, size);
-                    if mask == 0 || mask == 15 {
+                    if mask == 0 || mask == 15 || (x == 0 || y == 0) {
                         continue;
                     }
                 }
@@ -98,27 +97,35 @@ pub fn marching_squares(object_count: i32, matrix: &mut [i32], size: i64) -> Vec
             }
         });
 
-        let mut points = vec![];
-        let mut contours: Vec<Vec<usize>> = vec![];
-        let mut offset = 0;
+        let mut edges = vec![];
 
-        for boundary in boundaries {
-            let mut simplified_boundary = douglas_peucker(&boundary);
-            points.append(&mut simplified_boundary);
-            contours.push((offset..simplified_boundary.len()).chain(offset..=offset).collect());
-            offset += simplified_boundary.len();
-        }
-        
-        if !points.is_empty() {            
-            let triangle_indeces = cdt::triangulate_contours(&points, &contours).unwrap();
+        for boundary in boundaries.iter() {
+            let simplified_boundary = douglas_peucker(&boundary);
 
-            for triangle in triangle_indeces {
-                triangles.push(vec![points[triangle.0], points[triangle.1], points[triangle.2]]);
+            if simplified_boundary.len() < 2 {
+                continue;
             }
-            // for boundary in boundaries.iter() {
-            //     let simplified_boundary = douglas_peucker(&boundary);
-            //     triangles.push(simplified_boundary);
-            // }
+
+            let mut points: Vec<Vec<f64>> = vec![];
+            for point in simplified_boundary.iter() {
+                points.push(vec![point.0, point.1]);
+            }
+            edges.push(points);
+        }
+
+        
+        if edges.len() > 0 {
+            let (vertices, holes, dimensions) = earcutr::flatten(&edges);
+    
+            let triangle_indeces = earcutr::earcut(&vertices, &holes, dimensions).unwrap();
+    
+            for triangle in triangle_indeces.chunks(3) {
+                triangles.push(vec![
+                    (vertices[triangle[0] * 2], vertices[triangle[0] * 2 + 1]), 
+                    (vertices[triangle[1] * 2], vertices[triangle[1] * 2 + 1]), 
+                    (vertices[triangle[2] * 2], vertices[triangle[2] * 2 + 1]), 
+                ]);
+            }
         }
     }
 

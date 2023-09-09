@@ -84,45 +84,15 @@ pub fn run() {
                         },
 
                         winit::event::WindowEvent::KeyboardInput { input, .. } => {
-                            match input.state {
-                                ElementState::Released => {
-                                    if let Some(keycode) = input.virtual_keycode {
-                                        match keycode {
-                                            VirtualKeyCode::Escape | VirtualKeyCode::Q  => {
-                                                control_flow.set_exit();
-                                            },
-                                            VirtualKeyCode::S => {
-                                                state_manager.element = Element::Sand;
-                                            },
-                                            VirtualKeyCode::W => {
-                                                state_manager.element = Element::Water;
-                                            },
-                                            VirtualKeyCode::A => {
-                                                state_manager.element = Element::Wood;
-                                            },
-                                            VirtualKeyCode::D => {
-                                                state_manager.element = Element::Stone;
-                                            },
-                                            VirtualKeyCode::E => {
-                                                state_manager.element = Element::Empty;
-                                            },
-                                            VirtualKeyCode::G => {
-                                                state_manager.element = Element::GlowingSand;
-                                            },
-                                            VirtualKeyCode::Plus => {
-                                                state_manager.change_brush_size(1);
-                                            },
-                                            VirtualKeyCode::Minus => {
-                                                state_manager.change_brush_size(-1);
-                                            },
-                                            VirtualKeyCode::C => {
-                                                // chunk.clear();
-                                            }
-                                            _ => {}
-                                        }
+                            if let ElementState::Released = input.state {
+                                if let Some(keycode) = input.virtual_keycode {
+                                    match keycode {
+                                        VirtualKeyCode::Escape | VirtualKeyCode::Q  => {
+                                            control_flow.set_exit();
+                                        },
+                                        _ => {}
                                     }
-                                },
-                                ElementState::Pressed => {},
+                                }
                             }
                         },
 
@@ -214,7 +184,7 @@ pub fn run() {
     
                     mesh_renderer.render(encoder, render_target);
 
-                    framework.prepare(&state_manager, &window);
+                    framework.prepare(&mut state_manager, &window);
                     framework.render(encoder, render_target, context);
 
                     Ok(())
