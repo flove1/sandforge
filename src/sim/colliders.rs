@@ -1,63 +1,99 @@
 use std::cmp::Ordering;
 
-use crate::constants::CHUNK_SIZE;
+use rapier2d::{prelude::{ColliderBuilder, Collider, Real, SharedShape}, na::{Point2, Isometry2}};
 
-use super::helpers::get_cell_index;
+use crate::constants::{COLLIDER_PRECISION, PHYSICS_TO_WORLD};
+       
+/// Connected-component labeling
+/// 
+/// # Arguments
+/// 
+/// * `label` - A label with which to mark given objects. Must be greater than 1
+/// * `condition` - A function that checks if given index in matrix is part of the object
+pub fn label_matrix<F: Fn(usize) -> bool>(
+    x: i32, 
+    y: i32, 
+    label: i32, 
+    matrix: &mut [i32], 
+    matrix_size: i32, 
+    condition: &F
+ ) {
+    if x < 0 || x > matrix_size - 1 || y < 0 || y > matrix_size - 1 {
+        return;
+    }
 
-fn classify_cell(x: i64, y: i64, matrix: &mut [i32], _size: i64) -> u8 {
+    let index = (y * matrix_size + x) as usize;
+    if matrix[index] != 0 || !condition(index) {
+        return;
+    }
+
+    matrix[index] = label;
+
+    label_matrix(x + 1, y, label, matrix, matrix_size, condition);
+    label_matrix(x - 1, y, label, matrix, matrix_size, condition);
+    label_matrix(x, y + 1, label, matrix, matrix_size, condition);
+    label_matrix(x, y - 1, label, matrix, matrix_size, condition);
+}
+
+fn classify_cell(
+    x: i32, 
+    y: i32, 
+    matrix: &[i32], 
+    matrix_size: i32
+) -> u8 {
     let mut mask = 0;
 
-    if is_set(x - 1, y - 1, matrix) {
+    if is_set(x - 1, y - 1, matrix, matrix_size) {
         mask |= 1; 
     }
-    if is_set(x, y - 1, matrix) {
+    if is_set(x, y - 1, matrix, matrix_size) {
         mask |= 2; 
     }
-    if is_set(x - 1, y, matrix) {
+    if is_set(x - 1, y, matrix, matrix_size) {
         mask |= 4; 
     }
-    if is_set(x, y, matrix) {
+    if is_set(x, y, matrix, matrix_size) {
         mask |= 8; 
     }
 
     mask
 }
 
-fn is_set(x: i64, y: i64, matrix: &mut [i32]) -> bool {
-    if x < 0 || x > CHUNK_SIZE - 1 || y < 0 || y > CHUNK_SIZE - 1 {
+fn is_set(
+    x: i32, 
+    y: i32, 
+    matrix: &[i32], 
+    matrix_size: i32
+) -> bool {
+    if x < 0 || x > matrix_size - 1 || y < 0 || y > matrix_size - 1 {
         false
     }
     else {
-        matrix[get_cell_index(x, y)] != 0
+        matrix[(y * matrix_size + x) as usize] != 0
     }
 }
 
-pub fn marching_squares(object_count: i32, matrix: &mut [i32], size: i64) -> Vec<Vec<(f64, f64)>> {
-    let mut visited = vec![false; size.pow(2) as usize];
+pub fn marching_squares(object_count: i32, matrix: &[i32], matrix_size: i32) -> Vec<Vec<Vec<(f32, f32)>>> {
+    let mut visited = vec![false; matrix_size.pow(2) as usize];
 
-    let mut objects: Vec<Vec<Vec<(f64, f64)>>> = vec![vec![vec![]]; object_count as usize];
-    for x in 0..size {
-        for y in 0..size {
-            let index = get_cell_index(x, y);
-            if matrix[index] > 0 && !visited[index] {
-                {
-                    let mask = classify_cell(x, y, matrix, size);
-                    if mask == 0 || mask == 15 || (x == 0 || y == 0) {
-                        continue;
-                    }
-                }
+    let mut objects = vec![vec![vec![]]; object_count as usize];
+    for x in 0..matrix_size {
+        for y in 0..matrix_size {
+            let index = (y * matrix_size + x) as usize;
+            let mask = classify_cell(x, y, matrix, matrix_size);
+            if matrix[index] > 0 && !visited[index] && mask != 0 && mask != 15 {
                 let object_label = matrix[index];
 
-                let mut vertices: Vec<(f64, f64)> = vec![];
+                let mut vertices: Vec<(f32, f32)> = vec![];
 
                 let (mut current_x, mut current_y) = (x, y);
                 let (mut dx, mut dy) = (0, 0);
 
                 'march: loop {
-                    if current_x > 0 && current_x < CHUNK_SIZE && current_y > 0 && current_y < CHUNK_SIZE {
-                        visited[get_cell_index(current_x, current_y)] = true;
+                    if current_x >= 0 && current_x < matrix_size && current_y >= 0 && current_y < matrix_size {
+                        visited[(current_y * matrix_size + current_x) as usize] = true;
                     }
-                    match classify_cell(current_x, current_y, matrix, size) {
+                    match classify_cell(current_x, current_y, matrix, matrix_size) {
                         1 | 5 | 13 => { dx = 0; dy = -1;  },
                         2 | 3 | 7 => { dx = 1; dy = 0 },
                         8 | 10 | 11 => { dx = 0; dy = 1 },
@@ -72,7 +108,10 @@ pub fn marching_squares(object_count: i32, matrix: &mut [i32], size: i64) -> Vec
                         break 'march;
                     } 
 
-                    vertices.push((current_x as f64 + dx as f64 / 2.0,  current_y as f64 + dy as f64 / 2.0));
+                    vertices.push((
+                        (current_x as f32 + (dx as f32 / 2.0) - (matrix_size as f32 / 2.0)) / PHYSICS_TO_WORLD,  
+                        (current_y as f32 + (dy as f32 / 2.0) - (matrix_size as f32 / 2.0)) / PHYSICS_TO_WORLD
+                    ));
 
                     current_x += dx;
                     current_y += dy;
@@ -83,91 +122,254 @@ pub fn marching_squares(object_count: i32, matrix: &mut [i32], size: i64) -> Vec
         }
     }
 
-    let mut triangles = vec![];
+    objects
+}
 
-    for object in objects {
-        let mut boundaries: Vec<&Vec<(f64, f64)>> = object.iter().filter(|boundary| boundary.len() > 0).collect();
-
-        boundaries.sort_by(|boundary_1, boundary_2| {
-            if boundary_1.len() > boundary_2.len() {
-                Ordering::Less
+fn create_simplified_outlines(object_count: i32, matrix: &[i32], matrix_size: i32) -> Vec<Vec<(f32, f32)>> {
+    marching_squares(object_count, matrix, matrix_size)
+        .iter()
+        .map(|object| {
+            object.iter()
+                .filter(|boundary| boundary.len() >= 3)
+                .max_by(|boundary_1, boundary_2| {
+                    if boundary_1.len() > boundary_2.len() {
+                        Ordering::Greater
+                    }
+                    else {
+                        Ordering::Less
+                    }
+                }
+            )
+        })
+        .filter_map(|boundary| {
+            match boundary {
+                Some(boundary) => {
+                    Some(douglas_peucker(boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32))
+                },
+                None => None,
             }
-            else {
-                Ordering::Greater
-            }
-        });
 
-        let mut edges = vec![];
+        })
+        .filter(|simplified_boundary| {
+            simplified_boundary.len() >= 3
+        })
+        .collect::<Vec<Vec<(f32, f32)>>>()
+}
 
-        for boundary in boundaries.iter() {
-            let simplified_boundary = douglas_peucker(&boundary);
+pub fn create_polyline_colliders(object_count: i32, matrix: &[i32], matrix_size: i32) -> Vec<(Collider, (f32, f32))> {
+    create_simplified_outlines(object_count, matrix, matrix_size).iter()
+        .map(|simplified_boundary| {
+            let indices = 
+                (0..simplified_boundary.len() as u32)
+                .zip((1..simplified_boundary.len() as u32 - 1).chain(0..=9))
+                .map(|(i1, i2)| {
+                    [i1, i2]
+                })
+                .collect::<Vec<[u32; 2]>>();
 
-            if simplified_boundary.len() < 2 {
-                continue;
-            }
+            ColliderBuilder::polyline(
+                simplified_boundary.iter()
+                    .map(|point| {
+                        Point2::new(point.0 as f32, point.1 as f32)
+                    }).collect(),
+                    Some(indices)
+                // Some((0..simplified_boundary.len()).chain(0..=0).collect::<Vec<usize>>()),
+            ).build()
+        })
+        .map(|collider| {
+            let vertices = collider.shape().as_polyline().unwrap().vertices();
+            let count = vertices.len();
 
-            let mut points: Vec<Vec<f64>> = vec![];
-            for point in simplified_boundary.iter() {
-                points.push(vec![point.0, point.1]);
-            }
-            edges.push(points);
-        }
+            let center = vertices.iter() 
+                .map(|center| {
+                    (center.x / count as f32, center.y / count as f32)
+                })
+                .fold((0.0, 0.0), |sum, value| {
+                    ((sum.0 + value.0), (sum.1 + value.1))
+                });
 
+            (collider, center)
+        })
+        .collect::<Vec<(Collider, (f32, f32))>>()
+}
+
+pub fn create_triangulated_collider(matrix: &[i32], matrix_size: i32) -> (Collider, (f32, f32)) {
+    create_simplified_outlines(1, matrix, matrix_size).iter()
+        .map(|simplified_boundary| {
+            simplified_boundary.iter()
+                .map(|point| {
+                    (point.0 as f64, point.1 as f64)
+                })
+                .collect::<Vec<(f64, f64)>>()
+        })
+        .map(|simplified_boundary| {
+            let triangulatio_result = 
+                cdt::triangulate_contours(
+                    &simplified_boundary, 
+                    &[(0..simplified_boundary.len()).chain(0..=0).collect::<Vec<usize>>()]
+                );
+
+            (simplified_boundary, triangulatio_result)
+        })
         
-        if edges.len() > 0 {
-            let (vertices, holes, dimensions) = earcutr::flatten(&edges);
-    
-            let triangle_indeces = earcutr::earcut(&vertices, &holes, dimensions).unwrap();
-    
-            for triangle in triangle_indeces.chunks(3) {
-                triangles.push(vec![
-                    (vertices[triangle[0] * 2], vertices[triangle[0] * 2 + 1]), 
-                    (vertices[triangle[1] * 2], vertices[triangle[1] * 2 + 1]), 
-                    (vertices[triangle[2] * 2], vertices[triangle[2] * 2 + 1]), 
-                ]);
+        .map(|(simplified_boundary, triangulatio_result)| {
+            (
+                simplified_boundary.iter()
+                    .map(|pos| (pos.0 as f32, pos.1 as f32))
+                    .collect::<Vec<(f32, f32)>>(), 
+                triangulatio_result
+            )
+        })
+        .filter(|(_, triangulation_result)| { 
+            if triangulation_result.is_err() {
+                println!("{}", triangulation_result.clone().as_deref().unwrap_err());
+                return false;
             }
+            triangulation_result.is_ok()
+        })
+        .map(|(simplified_boundary, triangulation_result)| {
+            ColliderBuilder::compound(
+                triangulation_result.unwrap().iter()
+                    .map(|i| {
+                        (
+                            Isometry2::default(),
+                            SharedShape::triangle(
+                                Point2::new(simplified_boundary[i.0].0, simplified_boundary[i.0].1),
+                                Point2::new(simplified_boundary[i.1].0, simplified_boundary[i.1].1),
+                                Point2::new(simplified_boundary[i.2].0, simplified_boundary[i.2].1),
+                            )
+                        )
+                    })
+                    .collect::<Vec<(Isometry2<Real>, SharedShape)>>()
+            ).build()
+        })
+        .map(|collider| {
+            let shapes = collider.shape().as_compound().unwrap().shapes();
+            let count = shapes.len();
+
+            let center = shapes.iter() 
+                .map(|shape| {
+                    shape.1.as_triangle().unwrap().center()
+                })
+                .map(|center| {
+                    (center.x / count as f32, center.y / count as f32)
+                })
+                .fold((0.0, 0.0), |sum, value| {
+                    ((sum.0 + value.0), (sum.1 + value.1))
+                });
+
+            (collider, center)
+        })
+        .next().unwrap()
+}
+
+pub fn create_colliders(object_count: i32, matrix: &[i32], matrix_size: i32) -> Vec<(Collider, (f32, f32))> {
+    marching_squares(object_count, matrix, matrix_size)
+        .iter()
+        .map(|object| {
+            object.iter()
+                .filter(|boundary| boundary.len() >= 3)
+                .max_by(|boundary_1, boundary_2| {
+                    if boundary_1.len() > boundary_2.len() {
+                        Ordering::Greater
+                    }
+                    else {
+                        Ordering::Less
+                    }
+                }
+            )
+        })
+        .filter(|boundary| boundary.is_some() )
+        .map(|boundary| douglas_peucker(boundary.as_ref().unwrap(), COLLIDER_PRECISION / (matrix_size.pow(2)) as f32))
+        .filter(|simplified_boundary| simplified_boundary.len() >= 3 )
+        .map(|simplified_boundary| simplified_boundary.iter().map(|pos| (pos.0 as f64, pos.1 as f64)).collect::<Vec<(f64, f64)>>())
+        .map(|simplified_boundary| {
+            let triangulatio_result = 
+                cdt::triangulate_contours(
+                    &simplified_boundary, 
+                    &[(0..simplified_boundary.len()).chain(0..=0).collect::<Vec<usize>>()]
+                );
+
+            (simplified_boundary, triangulatio_result)
+        })
+        .map(|(simplified_boundary, triangulatio_result)| (simplified_boundary.iter().map(|pos| (pos.0 as f32, pos.1 as f32)).collect::<Vec<(f32, f32)>>(), triangulatio_result))
+        .filter(|(_, triangulation_result)| { 
+            if triangulation_result.is_err() {
+                println!("{}", triangulation_result.clone().as_deref().unwrap_err());
+                return false;
+            }
+            triangulation_result.is_ok()
+        })
+        .map(|(simplified_boundary, triangulation_result)| {
+            ColliderBuilder::compound(
+                triangulation_result.unwrap().iter()
+                    .map(|i| {
+                        (
+                            Isometry2::default(),
+                            SharedShape::triangle(
+                                Point2::new(simplified_boundary[i.0].0, simplified_boundary[i.0].1),
+                                Point2::new(simplified_boundary[i.1].0, simplified_boundary[i.1].1),
+                                Point2::new(simplified_boundary[i.2].0, simplified_boundary[i.2].1),
+                            )
+                        )
+                    })
+                    .collect::<Vec<(Isometry2<Real>, SharedShape)>>()
+            ).build()
+        })
+        .map(|collider| {
+            let shapes = collider.shape().as_compound().unwrap().shapes();
+            let count = shapes.len();
+
+            let center = shapes.iter() 
+                .map(|shape| {
+                    shape.1.as_triangle().unwrap().center()
+                })
+                .map(|center| {
+                    (center.x / count as f32, center.y / count as f32)
+                })
+                .fold((0.0, 0.0), |sum, value| {
+                    ((sum.0 + value.0), (sum.1 + value.1))
+                });
+
+            (collider, center)
+        })
+        .collect::<Vec<(Collider, (f32, f32))>>()
+}
+
+fn perpendicular_squared_distance(point: (f32, f32), line: ((f32, f32), (f32, f32))) -> f32 {
+    let x_diff = line.1.0 - line.0.0;
+    let y_diff = line.1.1 - line.0.1;
+    let numerator =
+        (y_diff * point.0 - x_diff * point.1 + line.1.0 * line.0.1 - line.1.1 * line.0.0).abs();
+    let numerator_squared = numerator * numerator;
+    let denominator_squared = y_diff * y_diff + x_diff * x_diff;
+    numerator_squared / denominator_squared
+}
+
+fn douglas_peucker(vertices: &[(f32, f32)], epsilon: f32) -> Vec<(f32, f32)> {
+    let mut d_squared_max = 0.0;
+    let mut farthest_point_index = 0;
+    let end = vertices.len() - 1;
+    if end < 3 {
+        return vertices.to_vec();
+    }
+    let line = (vertices[0], vertices[end - 1]);
+    for (i, _) in vertices.iter().enumerate().take(end - 1).skip(1) {
+        let d_squared = perpendicular_squared_distance(vertices[i], line);
+        if d_squared > d_squared_max {
+            farthest_point_index = i;
+            d_squared_max = d_squared;
         }
     }
 
-    triangles
-}
+    if d_squared_max > epsilon {
+        let rec_results1 =
+            douglas_peucker(&vertices[0..farthest_point_index], epsilon);
+        let rec_results2 =
+            douglas_peucker(&vertices[farthest_point_index..(end + 1)], epsilon);
 
-fn distance_between_points(p1: &(f64, f64), p2: &(f64, f64)) -> f64 {
-    ((p2.0 - p1.0).powi(2) + (p2.1 - p1.1).powi(2)).sqrt()
-}
-
-fn distance_to_line(point: &(f64, f64), line_start: &(f64, f64), line_end: &(f64, f64)) -> f64 {
-    let line_length = distance_between_points(line_start, line_end);
-    let numerator = ((line_end.1 - line_start.1) * point.0 - (line_end.0 - line_start.0) * point.1 + line_end.0 * line_start.1 - line_end.1 * line_start.0).abs();
-    numerator / line_length
-}
-
-fn douglas_peucker(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
-    if points.len() <= 2 {
-        return points.to_vec();
-    }
-
-    let mut dmax = 0.0;
-    let mut index = 0;
-
-    for i in 1..(points.len() - 1) {
-        let d = distance_to_line(&points[i], &points[0], &points[points.len() - 1]);
-        if d > dmax {
-            index = i;
-            dmax = d;
-        }
-    }
-
-    let mut result = Vec::new();
-    if dmax >= 1.0 {
-        let mut result_1 = douglas_peucker(&points[..=index]);
-        let mut result_2 = douglas_peucker(&points[index..]);
-        result.append(&mut result_1);
-        result.append(&mut result_2);
+        [rec_results1, rec_results2[1..rec_results2.len()].to_vec()].concat()
     } else {
-        result.push(points[0].clone());
-        result.push(points[points.len() - 1].clone());
+        vec![vertices[0], vertices[end]]
     }
-
-    result
 }

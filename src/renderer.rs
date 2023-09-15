@@ -31,8 +31,6 @@ pub(crate) struct MeshRenderer {
 impl MeshRenderer {
     pub(crate) fn new(
         pixels: &pixels::Pixels,
-        _width: u32,
-        _height: u32,
     ) -> Result<Self, TextureError> {
         let device = pixels.device();
 
@@ -89,10 +87,11 @@ impl MeshRenderer {
         let mut new_vertex_buffers = vec![];
         let mut new_vertex_count = vec![];
 
-        for boundary in boundaries.iter() {
+        for mut boundary in boundaries.to_vec().into_iter() {
+            boundary.push(boundary[0]);
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("MeshRenderer vertex buffer"),
-                contents: bytemuck::cast_slice(boundary),
+                contents: bytemuck::cast_slice(&boundary),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });   
 

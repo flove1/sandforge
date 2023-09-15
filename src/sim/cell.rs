@@ -9,6 +9,8 @@ pub struct Cell {
     pub ra: u8,
     pub rb: u8,
     pub clock: u8,
+    pub parent_id: Option<u64>,
+    pub flags: u16,
 }
 
 pub static WALL_CELL: Cell = Cell {
@@ -16,6 +18,8 @@ pub static WALL_CELL: Cell = Cell {
     ra: 0,
     rb: 0,
     clock: 0,
+    flags: 0,
+    parent_id: None,
 };
 
 pub static EMPTY_CELL: Cell = Cell {
@@ -23,6 +27,8 @@ pub static EMPTY_CELL: Cell = Cell {
     ra: 0,
     rb: 0,
     clock: 0,
+    flags: 0,
+    parent_id: None,
 };
 
 impl Cell {
@@ -34,9 +40,22 @@ impl Cell {
         };
 
         match cell.element {
-            Element::Water | Element::Sand | Element::Wood => {cell.ra = rand::thread_rng().gen_range(0..25)},
+            Element::Coal | Element::Water | Element::Gas | Element::Sand | Element::Wood => {cell.ra = rand::thread_rng().gen_range(0..25)},
+            Element::Dirt => {cell.ra = rand::thread_rng().gen_range(0..100)},
             _ => {},
         }
+
+        // match  cell.element {
+        //     Element::Fire => {cell.rb = 3}
+        //     _ => {}
+        // }
+
+        cell
+    }
+
+    pub fn new_with_rb(element: Element, clock: u8, rb: u8) -> Self {
+        let mut cell = Self::new(element, clock);
+        cell.rb = rb;
 
         cell
     }
@@ -45,15 +64,13 @@ impl Cell {
         self.clock = clock;
 
         api = match self.element {
-            Element::Empty => { api },
-            Element::Stone => { api },
             Element::Water => { update_liquid(&mut self, api, dt) },
-            Element::Sand => { update_sand(&mut self, api, dt) },
-            Element::GlowingSand => { update_sand(&mut self, api, dt) },
-            Element::Wood => { api },
+            Element::Coal | Element::Sand => { update_sand(&mut self, api, dt) },
+            // Element::Fire => { update_fire(&mut self, api, dt) },
+            Element::Gas => { update_gas(&mut self, api, dt) },
+            _ => { api }
         };
 
-        api.update(self);
         return api;
     }
 }

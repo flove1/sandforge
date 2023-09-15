@@ -5,7 +5,7 @@ use pixels::{wgpu, PixelsContext};
 use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 
-use crate::input::StateManager;
+use crate::input::InputManager;
 use crate::sim::elements::Element;
 
 pub(crate) struct Framework {
@@ -108,10 +108,10 @@ impl Framework {
         self.screen_descriptor.pixels_per_point = scale_factor as f32;
     }
 
-    pub(crate) fn prepare(&mut self, state_manager: &mut StateManager, window: &Window) {
+    pub(crate) fn prepare(&mut self, input_manager: &mut InputManager, window: &Window) {
         let raw_input = self.egui_state.take_egui_input(window);
         let output = self.egui_ctx.run(raw_input, |egui_ctx| {
-            self.gui.ui(state_manager, egui_ctx);
+            self.gui.ui(input_manager, egui_ctx);
         });
 
         self.textures.append(output.textures_delta);
@@ -158,12 +158,12 @@ impl Framework {
 impl Gui {
     fn new() -> Self {
         Self { 
-            info_open: false, 
-            elements_open: false,
+            info_open: true, 
+            elements_open: true,
         }
     }
 
-    fn ui(&mut self, state_manager: &mut StateManager , ctx: &Context) {
+    fn ui(&mut self, input_manager: &mut InputManager , ctx: &Context) {
         egui::TopBottomPanel::top("menubar_container").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 if ui.button("Info").clicked() {
@@ -188,30 +188,29 @@ impl Gui {
 
                 ui.colored_label(
                     egui::Color32::WHITE,
-                    format!("Frame count: {}", state_manager.previous_frame.fps)
+                    format!("Frame count: {}", input_manager.previous_frame.fps)
                 );
 
                 ui.separator();
 
                 ui.colored_label(
                     egui::Color32::WHITE,
-                    format!("Chunks updated: {}", state_manager.previous_frame.chunks_updated)
+                    format!("Chunks updated: {}", input_manager.previous_frame.chunks_updated)
                 );
 
                 ui.separator();
 
                 ui.colored_label(
                     egui::Color32::WHITE,
-                    format!("Pixels updated: {}", state_manager.previous_frame.pixels_updated)
+                    format!("Pixels updated: {}", input_manager.previous_frame.pixels_updated)
                 );
 
                 ui.separator();
 
                 ui.colored_label(
-                    egui::Color32::WHITE,format!("Brush size: {}", state_manager.brush_size)
+                    egui::Color32::WHITE,format!("Brush size: {}", input_manager.mouse.brush_size)
                 );
             });
-
 
         egui::Window::new("Elements")
         .open(&mut self.elements_open)
@@ -236,7 +235,9 @@ impl Gui {
                 
                 ui.allocate_ui_at_rect(rect, |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        ui.horizontal(|ui| {    
+                        ui.horizontal_top(|ui| {    
+                            ui.add_space(ctx.pixels_per_point() * 4.0);
+
                             let (rect, _) = ui.allocate_exact_size(egui::Vec2 { x: ctx.pixels_per_point() * 12.0, y: ctx.pixels_per_point() * 12.0 }, egui::Sense { click: false, drag: false, focusable: false });
         
                             ui.painter().rect_filled(
@@ -245,27 +246,32 @@ impl Gui {
                                 egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
                             );
 
-                            if &state_manager.element == element {
+                            if &input_manager.element == element {
                                 ui.painter().rect_stroke(
                                     rect,
                                     egui::Rounding::default().at_most(0.5), 
                                     egui::Stroke::new(ctx.pixels_per_point(), egui::Color32::GOLD)
                                 );
                             }
+
                             
                             ui.vertical(|ui| {
                                 ui.add_space(ctx.pixels_per_point() * 4.0);
-                                ui.colored_label(
-                                    {
-                                        if &state_manager.element == element {
-                                            egui::Color32::GOLD
-                                        }
-                                        else {
-                                            egui::Color32::WHITE
-                                        } 
-                                    },
-                                    element.to_string()
-                                );
+                                ui.horizontal_top(|ui| {
+                                    ui.add_space(ctx.pixels_per_point() * 4.0);
+                                    
+                                    ui.colored_label(
+                                        {
+                                            if &input_manager.element == element {
+                                                egui::Color32::GOLD
+                                            }
+                                            else {
+                                                egui::Color32::WHITE
+                                            } 
+                                        },
+                                        element.to_string()
+                                    );
+                                });
                             });
                             
                         });
@@ -273,7 +279,7 @@ impl Gui {
                 });
 
                 if response.clicked() {
-                    state_manager.element = *element;
+                    input_manager.element = *element;
                 }
             }
 
@@ -283,11 +289,36 @@ impl Gui {
                 ui.add_space(ctx.pixels_per_point() * 4.0);
 
                 ui.add(
-                    egui::widgets::Slider::new(&mut state_manager.brush_size, 1..=32)
+                    egui::widgets::Slider::new(&mut input_manager.mouse.brush_size, 2..=32)
                         .show_value(true)
                         .trailing_fill(true)
                 );
-            })
+            });
+
+            ui.add_space(ctx.pixels_per_point() * 8.0);
+
+            ui.horizontal_top(|ui| {
+                ui.add_space(ctx.pixels_per_point() * 8.0);
+                ui.checkbox(&mut input_manager.draw_object, " Draw objects");
+            });
+
+            if input_manager.draw_object {
+                ui.add_space(ctx.pixels_per_point() * 8.0);
+    
+                ui.horizontal_top(|ui| {
+                    ui.add_space(ctx.pixels_per_point() * 8.0);
+                    ui.checkbox(&mut input_manager.draw_static_object, " Is object static?");
+                });
+            }
+
+            ui.add_space(ctx.pixels_per_point() * 8.0);
+
+            ui.horizontal_top(|ui| {
+                ui.add_space(ctx.pixels_per_point() * 8.0);
+                ui.checkbox(&mut input_manager.render_objects, " Render objects");
+            });
+
+            ui.add_space(ctx.pixels_per_point() * 4.0);
         });
     }
 }

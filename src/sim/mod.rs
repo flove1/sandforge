@@ -4,3 +4,4 @@ pub mod elements;
 pub mod world;
 pub mod helpers;
 pub mod colliders;
+pub mod physics;

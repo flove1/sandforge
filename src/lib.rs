@@ -10,11 +10,12 @@ mod constants;
 mod ui;
 mod input;
 mod renderer;
+mod helpers;
 
 use crate::sim::elements::Element;
 
 use error_iter::ErrorIter as _;
-use input::StateManager;
+use input::InputManager;
 use log::error;
 use parking_lot::deadlock;
 use pixels::{Pixels, SurfaceTexture};
@@ -22,7 +23,7 @@ use renderer::MeshRenderer;
 use sim::world::{World, WorldApi};
 use ui::Framework;
 use winit::dpi::LogicalSize;
-use winit::event::{Event, VirtualKeyCode, ElementState, MouseButton};
+use winit::event::{Event, ElementState};
 use winit::event_loop::EventLoop;
 use winit::platform::x11::{WindowBuilderExtX11, XWindowType};
 use winit::window::WindowBuilder;
@@ -30,8 +31,9 @@ use crate::constants::*;
 
 pub fn run() {
     let event_loop = EventLoop::new();
+
     let window = {
-        let size = LogicalSize::new(((WORLD_WIDTH * CHUNK_SIZE) as f64 * SCALE) as i32, ((WORLD_HEIGHT * CHUNK_SIZE) as f64 * SCALE) as i32);
+        let size = LogicalSize::new(((WORLD_WIDTH * CHUNK_SIZE) as f32 * SCALE) as i32, ((WORLD_HEIGHT * CHUNK_SIZE) as f32 * SCALE) as i32);
         WindowBuilder::new()
             .with_title("Rust-physics")
             .with_inner_size(size)
@@ -41,12 +43,12 @@ pub fn run() {
             .unwrap()
     };
 
-    let (mut pixels, mut framework) = {
+    let (mut pixels, mut interface) = {
         let window_size = window.inner_size();
         let scale_factor = window.scale_factor() as f32;
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
         let pixels = Pixels::new((WORLD_WIDTH * CHUNK_SIZE) as u32, (WORLD_HEIGHT * CHUNK_SIZE) as u32, surface_texture).unwrap();
-        let framework = Framework::new(
+        let interface = Framework::new(
             &event_loop,
             window_size.width,
             window_size.height,
@@ -54,20 +56,20 @@ pub fn run() {
             &pixels,
         );
 
-        (pixels, framework)
+        (pixels, interface)
     };
 
     let mut world = World::new();
-    let mut state_manager = StateManager::new();
+    let mut input_manager = InputManager::new();
 
-    let mut mesh_renderer = MeshRenderer::new(&pixels, window.inner_size().width, window.inner_size().height).unwrap();
+    let mut mesh_renderer = MeshRenderer::new(&pixels).unwrap();
 
     event_loop.run(move |event, _, control_flow| {        
-        control_flow.set_poll();
+        control_flow.set_wait();
 
         match &event {
             Event::WindowEvent { event, .. } => {
-                if !framework.handle_event(event).consumed {
+                if !interface.handle_event(event).consumed {
                     match event {
                         winit::event::WindowEvent::Resized( size ) => {
                             if let Err(err) = pixels.resize_surface(size.width, size.height) {
@@ -76,7 +78,7 @@ pub fn run() {
                                 }
                                 control_flow.set_exit();
                             }
-                            framework.resize(size.width, size.height);
+                            interface.resize(size.width, size.height);
                         },
 
                         winit::event::WindowEvent::CloseRequested => {
@@ -84,83 +86,15 @@ pub fn run() {
                         },
 
                         winit::event::WindowEvent::KeyboardInput { input, .. } => {
-                            if let ElementState::Released = input.state {
-                                if let Some(keycode) = input.virtual_keycode {
-                                    match keycode {
-                                        VirtualKeyCode::Escape | VirtualKeyCode::Q  => {
-                                            control_flow.set_exit();
-                                        },
-                                        _ => {}
-                                    }
-                                }
-                            }
+                            input_manager.handle_keyboard_input(control_flow, input);
                         },
 
                         winit::event::WindowEvent::CursorMoved { position, .. } => {
-                            if state_manager.mouse_keys[0] == ElementState::Pressed {
-                                if let Some(last_position) = state_manager.previous_frame.last_mouse_position {
-                                    let (x1, y1) = if let Ok((x, y)) = pixels.window_pos_to_pixel((last_position.x as f32, last_position.y as f32)) {
-                                        (x as i32, y as i32)
-                                    }
-                                    else {
-                                        state_manager.previous_frame.last_mouse_position = Some(*position);
-                                        return
-                                    };
-
-                                    let (x2, y2) = if let Ok((x, y)) = pixels.window_pos_to_pixel((position.x as f32, position.y as f32)) {
-                                        (x as i32, y as i32)
-                                    }
-                                    else {
-                                        state_manager.previous_frame.last_mouse_position = Some(*position);
-                                        return
-                                    };
-
-                                    let dx:i32 = i32::abs(x2 - x1);
-                                    let dy:i32 = i32::abs(y2 - y1);
-                                    let sx:i32 = { if x1 < x2 { 1 } else { -1 } };
-                                    let sy:i32 = { if y1 < y2 { 1 } else { -1 } };
-                                
-                                    let mut error:i32 = (if dx > dy  { dx } else { -dy }) / 2 ;
-                                    let mut current_x:i32 = x1;
-                                    let mut current_y:i32 = y1;
-
-                                    loop {
-                                        for x in (-state_manager.brush_size+1)..(state_manager.brush_size) {
-                                            for y in (-state_manager.brush_size+1)..(state_manager.brush_size) {
-                                                world.place((current_x + x) as i64, (current_y + y) as i64, state_manager.element);
-                                            }
-                                        }
-                                
-                                        if current_x == x2 && current_y == y2 { break; }
-                                        let error2:i32 = error;
-                                
-                                        if error2 > -dx {
-                                            error -= dy;
-                                            current_x += sx;
-                                        }
-                                        if error2 < dy {
-                                            error += dx;
-                                            current_y += sy;
-                                        }
-                                    }
-                                }
-                            }
-                            state_manager.previous_frame.last_mouse_position = Some(*position);
+                            input_manager.handle_mouse_movement(&pixels, position);
                         },
 
                         winit::event::WindowEvent::MouseInput {state, button, ..} => {
-                            match *button {
-                                MouseButton::Left => {
-                                    state_manager.mouse_keys[0] = *state;
-                                },
-                                MouseButton::Right => {
-                                    state_manager.mouse_keys[1] = *state;
-                                },
-                                MouseButton::Middle => {
-                                    state_manager.mouse_keys[2] = *state;
-                                },
-                                MouseButton::Other(_) => {},
-                            }
+                            input_manager.handle_mouse_buttons(control_flow, state, button);
                         },
                         _ => {}
                     }
@@ -168,24 +102,46 @@ pub fn run() {
             }
 
             Event::RedrawRequested(_) => {
+                input_manager.next_frame();
+
                 let now = Instant::now();
-                if world.needs_update(now.duration_since(state_manager.previous_frame.instant).as_millis()) {
+                if world.needs_update(now.duration_since(input_manager.previous_frame.instant).as_millis()) {
+                    if input_manager.draw_object {
+                        if input_manager.element == Element::Empty {
+                            input_manager.placing_queue.clear();
+                        }
+                        
+                        if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
+                            world.place_object(
+                                input_manager.placing_queue.drain().collect(), 
+                                input_manager.element, 
+                                input_manager.draw_static_object
+                            );
+                        }
+                    }
+                    else {
+                        if !input_manager.placing_queue.is_empty() {
+                            world.place_batch(
+                                input_manager.placing_queue.drain().collect(), 
+                                input_manager.element
+                            );
+                        }
+                    }                        
+
                     let (chunks_updated, pixels_updated) = world.update();
-                    state_manager.previous_frame.update(chunks_updated, pixels_updated, now);
+                    input_manager.update_frame_info(chunks_updated, pixels_updated, now);
 
                     let object_boundaries = world.render(pixels.frame_mut());
                     mesh_renderer.update(pixels.device(), &object_boundaries);
                 }
-
-                state_manager.previous_frame.tick();
 
                 let render_result = pixels.render_with(|encoder, render_target, context| {
                     context.scaling_renderer.render(encoder, render_target);
     
                     mesh_renderer.render(encoder, render_target);
 
-                    framework.prepare(&mut state_manager, &window);
-                    framework.render(encoder, render_target, context);
+                    interface.prepare(&mut input_manager, &window);
+                    interface.render(encoder, render_target, context);
 
                     Ok(())
                 });

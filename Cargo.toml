@@ -38,10 +38,10 @@ dashmap = { version = "5.5.1", features = ["inline"] }
 egui = "0.22.0"
 egui-wgpu = "0.22.0"
 fps_counter = "2.0.0"
-delaunator = "1.0.2"
-cdt = "0.1.0"
 parking_lot = { version = "0.12.1", features = ["deadlock_detection"] }
 bytemuck = "1.13.1"
 earcutr = "0.4.2"
 threadpool = "1.8.1"
 ahash = "0.8.3"
+rapier2d = "0.17.2"
+cdt = "0.1.0"
