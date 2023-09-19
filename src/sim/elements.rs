@@ -1,97 +1,137 @@
-use std::slice::Iter;
+use serde::{Serialize, Deserialize};
+use lazy_static::lazy_static;
 
-use super::cell::Cell;
+use crate::constants::CHUNK_SIZE;
+use crate::helpers::line_from_pixels;
+
+use super::cell::{Cell, SimulationType};
 use super::chunk::ChunkApi;
 
-#[derive(Default, Clone, Copy, PartialEq)]
-pub enum Element {
-    #[default]
+
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
+pub enum MatterType {
     Empty,
-    Stone,
-    Water,
-    Sand,
-    Wood,
-    Dirt,
-    Gas,
-    Coal
+    Static {
+        name: String,
+        color: [u8; 4],
+        color_offset: u8,
+    },
+    Powder {
+        name: String,
+        color: [u8; 4],
+        color_offset: u8,
+    },
+    Liquid {
+        name: String,
+        color: [u8; 4],
+        color_offset: u8,
+    },
+    Gas {
+        name: String,
+        color: [u8; 4],
+        color_offset: u8,
+    },
 }
 
-// enum ElementProperties {
-//     Burning(u8),
-//     Melting(u8),
-// }
-
-impl Element {
-    pub fn color(&self) -> [u8; 4] {
-        match self {
-            Element::Empty => [0x00, 0x00, 0x00, 0xff],
-            Element::Stone => [0x77, 0x77, 0x77, 0xff],
-            Element::Sand => [0xf2, 0xf1, 0xa3, 0xff],
-            Element::Water => [0x47, 0x7C, 0xB8, 0xff],
-            // Element::Fire => [0xe8, 0x6a, 0x17, 0xff],
-            Element::Wood => [0x6a, 0x4b, 0x35, 0xff],
-            Element::Dirt => [0x6d, 0x5f, 0x3d, 0xff],
-            Element::Gas => [0x55, 0x74, 0x56, 0x99],
-            Element::Coal => [0x09, 0x09, 0x09, 0xff],
-        }
-    }
-
-    pub fn iterator() -> Iter<'static, Element> {
-        static ELEMENTS: [Element; 8] = [
-            Element::Empty,
-            Element::Stone,
-            Element::Sand,
-            Element::Water,
-            // Element::Fire,
-            Element::Wood,
-            Element::Dirt,
-            Element::Gas,
-            Element::Coal
-        ];
-        ELEMENTS.iter()
-    }
-}
-
-impl ToString for Element {
-    fn to_string(&self) -> String {
-        match self {
-            Element::Empty => String::from("Eraser"),
-            Element::Stone => String::from("Stone"),
-            Element::Water => String::from("Water"),
-            Element::Sand => String::from("Sand"),
-            Element::Coal => String::from("Coal"),
-            // Element::Fire => String::from("Fire"),
-            Element::Wood => String::from("Wood"),
-            Element::Dirt => String::from("Dirt"),
-            Element::Gas => String::from("Gas")
+macro_rules! check_matter {
+    ($val:expr, $var:path) => {
+        match $val {
+            $var{..} => true,
+            _ => false
         }
     }
 }
 
-pub fn update_sand<'a, 'b>(cell: &Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
+impl Default for MatterType {
+    fn default() -> Self {
+        Self::Empty
+    }
+}
+
+lazy_static! {
+    pub static ref MATTERS: Vec<MatterType> = {
+        let mut elements = vec![MatterType::Empty];
+        
+        elements.append(
+            &mut serde_yaml::from_str(
+                &std::fs::read_to_string("elements.yaml").unwrap()
+            ).unwrap()
+        );
+
+        elements
+    };
+}
+
+pub fn update_particle<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
+    if let SimulationType::Particle { x, y, dx, dy, collided } = &mut cell.simulation {
+        if *collided {
+            return;
+        }
+        
+        let mut last_x = 0;
+        let mut last_y = 0;
+
+        let mut operation = |dx, dy| {
+            let cell = api.get(dx, dy);
+
+            if check_matter!(cell.element, MatterType::Empty) || !matches!(cell.simulation, SimulationType::Ca) {
+                last_x = dx;
+                last_y = dy;
+                true
+            }
+            else {
+                false
+            }
+            
+        };
+
+        let return_to_ca = line_from_pixels(
+            0, 
+            0, 
+            (*dx * CHUNK_SIZE as f32).floor() as i32, 
+            (*dy * CHUNK_SIZE as f32).floor() as i32, 
+            &mut operation
+        );
+
+        if return_to_ca {
+            *collided = true;
+        }
+        else {
+            *x = *x + *dx;
+            *y = *y + *dy;
+            *dy = f32::min(*dy + (1.0 / CHUNK_SIZE as f32) / 10.0, dy.signum() * 9.1 * (1.0 / CHUNK_SIZE as f32) / 10.0);
+        }
+
+        // api.update(cell.clone());
+        api.keep_alive(last_x, last_y);
+    }
+    else {
+        panic!("particle method called for non-particle cell");
+    }
+}
+
+pub fn update_sand<'a, 'b>(cell: &Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
     let dx = api.rand_dir();
     
-    if api.match_element(0, 1, Element::Empty) {
-        if api.once_in(5) && api.match_element(dx, 1, Element::Empty) {
+    if check_matter!(api.get(0, 1).element, MatterType::Empty) {
+        if api.once_in(5) && check_matter!(api.get(dx, 1).element, MatterType::Empty) {
             api.swap(dx, 1);
         }
         else {
             api.swap(0, 1);
         }
     } 
-    else if api.match_element(dx, 1, Element::Empty) {
+    else if check_matter!(api.get(dx, 1).element, MatterType::Empty)  {
         api.swap(dx, 1);
     } 
-    else if api.match_element(-dx, 1, Element::Empty) {
+    else if check_matter!(api.get(-dx, 1).element, MatterType::Empty) {
         api.swap(-dx, 1);
     } 
-    else if api.match_element(0, 1, Element::Water) {
+    else if check_matter!(api.get(0, 1).element, MatterType::Liquid) {
         api.swap(0, 1);
     }
 
-    api.update(*cell);
-
-    api
+    api.update(cell.clone());
 }
 
 // pub fn update_fire<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
@@ -103,21 +143,21 @@ pub fn update_sand<'a, 'b>(cell: &Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> 
 //         let modifier = if dy == -1 { 0.5 } else { 1.0 };
 
 //         match cell.element {
-//             Element::Wood => {
+//             MatterType::Wood => {
 //                 if api.once_in((100.0 * modifier) as i32) {
-//                     api.set(dx, dy, Cell::new_with_rb(Element::Fire, cell.clock, 80))
+//                     api.set(dx, dy, Cell::new_with_rb(MatterType::Fire, cell.clock, 80))
 //                 }
 //             }
 
-//             Element::Coal => {
+//             MatterType::Coal => {
 //                 if api.once_in((500.0 * modifier) as i32) {
-//                     api.set(dx, dy, Cell::new_with_rb(Element::Fire, cell.clock, 100))
+//                     api.set(dx, dy, Cell::new_with_rb(MatterType::Fire, cell.clock, 100))
 //                 }
 //             }
 
-//             Element::Gas => {
+//             MatterType::Gas => {
 //                 if api.once_in(10) {
-//                     api.set(dx, dy, Cell::new_with_rb(Element::Fire, cell.clock, 10))
+//                     api.set(dx, dy, Cell::new_with_rb(MatterType::Fire, cell.clock, 10))
 //                 }
 //             }   
             
@@ -132,43 +172,43 @@ pub fn update_sand<'a, 'b>(cell: &Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> 
 //     }
 
 //     if cell.rb == 0 {
-//         cell.element = Element::Empty;
+//         cell.element = MatterType::Empty;
 //     }
 
 //     api.set(0, 0, *cell);
 //     api
 // }
 
-pub fn update_liquid<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
+pub fn update_liquid<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
     let mut dx = api.rand_dir();
 
-    if api.match_element(0, 1, Element::Empty) {
+    if check_matter!(api.get(0, 1).element, MatterType::Empty) {
         if api.once_in(5) {
             //randomize direction when falling sometimes
             cell.ra = api.rand_int(20) as u8;
         }
 
-        if api.once_in(5) && api.match_element(((cell.ra % 2) * 2) as i32 - 1, 1, Element::Empty) {
+        if api.once_in(5) && check_matter!(api.get(((cell.ra % 2) * 2) as i32 - 1, 1).element, MatterType::Empty) {
             api.swap(((cell.ra % 2) * 2) as i32 - 1, 1);
         }
         else {
             api.swap(0, 1);
         }
 
-        api.update(*cell);
-        return api;
+        api.update(cell.clone());
+        return
     }
-    else if api.match_element(dx, 0, Element::Empty) && api.match_element(dx, 1, Element::Empty){
+    else if check_matter!(api.get(dx, 0).element, MatterType::Empty) && check_matter!(api.get(dx, 1).element, MatterType::Empty) {
         api.swap(dx, 0);
 
-        api.update(*cell);
-        return api;
+        api.update(cell.clone());
+        return
     }
-    else if api.match_element(-dx, 0, Element::Empty) && api.match_element(-dx, 1, Element::Empty){
+    else if check_matter!(api.get(-dx, 0).element, MatterType::Empty) && check_matter!(api.get(-dx, 1).element, MatterType::Empty) {
         api.swap(-dx, 0);
 
-        api.update(*cell);
-        return api;
+        api.update(cell.clone());
+        return
     }
 
     dx = if cell.ra % 2 == 0 { 1 } else { -1 };    
@@ -176,7 +216,7 @@ pub fn update_liquid<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f3
     let dx0 = api.get(dx, 0);
     let dxd = api.get(dx * 2, 0);
 
-    if dx0.element == Element::Empty && dxd.element == Element::Empty {
+    if dx0.element == MatterType::Empty && dxd.element == MatterType::Empty {
         // scoot double
         cell.rb = 6;
         api.swap(dx * 2, 0);
@@ -185,37 +225,37 @@ pub fn update_liquid<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f3
         let nbr = api.get(dx, dy);
 
         // spread opinion
-        if nbr.element == Element::Water {
+        if check_matter!(nbr.element, MatterType::Liquid) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(dx, dy,
                     Cell {
                         ra: cell.ra,
-                        ..*cell
+                        ..cell.clone()
                     },
                 )
             }
         }
-    } else if dx0.element == Element::Empty {
+    } else if dx0.element == MatterType::Empty {
         cell.rb = 3;
         api.swap(dx, 0);
 
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
-        if nbr.element == Element::Water {
+        if check_matter!(nbr.element, MatterType::Liquid) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(
                     dx,
                     dy,
                     Cell {
                         ra: cell.ra,
-                        ..*cell
+                        ..cell.clone()
                     },
                 )
             }
         }
     } else if cell.rb == 0 {
-        if api.match_element(-dx, 0, Element::Empty) {
+        if check_matter!(api.get(-dx, 0).element, MatterType::Empty) {
             // bump
             cell.ra = ((cell.ra as i32) + dx) as u8;
         }
@@ -224,29 +264,28 @@ pub fn update_liquid<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f3
         cell.rb -= 1;
     }
 
-    api.update(*cell);
-    api
+    api.update(cell.clone());
 }
 
-pub fn update_gas<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
+pub fn update_gas<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
     let mut dx = api.rand_dir();
 
-    if api.match_element(dx, 0, Element::Empty) && api.match_element(dx, -1, Element::Empty){
+    if check_matter!(api.get(dx, 0).element, MatterType::Empty) && check_matter!(api.get(dx, -1).element, MatterType::Empty) {
         api.swap(dx, 0);
     }
-    else if api.match_element(-dx, 0, Element::Empty) && api.match_element(-dx, -1, Element::Empty){
+    else if check_matter!(api.get(-dx, 0).element, MatterType::Empty) && check_matter!(api.get(-dx, -1).element, MatterType::Empty) {
         api.swap(-dx, 0);
     }
     
-    if api.match_element(0, -1, Element::Empty) {
+    if check_matter!(api.get(0, -1).element, MatterType::Empty) {
         api.swap(0, -1);
         if api.once_in(20) {
             //randomize direction when falling sometimes
             cell.ra = api.rand_int(20) as u8;
         }
 
-        api.update(*cell);
-        return api;
+        api.update(cell.clone());
+        return
     }
 
     dx = if cell.ra % 2 == 0 { 1 } else { -1 };    
@@ -254,7 +293,7 @@ pub fn update_gas<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) 
     let dx0 = api.get(dx, 0);
     let dxd = api.get(dx * 2, 0);
 
-    if dx0.element == Element::Empty && dxd.element == Element::Empty {
+    if dx0.element == MatterType::Empty && dxd.element == MatterType::Empty {
         // scoot double
         cell.rb = 6;
         api.swap(dx * 2, 0);
@@ -263,37 +302,37 @@ pub fn update_gas<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) 
         let nbr = api.get(dx, dy);
 
         // spread opinion
-        if nbr.element == Element::Water {
+        if check_matter!(nbr.element, MatterType::Liquid) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(dx, dy,
                     Cell {
                         ra: cell.ra,
-                        ..*cell
+                        ..cell.clone()
                     },
                 )
             }
         }
-    } else if dx0.element == Element::Empty {
+    } else if dx0.element == MatterType::Empty {
         cell.rb = 3;
         api.swap(dx, 0);
 
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
-        if nbr.element == Element::Water {
+        if check_matter!(nbr.element, MatterType::Liquid) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(
                     dx,
                     dy,
                     Cell {
                         ra: cell.ra,
-                        ..*cell
+                        ..cell.clone()
                     },
                 )
             }
         }
     } else if cell.rb == 0 {
-        if api.match_element(-dx, 0, Element::Empty) {
+        if check_matter!(api.get(-dx, 0).element, MatterType::Empty) {
             // bump
             cell.ra = ((cell.ra as i32) + dx) as u8;
         }
@@ -302,7 +341,5 @@ pub fn update_gas<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) 
         cell.rb -= 1;
     }
 
-    api.update(*cell);
-
-    api
+    api.update(cell.clone());
 }

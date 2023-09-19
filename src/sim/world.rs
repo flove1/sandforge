@@ -1,13 +1,13 @@
-use std::{sync::{Arc, Mutex}, ops::{AddAssign, SubAssign}, collections::{BTreeMap, BTreeSet}};
+use std::{sync::{Arc, Mutex}, ops::{AddAssign, SubAssign}, collections::{BTreeMap, BTreeSet}, default};
 
 use ahash::{RandomState, HashSet, HashMap};
 use dashmap::{DashMap, DashSet};
 use rand::Rng;
-use rapier2d::na::{Matrix2, Vector2};
+use rapier2d::na::{Matrix2, Vector2, Translation2};
 use threadpool::ThreadPool;
 
 use crate::{constants::*, renderer::Vertex, pos2, vector::Pos2};
-use super::{chunk::Chunk, elements::Element, helpers::get_cell_index, cell::{EMPTY_CELL, Cell}, physics::Physics};
+use super::{chunk::Chunk, helpers::get_cell_index, cell::{EMPTY_CELL, Cell, SimulationType}, physics::Physics, elements::MatterType};
 
 pub struct World {
     pub(super) chunks: DashMap<Pos2, Chunk, RandomState>,
@@ -48,7 +48,7 @@ impl World {
         }
     }
 
-    pub(crate) fn place(&self, x: i32, y: i32, element: Element) {
+    pub(crate) fn place(&self, x: i32, y: i32, element: &MatterType) {
         if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
             return;
         }
@@ -60,7 +60,7 @@ impl World {
         }
     }
 
-    pub fn place_batch(&self, positions: HashSet<(i32, i32)>, element: Element) {
+    pub fn place_batch(&self, positions: HashSet<(i32, i32)>, element: &MatterType) {
         let mut groups_by_chunks: HashMap<Pos2, Vec<(i32, i32)>> = HashMap::default();
         
         positions.into_iter()
@@ -77,13 +77,13 @@ impl World {
         groups_by_chunks.into_iter()
             .for_each(|(chunk_position, cells)| {
                 if let Some(chunk) = self.chunks.get(&chunk_position) {
-                    chunk.place_batch(cells, element);
+                    chunk.place_batch(cells, &element);
                     self.active_chunks.insert(chunk_position);
                 };
             });   
     }
 
-    pub fn place_object(&self, positions: HashSet<(i32, i32)>, element: Element, static_flag: bool) {
+    pub fn place_object(&self, positions: HashSet<(i32, i32)>, element: &MatterType, static_flag: bool) {
         self.physics_engine.lock().unwrap().new_object(positions, element, static_flag);
     }
 
@@ -133,15 +133,15 @@ impl World {
         let new_chunk_position = chunk_position + chunk_offset;
 
         if !self.chunks.contains_key(&new_chunk_position) {
-            return EMPTY_CELL;
+            return EMPTY_CELL.clone();
         }
 
         self.chunks.get(&new_chunk_position).unwrap()
-            .chunk_data.read().unwrap().get_cell(cell_position)
+            .chunk_data.read().unwrap().get_cell(cell_position).clone()
     }
         
 
-    pub(crate) fn match_cell(&self, chunk_position: Pos2, cell_position: Pos2, element: Element) -> bool {
+    pub(crate) fn match_cell(&self, chunk_position: Pos2, cell_position: Pos2, element: &MatterType) -> bool {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
         let new_chunk_position = chunk_position + chunk_offset;
 
@@ -150,7 +150,7 @@ impl World {
         }
 
         self.chunks.get(&new_chunk_position).unwrap()
-            .chunk_data.read().unwrap().match_cell(cell_position, element)
+            .chunk_data.read().unwrap().match_cell(cell_position, &element)
     }
 
     pub(crate) fn replace_cell(&self, chunk_position: Pos2, cell_offset: Pos2, cell: Cell) -> Cell {
@@ -162,7 +162,7 @@ impl World {
         }
 
         if !self.chunks.contains_key(&new_chunk_position) {
-            return EMPTY_CELL;
+            return EMPTY_CELL.clone();
         }
 
         let is_chunk_activated = self.active_chunks.insert(new_chunk_position);
@@ -177,20 +177,52 @@ impl World {
             chunk_data.update_dirty_rect(&cell_position);
         }
         
-        let old_cell = chunk_data.replace_cell(cell_position, cell);
-        if old_cell.element != Element::Empty && cell.element == Element::Empty {
+        let old_cell = chunk_data.replace_cell(cell_position, cell.clone());
+        if old_cell.element != MatterType::Empty && cell.element == MatterType::Empty {
             chunk.cell_count.lock().unwrap().sub_assign(1);
         }
-        else if old_cell.element == Element::Empty && cell.element != Element::Empty {
+        else if old_cell.element == MatterType::Empty && cell.element != MatterType::Empty {
             chunk.cell_count.lock().unwrap().add_assign(1);
         }
         
         old_cell   
     }
 
-    pub fn convert_objects_to_cells(&self) -> HashMap<Pos2, Cell> {
+    pub fn move_particle(&self, chunk_position: Pos2, mut particle: Cell) {
+        match &mut particle.simulation {
+            SimulationType::Particle { x, y, .. } => {
+                let ix = x.floor() as i32;
+                let iy = y.floor() as i32;
+                let cell_ix = (*x * CHUNK_SIZE as f32).floor() as i32;
+                let cell_iy = (*y * CHUNK_SIZE as f32).floor() as i32;
+
+                *x -= ix as f32;
+                *y -= iy as f32;
+
+                let cell_position = pos2!(cell_ix, cell_iy);
+                let new_chunk_position = chunk_position + pos2!(ix, iy);
+
+                if let Some(chunk) = self.chunks.get(&new_chunk_position) { 
+                    let mut chunk_data = chunk.chunk_data.write().unwrap();
+    
+                    let is_chunk_activated = self.active_chunks.insert(new_chunk_position);
+        
+                    if is_chunk_activated {
+                        chunk_data.maximize_dirty_rect();
+                    }    
+                    else {
+                        chunk_data.update_dirty_rect(&cell_position);
+                    }
+    
+                    chunk.particles.lock().unwrap().push(particle);
+                }
+            },
+            _ => panic!()
+        } 
+    }
+
+    pub fn convert_objects_to_cells(&self) -> Vec<(Translation2<f32>, HashMap<Pos2, Cell>)> {
         let engine = self.physics_engine.lock().unwrap();
-        let mut cells: HashMap<Pos2, Cell> = HashMap::default();
 
         engine.objects.iter()
             .map(|object| 
@@ -202,7 +234,8 @@ impl World {
             )
             .filter(|(_, rb, collider)| rb.is_some() && collider.is_some())
             .map(|(object, rb, collider)| (object, rb.unwrap(), collider.unwrap()))
-            .for_each(|(object, rb, _)| {
+            .map(|(object, rb, _)| {
+                let mut cells = HashMap::default();
                 let rotation = rb.rotation();
                 
                 let rotation_matrix = Matrix2::new(
@@ -223,62 +256,86 @@ impl World {
                         let rotated_y = (rotated_point.y as f32 / PHYSICS_TO_WORLD + center.y) * PHYSICS_TO_WORLD;
 
                         let index = (y * object.object_size as i32 + x) as usize;
-                        if object.matrix[index].element != Element::Empty {
-                            cells.insert(pos2!(rotated_x.round() as i32, rotated_y.round() as i32), object.matrix[index]);
+                        if object.matrix[index].element != MatterType::Empty {
+                            cells.insert(pos2!(rotated_x.round() as i32, rotated_y.round() as i32), object.matrix[index].clone());
                         }
                     }
                 }
-            });
 
-        cells
+                (rb.position().translation, cells)
+            })
+            .collect::<Vec<(Translation2<f32>, HashMap<Pos2, Cell>)>>()
     }
 
     pub fn place_objects(&self) {
-        let cells = self.convert_objects_to_cells();
-        let mut groups_by_chunks: HashMap<Pos2, Vec<((i32, i32), Cell)>> = HashMap::default();
+        let objects = self.convert_objects_to_cells();
+        let mut groups_by_chunks: Vec<HashMap<Pos2, Vec<((i32, i32), Cell)>>> = vec![HashMap::default(); objects.len()];
         
-        cells.iter()
-            .filter(|(pos, _)| {
-                pos.x >= 0 && pos.y >= 0 && pos.x < WORLD_WIDTH * CHUNK_SIZE && pos.y < WORLD_HEIGHT * CHUNK_SIZE
-            })
-            .for_each(|(pos, cell)| {
-                groups_by_chunks
-                    .entry(pos2!(pos.x / CHUNK_SIZE, pos.y / CHUNK_SIZE))
-                    .or_insert(vec![])
-                    .push(((pos.x % CHUNK_SIZE, pos.y % CHUNK_SIZE), *cell));
+        objects.iter().enumerate()
+            .for_each(|(index, (_, cells))| {
+                cells.iter()
+                    .filter(|(pos, _)| {
+                        pos.x >= 0 && pos.y >= 0 && pos.x < WORLD_WIDTH * CHUNK_SIZE && pos.y < WORLD_HEIGHT * CHUNK_SIZE
+                    })
+                    .for_each(|(pos, cell)| {
+                        groups_by_chunks[index]
+                            .entry(pos2!(pos.x / CHUNK_SIZE, pos.y / CHUNK_SIZE))
+                            .or_insert(vec![])
+                            .push(((pos.x % CHUNK_SIZE, pos.y % CHUNK_SIZE), cell.clone()));
+                    });
             });
 
-        groups_by_chunks.into_iter()
-            .for_each(|(chunk_position, cells)| {
-                if let Some(chunk) = self.chunks.get(&chunk_position) {
-                    chunk.place_object(cells);
-                    self.active_chunks.insert(chunk_position);
-                };
-            });   
+        
+        groups_by_chunks.into_iter().enumerate()
+            .for_each(|(index, chunks)| {
+                chunks.into_iter()
+                    .for_each(|(chunk_position, cells)| {
+                        if let Some(chunk) = self.chunks.get(&chunk_position) {
+                            chunk.place_object(
+                                cells, 
+                                objects[index].0.x,
+                                objects[index].0.y,
+                            );
+                            self.active_chunks.insert(chunk_position);
+                        };
+                    });   
+            });
+            
     }
 
     pub fn remove_objects(&self) {
-        let cells = self.convert_objects_to_cells();
-        let mut groups_by_chunks: HashMap<Pos2, Vec<(i32, i32)>> = HashMap::default();
-        
-        cells.iter()
-            .filter(|(pos, _)| {
-                pos.x >= 0 && pos.y >= 0 && pos.x < WORLD_WIDTH * CHUNK_SIZE && pos.y < WORLD_HEIGHT * CHUNK_SIZE
-            })
-            .for_each(|(pos, _)| {
-                groups_by_chunks
-                    .entry(pos2!(pos.x / CHUNK_SIZE, pos.y / CHUNK_SIZE))
-                    .or_insert(vec![])
-                    .push((pos.x % CHUNK_SIZE, pos.y % CHUNK_SIZE));
+        let objects = self.convert_objects_to_cells();
+        let mut groups_by_chunks: Vec<HashMap<Pos2, Vec<(i32, i32)>>> = vec![HashMap::default(); objects.len()];
+
+
+        objects.iter().enumerate()
+            .for_each(|(index, (_, cells))| {
+                cells.iter()
+                    .filter(|(pos, _)| {
+                        pos.x >= 0 && pos.y >= 0 && pos.x < WORLD_WIDTH * CHUNK_SIZE && pos.y < WORLD_HEIGHT * CHUNK_SIZE
+                    })
+                    .for_each(|(pos, _)| {
+                        groups_by_chunks[index]
+                            .entry(pos2!(pos.x / CHUNK_SIZE, pos.y / CHUNK_SIZE))
+                            .or_insert(vec![])
+                            .push((pos.x % CHUNK_SIZE, pos.y % CHUNK_SIZE));
+                    });
             });
 
-        groups_by_chunks.into_iter()
-            .for_each(|(chunk_position, cells)| {
-                if let Some(chunk) = self.chunks.get(&chunk_position) {
-                    chunk.remove_object(cells);
-                    self.active_chunks.insert(chunk_position);
-                };
-            });   
+        groups_by_chunks.into_iter().enumerate()
+        .for_each(|(index, chunks)| {
+            chunks.into_iter()
+                .for_each(|(chunk_position, cells)| {
+                    if let Some(chunk) = self.chunks.get(&chunk_position) {
+                        chunk.remove_object(
+                            cells, 
+                            objects[index].0.x,
+                            objects[index].0.y,
+                        );
+                        self.active_chunks.insert(chunk_position);
+                    };
+                });   
+        });
     }
 
     pub fn release_chunk(&self, chunk_position: &Pos2) {
@@ -327,6 +384,10 @@ impl WorldApi {
         let mut pixels_count = 0;
         while self.previous_update_ms >= DELAY_MS {
             self.previous_update_ms -= DELAY_MS;
+            if self.previous_update_ms > DELAY_MS * 10 {
+                self.previous_update_ms = 0;
+                break;
+            }
             let (updated_chunk_count, updated_pixels_count) = self.update_iteration();
             chunks_count += updated_chunk_count;
             pixels_count += updated_pixels_count;
@@ -358,42 +419,47 @@ impl WorldApi {
                     updated_pixels.lock().unwrap().add_assign(chunk.update(self.chunk_manager.clone(), self.clock));
                 }
             }
-    
-            for (x, group) in groups.iter().rev() {   
-                for y in group.iter().rev() {
-                    let position = &pos2!(*x, *y);
-                    let chunk = self.chunk_manager.chunks.get(position).unwrap();
-                    let chunk_data = chunk.chunk_data.write().unwrap();
-
-                    engine.remove_collider_from_object(chunk_data.rb_handle.unwrap());
-
-                    if chunk.cell_count.lock().unwrap().eq(&0) {
-                        self.chunk_manager.release_chunk(position);
-                    }
-                    else {
-                        engine.replace_colliders_to_static_body(chunk_data.rb_handle.unwrap(), &chunk_data.colliders);
-                    }
-                }
-            }
         }
 
         self.chunk_manager.remove_objects();
         self.chunk_manager.physics_engine.lock().unwrap().step();
         self.chunk_manager.place_objects();
 
+        {
+            let mut engine = self.chunk_manager.physics_engine.lock().unwrap();
+    
+            for (x, group) in groups.iter().rev() {   
+                for y in group.iter().rev() {
+                    let position = &pos2!(*x, *y);
+                    let chunk = self.chunk_manager.chunks.get(position).unwrap();
+                    let rb_handle = chunk.chunk_data.read().unwrap().rb_handle.unwrap();
+    
+                    engine.remove_collider_from_object(rb_handle);
+    
+                    if chunk.cell_count.lock().unwrap().eq(&0) {
+                        self.chunk_manager.release_chunk(position);
+                    }
+                    else {
+                        chunk.create_colliders();
+                        engine.replace_colliders_to_static_body(rb_handle, &chunk.chunk_data.read().unwrap().colliders);
+                    }
+                }
+            }
+        }
+
         let lock = Arc::try_unwrap(updated_pixels).expect("Lock still has multiple owners");
         (positions.len() as u128, lock.into_inner().unwrap())
     }
 
-    pub fn place(&self, x: i32, y: i32, element: Element) {
+    pub fn place(&self, x: i32, y: i32, element: &MatterType) {
         self.chunk_manager.place(x, y, element);
     }
 
-    pub fn place_batch(&self, positions: HashSet<(i32, i32)>, element: Element) {
+    pub fn place_batch(&self, positions: HashSet<(i32, i32)>, element: &MatterType) {
         self.chunk_manager.place_batch(positions, element);
     }
 
-    pub fn place_object(&self, positions: HashSet<(i32, i32)>, element: Element, static_flag: bool) {
+    pub fn place_object(&self, positions: HashSet<(i32, i32)>, element: &MatterType, static_flag: bool) {
         self.chunk_manager.place_object(positions, element, static_flag);
     }
 
@@ -413,30 +479,48 @@ impl WorldApi {
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
-                    let cell = chunk_data.cells[get_cell_index(x as i32, y as i32)];
+                    let cell = &chunk_data.cells[get_cell_index(x as i32, y as i32)];
                     let offset = rand::thread_rng().gen_range(0..10);
                 
-                    let mut rgba = cell.element.color();
-                    match cell.element {
-                        Element::Coal | Element::Sand | Element::Wood | Element::Dirt => {
-                            for color in rgba.iter_mut() {
-                                *color = color.saturating_add(cell.ra);
-                            }
-                        }
+                    let rgba = match cell.element {
+                        MatterType::Empty => [0, 0, 0, 255],
+                        MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
+                            color[0].saturating_add(cell.ra),
+                            color[1].saturating_add(cell.ra),
+                            color[2].saturating_add(cell.ra),
+                            color[3].saturating_add(cell.ra),
+                        ],
+                        MatterType::Liquid { color, .. } => [
+                            color[0].saturating_add(offset),
+                            color[1].saturating_add(offset), 
+                            color[2].saturating_add(offset), 
+                            color[3].saturating_add(offset), 
+                        ],
+                        MatterType::Gas { color, .. } => [
+                            color[0].saturating_add(offset * 2),
+                            color[1].saturating_add(offset * 2), 
+                            color[2].saturating_add(offset * 2), 
+                            color[3].saturating_add(offset * 2),
+                        ],
+                        // MatterType::Coal | MatterType::Sand | MatterType::Wood | MatterType::Dirt => {
+                        //     for color in rgba.iter_mut() {
+                        //         *color = color.saturating_add(cell.ra);
+                        //     }
+                        // }
                         
-                        Element::Water => {
-                            for color in rgba.iter_mut() {
-                                *color = color.saturating_add(offset);
-                            }
-                        }
+                        // MatterType::Water => {
+                        //     for color in rgba.iter_mut() {
+                        //         *color = color.saturating_add(offset);
+                        //     }
+                        // }
                         
-                        Element::Gas => {
-                            for color in rgba.iter_mut() {
-                                *color = color.saturating_add(offset * 3);
-                            }
-                        }
-                        _ => {}
-                    }
+                        // MatterType::Gas => {
+                        //     for color in rgba.iter_mut() {
+                        //         *color = color.saturating_add(offset * 3);
+                        //     }
+                        // }
+                        // _ => {}
+                    };
 
                     frame[pixel_index as usize] = rgba[0];
                     frame[pixel_index as usize + 1] = rgba[1];
@@ -452,6 +536,58 @@ impl WorldApi {
                     }
                 }
             }
+
+            chunk.particles.lock().unwrap().iter()
+                .for_each(|particle| {
+                    match particle.simulation {
+                        SimulationType::Particle { x, y, .. } => {
+                            let x = (x * CHUNK_SIZE as f32).floor() as i32;
+                            let y = (y * CHUNK_SIZE as f32).floor() as i32;
+                            let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
+
+                            let offset = rand::thread_rng().gen_range(0..10);
+                
+                            let rgba = match particle.element {
+                                MatterType::Empty => [0, 0, 0, 255],
+                                MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
+                                    color[0].saturating_add(particle.ra),
+                                    color[1].saturating_add(particle.ra),
+                                    color[2].saturating_add(particle.ra),
+                                    color[3].saturating_add(particle.ra),
+                                ],
+                                MatterType::Liquid { color, .. } => [
+                                    color[0].saturating_add(offset),
+                                    color[1].saturating_add(offset), 
+                                    color[2].saturating_add(offset), 
+                                    color[3].saturating_add(offset), 
+                                ],
+                                MatterType::Gas { color, .. } => [
+                                    color[0].saturating_add(offset * 2),
+                                    color[1].saturating_add(offset * 2), 
+                                    color[2].saturating_add(offset * 2), 
+                                    color[3].saturating_add(offset * 2),
+                                ],
+                            };
+
+                            frame[pixel_index as usize] = rgba[0];
+                            frame[pixel_index as usize + 1] = rgba[1];
+                            frame[pixel_index as usize + 2] = rgba[2];
+                            frame[pixel_index as usize + 3] = rgba[3];
+
+                            #[cfg(feature = "dirty_chunk_rendering")]
+                            if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
+                                frame[pixel_index as usize] = frame[pixel_index as usize].saturating_add(50);
+                                frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(25);
+                                frame[pixel_index as usize + 2] = frame[pixel_index as usize + 2].saturating_add(25);
+                                frame[pixel_index as usize + 3] = frame[pixel_index as usize + 3].saturating_add(25);
+                            }
+                        },
+                        _ => panic!()
+                    }
+                });
+
+
+
 
             #[cfg(feature = "chunk_border_rendering")]
             for x in 0..CHUNK_SIZE {
@@ -515,30 +651,30 @@ impl WorldApi {
             for x in 0..CHUNK_SIZE {
                 for y in 0..CHUNK_SIZE {
                     let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x + x_offset) * 4;
-                    let cell = chunk_data.cells[get_cell_index(x as i32, y as i32)];
+                    let cell = &chunk_data.cells[get_cell_index(x as i32, y as i32)];
                     let offset = rand::thread_rng().gen_range(0..25);
 
-                    let mut rgba = cell.element.color();
-                    match cell.element {
-                        Element::Coal | Element::Sand | Element::Wood | Element::Dirt => {
-                            for color in rgba.iter_mut() {
-                                *color = color.saturating_add(cell.ra);
-                            }
-                        }
-                        
-                        Element::Water => {
-                            for color in rgba.iter_mut() {
-                                *color = color.saturating_add(offset);
-                            }
-                        }
-                        
-                        Element::Gas => {
-                            for color in rgba.iter_mut() {
-                                *color = color.saturating_add(offset * 3);
-                            }
-                        }
-                        _ => {}
-                    }
+                    let rgba = match cell.element {
+                        MatterType::Empty => [0, 0, 0, 255],
+                        MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
+                            color[0].saturating_add(cell.ra),
+                            color[1].saturating_add(cell.ra),
+                            color[2].saturating_add(cell.ra),
+                            color[3].saturating_add(cell.ra),
+                        ],
+                        MatterType::Liquid { color, .. } => [
+                            color[0].saturating_add(offset),
+                            color[1].saturating_add(offset),
+                            color[2].saturating_add(offset),
+                            color[3].saturating_add(offset),
+                        ],
+                        MatterType::Gas { color, .. } => [
+                            color[0].saturating_add(offset * 2),
+                            color[1].saturating_add(offset * 2),
+                            color[2].saturating_add(offset * 2),
+                            color[3].saturating_add(offset * 2),
+                        ],
+                    };
 
                     frame[pixel_index as usize] = rgba[0];
                     frame[pixel_index as usize + 1] = rgba[1];

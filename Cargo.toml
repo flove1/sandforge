@@ -20,6 +20,9 @@ harness = false
 inherits = "release"
 debug = true
 
+[profile.release]
+
+
 [profile.release-optimized]
 inherits = "release"
 panic = "abort"
@@ -45,3 +48,7 @@ threadpool = "1.8.1"
 ahash = "0.8.3"
 rapier2d = "0.17.2"
 cdt = "0.1.0"
+lazy_static = "1.4.0"
+serde_yaml = "0.9.25"
+serde = { version = "1.0.188", features = ["derive"] }
+pretty_env_logger = "0.5.0"

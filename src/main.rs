@@ -9,7 +9,12 @@ fn main() {
 
 #[cfg(not(feature = "bench"))] 
 fn main() {
-    env_logger::init();
+    pretty_env_logger::formatted_builder()
+        .filter_level(log::LevelFilter::Error)
+        .format_target(false)
+        .format_timestamp(None)
+        .init();
+
 
     std::thread::spawn(|| { sandforge::deadlock_checker() });
 

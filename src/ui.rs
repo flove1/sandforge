@@ -6,7 +6,7 @@ use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 
 use crate::input::InputManager;
-use crate::sim::elements::Element;
+use crate::sim::elements::{MatterType, MATTERS};
 
 pub(crate) struct Framework {
     egui_ctx: Context,
@@ -221,7 +221,7 @@ impl Gui {
             ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
             let mut empty = true;
-            for element in Element::iterator() {
+            for element in MATTERS.iter() {
                 if !empty {
                     ui.separator();
                 }
@@ -229,7 +229,13 @@ impl Gui {
                     empty = false;
                 }
 
-                let color = element.color();
+                let color = match *element {
+                    MatterType::Empty => [0, 0, 0, 0],
+                    MatterType::Static { color, .. } => color,
+                    MatterType::Powder { color, .. } => color,
+                    MatterType::Liquid { color, .. } => color,
+                    MatterType::Gas { color, .. } => color,
+                };
 
                 let (rect, response) = ui.allocate_exact_size(egui::Vec2 { x: ui.available_width(), y: ctx.pixels_per_point() * 16.0 }, egui::Sense { click: true, drag: false, focusable: true });
                 
@@ -269,7 +275,15 @@ impl Gui {
                                                 egui::Color32::WHITE
                                             } 
                                         },
-                                        element.to_string()
+
+
+                                        match element {
+                                            MatterType::Empty => "Eraser",
+                                            MatterType::Static { name, .. } => name,
+                                            MatterType::Powder { name, .. } => name,
+                                            MatterType::Liquid { name, .. } => name,
+                                            MatterType::Gas { name, .. } => name,
+                                        }
                                     );
                                 });
                             });
@@ -279,7 +293,7 @@ impl Gui {
                 });
 
                 if response.clicked() {
-                    input_manager.element = *element;
+                    input_manager.element = element.clone();
                 }
             }
 

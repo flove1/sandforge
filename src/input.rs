@@ -4,10 +4,10 @@ use ahash::HashSet;
 use fps_counter::FPSCounter;
 use winit::{dpi::PhysicalPosition, event::ElementState};
 
-use crate::{sim::elements::Element, helpers::line_from_pixels};
+use crate::{helpers::line_from_pixels, sim::elements::MatterType};
 
 pub struct InputManager {
-    pub element: Element,
+    pub element: MatterType,
     pub draw_object: bool,
     pub draw_static_object: bool,
     pub render_objects: bool,
@@ -34,7 +34,7 @@ pub struct Frame {
 impl InputManager {
     pub fn new() -> Self {
         Self {
-            element: Element::Sand,
+            element: MatterType::Empty,
             draw_object: false,
             draw_static_object: false,
             render_objects: true,
@@ -103,6 +103,7 @@ impl InputManager {
                             self.placing_queue.insert((x + dx, y + dy));
                         }
                     }
+                    true
                 };
                 
                 let (x1, y1) = if let Ok((x, y)) = pixels.window_pos_to_pixel((last_position.x as f32, last_position.y as f32)) {

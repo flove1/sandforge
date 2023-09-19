@@ -12,9 +12,8 @@ mod input;
 mod renderer;
 mod helpers;
 
-use crate::sim::elements::Element;
+use crate::sim::elements::MatterType;
 
-use error_iter::ErrorIter as _;
 use input::InputManager;
 use log::error;
 use parking_lot::deadlock;
@@ -73,9 +72,7 @@ pub fn run() {
                     match event {
                         winit::event::WindowEvent::Resized( size ) => {
                             if let Err(err) = pixels.resize_surface(size.width, size.height) {
-                                for source in err.sources() {
-                                    error!("{source}");
-                                }
+                                error!("{}", err.to_string());
                                 control_flow.set_exit();
                             }
                             interface.resize(size.width, size.height);
@@ -107,14 +104,14 @@ pub fn run() {
                 let now = Instant::now();
                 if world.needs_update(now.duration_since(input_manager.previous_frame.instant).as_millis()) {
                     if input_manager.draw_object {
-                        if input_manager.element == Element::Empty {
+                        if input_manager.element == MatterType::Empty {
                             input_manager.placing_queue.clear();
                         }
                         
                         if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
                             world.place_object(
                                 input_manager.placing_queue.drain().collect(), 
-                                input_manager.element, 
+                                &input_manager.element, 
                                 input_manager.draw_static_object
                             );
                         }
@@ -123,7 +120,7 @@ pub fn run() {
                         if !input_manager.placing_queue.is_empty() {
                             world.place_batch(
                                 input_manager.placing_queue.drain().collect(), 
-                                input_manager.element
+                                &input_manager.element
                             );
                         }
                     }                        
@@ -147,9 +144,7 @@ pub fn run() {
                 });
 
                 if let Err(err) = render_result {
-                    for source in err.sources() {
-                        error!("{source}");
-                    }
+                    error!("{}", err.to_string());
                     control_flow.set_exit();
                 }
             },
@@ -184,15 +179,21 @@ pub fn bench_init() -> WorldApi {
 }
 
 pub fn bench_fill(world: &mut WorldApi) {
+    let matter = MatterType::Powder { 
+        name: "Bench".to_string(), 
+        color: [0, 0, 0, 0], 
+        color_offset: 0 
+    };
+
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
         for y in 0..CHUNK_SIZE {
-            world.place(x, y, Element::Sand);
+            world.place(x, y, &matter);
         }
     }
 
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
         for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
-            world.place(x, y, Element::Sand);
+            world.place(x, y, &matter);
         }
     }
 }

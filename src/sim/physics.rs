@@ -3,7 +3,7 @@ use rapier2d::{prelude::*, na::Isometry2};
 
 use crate::constants::{CHUNK_SIZE, WORLD_WIDTH, WORLD_HEIGHT, PHYSICS_TO_WORLD};
 
-use super::{cell::{Cell, EMPTY_CELL}, colliders::create_colliders, elements::Element};
+use super::{cell::{Cell, EMPTY_CELL, SimulationType}, elements::MatterType, colliders::create_triangulated_collider};
 
 pub struct PhysicsObject {
     pub rb_handle: RigidBodyHandle,
@@ -52,7 +52,7 @@ impl Physics {
         self.objects[object_id].matrix[cell_index] = cell;
     }
     
-    pub fn new_object(&mut self, positions: HashSet<(i32, i32)>, element: Element, static_flag: bool) {
+    pub fn new_object(&mut self, positions: HashSet<(i32, i32)>, element: &MatterType, static_flag: bool) {
         let mut x_positions = positions.iter().map(|position| position.0).collect::<Vec<i32>>();
         x_positions.sort();
 
@@ -82,16 +82,16 @@ impl Physics {
         };
 
         let mut matrix = vec![0; size.pow(2)];
-        let mut cell_matrix = vec![EMPTY_CELL; size.pow(2)];
+        let mut cell_matrix = vec![EMPTY_CELL.clone(); size.pow(2)];
 
         positions.iter().for_each(|(x, y)| {
             let index = ((y - y_min + y_offset) * size as i32 + (x - x_min + x_offset)) as usize;
-            cell_matrix[index] = Cell::new(element, 0);
-            cell_matrix[index].parent_id = Some(self.objects.len() as u64);
+            cell_matrix[index] = Cell::new(&element, 0);
+            cell_matrix[index].simulation = SimulationType::RigiBody(self.objects.len() as u64);
             matrix[index] = 1;
         });
 
-        let (collider, _) = create_colliders(1, &mut matrix, size as i32).pop().unwrap();
+        let (collider, _) = create_triangulated_collider(&mut matrix, size as i32);
         
         let rb_handle = self.rigid_body_set.insert(
             if static_flag {

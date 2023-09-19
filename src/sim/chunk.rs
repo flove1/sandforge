@@ -1,11 +1,12 @@
 use std::ops::{AddAssign, SubAssign};
 use std::sync::{Arc, Mutex, RwLock};
 
+use egui::pos2;
 use rand::{Rng, SeedableRng};
 use rapier2d::prelude::{Collider, RigidBodyHandle};
 
 use super::cell::*;
-use super::elements::Element;
+use super::elements::MatterType;
 use super::helpers::get_cell_index;
 use super::colliders::{label_matrix, create_polyline_colliders};
 use super::world::World;
@@ -15,18 +16,22 @@ use crate::{constants::*, pos2};
 
 #[derive(Default)]
 pub struct Chunk {
-    placing_queue: Mutex<Vec<(Pos2, Element)>>,
-    pub(super) chunk_data: RwLock<ChunkData>,
     pub(super) position: Pos2,
+
+    pub(super) chunk_data: RwLock<ChunkData>,
+
+    pub(super) particles: Mutex<Vec<Cell>>,
+    pub(super) placing_queue: Mutex<Vec<(Pos2, MatterType)>>,
     pub(super) cell_count: Mutex<u64>,
 }
 
 #[derive(Default)]
 pub struct ChunkData {
     pub(super) cells: Vec<Cell>,
+
     pub(super) dirty_rect: Rect,
     pub(super) rb_handle: Option<RigidBodyHandle>,
-    pub(super) colliders: Vec<(Collider, (f32, f32))>
+    pub(super) colliders: Vec<(Collider, (f32, f32))>,
 }
 #[derive(Default, Clone, Copy)]
 pub struct Rect {
@@ -37,37 +42,6 @@ pub struct Rect {
 impl Rect {
     pub fn new() -> Self {
         Self { ..Default::default() }
-    }
-
-    pub fn combine(&mut self, other: Self) {
-        if other.is_empty() {
-            return;
-        }
-
-        if self.is_empty() {
-            self.corners = other.corners;
-            return;
-        }
-
-
-        let corners_1 = self.corners.as_mut().unwrap();
-        let corners_2 = other.corners.unwrap();
-        
-        if corners_1[0] > corners_2[0] {
-            corners_1[0] = corners_2[0];
-        }
-
-        if corners_1[1] > corners_2[1] {
-            corners_1[1] = corners_2[1];
-        }
-
-        if corners_1[2] < corners_2[2] {
-            corners_1[2] = corners_2[2];
-        }
-
-        if corners_1[3] < corners_2[3] {
-            corners_1[3] = corners_2[3];
-        }
     }
 
     pub fn update_position(&mut self, position: &Pos2) {
@@ -150,11 +124,11 @@ impl  ChunkData {
     //==================
 
     pub(crate) fn get_cell(&self, cell_position: Pos2) -> Cell {
-        self.cells[cell_position.to_index(CHUNK_SIZE)]
+        self.cells[cell_position.to_index(CHUNK_SIZE)].clone()
     }
 
-    pub(crate) fn match_cell(&self, cell_position: Pos2, element: Element) -> bool {
-        self.cells[cell_position.to_index(CHUNK_SIZE)].element == element
+    pub(crate) fn match_cell(&self, cell_position: Pos2, element: &MatterType) -> bool {
+        self.cells[cell_position.to_index(CHUNK_SIZE)].element == *element
     }
 
     pub(crate) fn set_cell(&mut self, cell_position: Pos2, cell: Cell) {
@@ -163,7 +137,7 @@ impl  ChunkData {
 
     pub(crate) fn replace_cell(&mut self, cell_position: Pos2, cell: Cell) -> Cell {
         let index = cell_position.to_index(CHUNK_SIZE);
-        let replaced_cell = self.cells[index];
+        let replaced_cell = self.cells[index].clone();
         self.cells[index] = cell;
         replaced_cell
     }
@@ -193,8 +167,9 @@ impl Chunk {
                 cells: vec![Cell::default(); CHUNK_SIZE.pow(2) as usize],
                 dirty_rect: Rect::default(),
                 colliders: vec![],
-                rb_handle: Some(rb_handle)
+                rb_handle: Some(rb_handle),
             }),
+            particles: Mutex::new(vec![]),
             position,
             ..Default::default()
         }
@@ -204,45 +179,59 @@ impl Chunk {
     // Global methods
     //================
 
-    pub(crate) fn place(&self, x: i32, y: i32, element: Element) {
-        self.placing_queue.lock().unwrap().push((pos2!(x, y), element));
+    pub(crate) fn place(&self, x: i32, y: i32, element: &MatterType) {
+        self.placing_queue.lock().unwrap().push((pos2!(x, y), element.clone()));
     }
 
-    pub(crate) fn place_batch(&self, positions: Vec<(i32, i32)>, element: Element) {
+    pub(crate) fn place_batch(&self, positions: Vec<(i32, i32)>, element: &MatterType) {
         let mut queue = self.placing_queue.lock().unwrap();
         positions.into_iter()
             .for_each(|pos| {
-                queue.push((pos2!(pos.0, pos.1), element));
+                queue.push((pos2!(pos.0, pos.1), element.clone()));
             });
     }
 
-    pub(crate) fn place_object(&self, cells: Vec<((i32, i32), Cell)>) {
+    pub(crate) fn place_object(&self, cells: Vec<((i32, i32), Cell)>, x: f32, y: f32) {
         let mut data = self.chunk_data.write().unwrap();
         let mut count = self.cell_count.lock().unwrap();
 
         cells.iter()
             .for_each(|(pos, cell)| {
                 let index = (pos.1 * CHUNK_SIZE + pos.0) as usize;
-                if data.cells[index].element == Element::Empty {
+                if data.cells[index].element == MatterType::Empty {
                     count.add_assign(1);
-                    data.cells[index] = *cell;
+                    data.cells[index] = cell.clone();
+                }
+                else if !matches!(data.cells[index].element, MatterType::Static { .. }) {
+                    let mut particle = data.cells[index].clone();
+                    data.cells[index] = cell.clone();
+                    
+                    particle.simulation = SimulationType::Particle { 
+                        x: pos.0 as f32 / CHUNK_SIZE as f32,
+                        y: pos.1 as f32 / CHUNK_SIZE as f32, 
+                        dx: 1.0 / (pos.0 as f32 - x) / CHUNK_SIZE as f32 / 10.0, 
+                        dy: 1.0 / (pos.1 as f32 - y) / CHUNK_SIZE as f32 / 10.0, 
+                        collided: false
+                    };
+
+                    self.particles.lock().unwrap().push(particle);
+                    
                 }
             });
     }
 
-    pub(crate) fn remove_object(&self, cells: Vec<(i32, i32)>) {
-        // dbg!("removed", self.position, cells.len());
+    pub(crate) fn remove_object(&self, cells: Vec<(i32, i32)>, x: f32, y: f32) {
         let mut data = self.chunk_data.write().unwrap();
         let mut count = self.cell_count.lock().unwrap();
 
         cells.iter()
             .for_each(|pos| {
                 let index = (pos.1 * CHUNK_SIZE + pos.0) as usize;
-                if data.cells[index].parent_id.is_some() {
-                    if data.cells[index].element != Element::Empty {
+                if matches!(data.cells[index].simulation, SimulationType::RigiBody(..)) {
+                    if data.cells[index].element != MatterType::Empty {
                         count.sub_assign(1);
                     }
-                    data.cells[index] = EMPTY_CELL;
+                    data.cells[index] = EMPTY_CELL.clone();
                 }
             });
     }
@@ -268,7 +257,7 @@ impl Chunk {
         let mut label = 0;
 
         let condition = |index: usize| {
-            matches!(data.cells[index].element, Element::Dirt)
+            matches!(data.cells[index].element, MatterType::Static { .. }) && !matches!(data.cells[index].simulation, SimulationType::RigiBody(..))
         };
         
         for x in 0..CHUNK_SIZE {
@@ -300,12 +289,12 @@ impl Chunk {
         for (cell_position, element) in queue.drain(..) {
             let index = get_cell_index(cell_position.x, cell_position.y);
 
-            if data.cells[index].element == Element::Empty && element != Element::Empty {
-                data.set_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
+            if data.cells[index].element == MatterType::Empty && element != MatterType::Empty {
+                data.set_cell(cell_position, Cell::new(&element, clock.wrapping_sub(4)));
                 self.cell_count.lock().unwrap().add_assign(1);
             }
-            else if data.cells[index].element != Element::Empty && element == Element::Empty {
-                data.set_cell(cell_position, Cell::new(element, clock.wrapping_sub(4)));
+            else if data.cells[index].element != MatterType::Empty && element == MatterType::Empty {
+                data.set_cell(cell_position, Cell::new(&element, clock.wrapping_sub(4)));
                 self.cell_count.lock().unwrap().sub_assign(1);
             }
 
@@ -328,37 +317,100 @@ impl Chunk {
             }
         };
         
-        self.create_colliders();
-        let mut data = self.chunk_data.write().unwrap();
         let mut updated_count: u128 = 0;
-        
-        let mut api = ChunkApi { 
-            cell_position: pos2!(0, 0),
-            chunk: self,
-            chunk_data: &mut data,
-            chunk_manager: manager.clone(),
-            clock,
-            rng: rand::rngs::SmallRng::from_entropy()
-        };
 
-        for x in x_range.iter() {
-            for y in y_range.iter().rev() {
-                let cell = &api.chunk_data.cells[get_cell_index(*x, *y)];
+        {
+            let mut data = self.chunk_data.write().unwrap();
             
-                if cell.element == Element::Empty || cell.parent_id.is_some() {
-                    continue;
-                }
-
-                if cell.clock == clock {
-                    api.chunk_data.dirty_rect.update(&pos2!(*x, *y));
-                    continue;
-                }
-
-                api.cell_position = pos2!(*x, *y);
+            let mut api = ChunkApi { 
+                cell_position: pos2!(0, 0),
+                chunk: self,
+                chunk_data: &mut data,
+                chunk_manager: manager.clone(),
+                clock,
+                rng: rand::rngs::SmallRng::from_entropy()
+            };
+    
+            for x in x_range.iter() {
+                for y in y_range.iter().rev() {
+                    let cell = &api.chunk_data.cells[get_cell_index(*x, *y)];
                 
-                api = (*cell).update(api, 0.0, clock);
-                updated_count += 1;
+                    if cell.element == MatterType::Empty || matches!(cell.simulation, SimulationType::RigiBody(..)) {
+                        continue;
+                    }
+    
+                    if cell.clock == clock {
+                        api.chunk_data.dirty_rect.update(&pos2!(*x, *y));
+                        continue;
+                    }
+    
+                    api.cell_position = pos2!(*x, *y);
+                    
+                    cell.clone().update(&mut api, 0.0, clock);
+                    updated_count += 1;
+                }
             }
+
+            let mut particles = self.particles.lock().unwrap();
+
+            for index in 0..particles.len() {
+                let particle = &mut particles[index];
+                match particle.simulation {
+                    SimulationType::Particle { x, y, .. } => {
+                        api.cell_position = pos2!(
+                            (x * CHUNK_SIZE as f32).floor() as i32,
+                            (y * CHUNK_SIZE as f32).floor() as i32
+                        );
+                        particle.update(&mut api, 0.0, clock);
+                    },
+                    _ => panic!()
+                }
+            }
+
+            particles.retain(|particle| {
+                match particle.simulation {
+                    SimulationType::Particle { x, y, .. } => {
+                        if x < 0.0 || y < 0.0 || x >= 1.0 || y >= 1.0 {
+                            manager.move_particle(self.position, particle.clone());
+                            false
+                        }
+                        else {
+                            true
+                        }
+                    }
+                    _ => panic!()
+                }
+
+            });
+
+            particles.retain(|particle| {
+                match particle.simulation {
+                    SimulationType::Particle { x, y, collided, .. } => {
+                        if !collided {
+                            return true
+                        }
+
+                        let (x, y) = (
+                            (x * CHUNK_SIZE as f32).floor() as i32,
+                            (y * CHUNK_SIZE as f32).floor() as i32
+                        );
+
+                        if data.cells[get_cell_index(x, y)].element == MatterType::Empty {
+                            self.cell_count.lock().unwrap().add_assign(1);
+
+                            data.cells[get_cell_index(x, y)] = Cell {
+                                simulation: SimulationType::Ca,
+                                ..particle.clone()
+                            };
+                            false
+                        }
+                        else {
+                            true
+                        }
+                    }
+                    _ => panic!()
+                }
+            });
         }
 
         return updated_count;
@@ -390,11 +442,11 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
         }
     }
 
-    pub fn match_element(&self, dx: i32, dy: i32, element: Element) -> bool {
+    pub fn match_element(&self, dx: i32, dy: i32, element: &MatterType) -> bool {
         let mut cell_position = self.cell_position.add(dx, dy);
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) {
-            self.chunk_data.match_cell(cell_position, element)
+            self.chunk_data.match_cell(cell_position, &element)
         }
         else {
             self.chunk_manager.match_cell(self.chunk.position, cell_position, element)
@@ -443,12 +495,12 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
             }
             else {
                 let old_cell = self.chunk_data.get_cell(cell_position);
-                let new_cell = self.chunk_manager.replace_cell(self.chunk.position, new_cell_position, old_cell);
+                let new_cell = self.chunk_manager.replace_cell(self.chunk.position, new_cell_position, old_cell.clone());
 
-                if old_cell.element != Element::Empty && new_cell.element == Element::Empty {
+                if old_cell.element != MatterType::Empty && new_cell.element == MatterType::Empty {
                     self.chunk.cell_count.lock().unwrap().sub_assign(1);
                 }
-                else if old_cell.element == Element::Empty && new_cell.element != Element::Empty {
+                else if old_cell.element == MatterType::Empty && new_cell.element != MatterType::Empty {
                     self.chunk.cell_count.lock().unwrap().add_assign(1);
                 }
 
@@ -459,6 +511,10 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
             self.cell_position.change(dx, dy);
         } 
 
+    }
+
+    pub fn keep_alive(&mut self, dx: i32, dy: i32) {
+        self.chunk_data.update_dirty_rect(&self.cell_position.add(dx, dy));
     }
 
     pub fn update(&mut self, cell: Cell) {

@@ -3,74 +3,80 @@ use rand::Rng;
 use super::chunk::ChunkApi;
 use super::elements::*;
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 pub struct Cell {
-    pub element: Element,
+    pub element: MatterType,
     pub ra: u8,
     pub rb: u8,
     pub clock: u8,
-    pub parent_id: Option<u64>,
     pub flags: u16,
+    pub simulation: SimulationType
 }
 
-pub static WALL_CELL: Cell = Cell {
-    element: Element::Stone,
-    ra: 0,
-    rb: 0,
-    clock: 0,
-    flags: 0,
-    parent_id: None,
-};
+#[derive(Default, Clone)]
+pub enum SimulationType {
+    #[default]
+    Ca,
+    Particle {
+        x: f32,
+        y: f32,
+        dx: f32,
+        dy: f32,
+        collided: bool,
+    },
+    RigiBody(u64),
+}
 
 pub static EMPTY_CELL: Cell = Cell {
-    element: Element::Empty,
+    element: MatterType::Empty,
     ra: 0,
     rb: 0,
     clock: 0,
     flags: 0,
-    parent_id: None,
+    simulation: SimulationType::Ca,
 };
 
 impl Cell {
-    pub fn new(element: Element, clock: u8) -> Self {
+    pub fn new(element: &MatterType, clock: u8) -> Self {
         let mut cell = Self {
-            element,
+            element: element.clone(),
             clock,
             ..Default::default()
         };
 
         match cell.element {
-            Element::Coal | Element::Water | Element::Gas | Element::Sand | Element::Wood => {cell.ra = rand::thread_rng().gen_range(0..25)},
-            Element::Dirt => {cell.ra = rand::thread_rng().gen_range(0..100)},
-            _ => {},
+            MatterType::Empty => {},
+            MatterType::Static { color_offset, .. } 
+                | MatterType::Powder { color_offset, .. } 
+                | MatterType::Liquid { color_offset, .. }
+                | MatterType::Gas { color_offset, .. }
+                => cell.ra = rand::thread_rng().gen_range(0..=color_offset),
         }
-
-        // match  cell.element {
-        //     Element::Fire => {cell.rb = 3}
-        //     _ => {}
-        // }
 
         cell
     }
 
-    pub fn new_with_rb(element: Element, clock: u8, rb: u8) -> Self {
+    pub fn new_with_rb(element: &MatterType, clock: u8, rb: u8) -> Self {
         let mut cell = Self::new(element, clock);
         cell.rb = rb;
 
         cell
     }
 
-    pub fn update<'a, 'b>(mut self, mut api: ChunkApi<'a, 'b>, dt: f32, clock: u8) -> ChunkApi<'a, 'b>  {
+    pub fn update<'a, 'b>(&mut self, api: &mut ChunkApi<'a, 'b>, dt: f32, clock: u8) {
         self.clock = clock;
 
-        api = match self.element {
-            Element::Water => { update_liquid(&mut self, api, dt) },
-            Element::Coal | Element::Sand => { update_sand(&mut self, api, dt) },
-            // Element::Fire => { update_fire(&mut self, api, dt) },
-            Element::Gas => { update_gas(&mut self, api, dt) },
-            _ => { api }
-        };
-
-        return api;
+        match self.simulation {
+            SimulationType::Ca => {
+                match self.element {
+                    MatterType::Powder{ .. } => update_sand(self, api, dt),
+                    MatterType::Liquid{ .. } => update_liquid(self, api, dt),
+                    MatterType::Gas{ .. } => update_gas(self, api, dt),
+                    _ => {}
+                };
+            },
+            SimulationType::Particle { .. } => update_particle(self, api, dt),
+            SimulationType::RigiBody (_) => {},
+        }
     }
 }
