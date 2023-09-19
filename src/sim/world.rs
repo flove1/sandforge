@@ -2,11 +2,13 @@ use std::{sync::{Arc, Mutex}, ops::{AddAssign, SubAssign}, collections::{BTreeMa
 
 use ahash::{RandomState, HashSet, HashMap};
 use dashmap::{DashMap, DashSet};
+use egui_wgpu::wgpu;
+use pixels::Pixels;
 use rand::Rng;
-use rapier2d::na::{Matrix2, Vector2, Translation2};
+use rapier2d::{na::{Matrix2, Vector2, Translation2, RealField}, prelude::ColliderSet};
 use threadpool::ThreadPool;
 
-use crate::{constants::*, renderer::Vertex, pos2, vector::Pos2};
+use crate::{constants::*, renderer::{Vertex, MeshRenderer}, pos2, vector::Pos2};
 use super::{chunk::Chunk, helpers::get_cell_index, cell::{EMPTY_CELL, Cell, SimulationType}, physics::Physics, elements::MatterType};
 
 pub struct World {
@@ -83,6 +85,10 @@ impl World {
             });   
     }
 
+    //=============
+    // Rigidbodies
+    //=============
+
     pub fn place_object(&self, positions: HashSet<(i32, i32)>, element: &MatterType, static_flag: bool) {
         self.physics_engine.lock().unwrap().new_object(positions, element, static_flag);
     }
@@ -90,6 +96,10 @@ impl World {
     pub fn modify_object(&self, object_id: usize, cell_index: usize, cell: Cell) {
         self.physics_engine.lock().unwrap().modify_object(object_id, cell_index, cell);
     }
+
+    //=======================================
+    // Interaction of chunks with each other
+    //=======================================
 
     pub(crate) fn update_cell(&self, chunk_position: Pos2, cell_position: Pos2, cell: Cell) {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
@@ -220,6 +230,10 @@ impl World {
             _ => panic!()
         } 
     }
+
+    //=======================================
+    // Convertion of rigidbody physics to CA
+    //=======================================
 
     pub fn convert_objects_to_cells(&self) -> Vec<(Translation2<f32>, HashMap<Pos2, Cell>)> {
         let engine = self.physics_engine.lock().unwrap();
@@ -374,6 +388,9 @@ pub struct WorldApi {
 }
 
 impl WorldApi {
+    //============
+    // Simulation
+    //============
     pub fn needs_update(&mut self, dt: u128) -> bool {
         self.previous_update_ms += dt;
         self.previous_update_ms >= DELAY_MS
@@ -451,6 +468,10 @@ impl WorldApi {
         (positions.len() as u128, lock.into_inner().unwrap())
     }
 
+    //=====================
+    // Interaction with ui
+    //=====================
+
     pub fn place(&self, x: i32, y: i32, element: &MatterType) {
         self.chunk_manager.place(x, y, element);
     }
@@ -463,227 +484,194 @@ impl WorldApi {
         self.chunk_manager.place_object(positions, element, static_flag);
     }
 
-    pub fn render(&self, frame: &mut [u8]) -> Vec<Vec<Vertex>> {
-        let colliders: Vec<Vec<Vertex>> = vec![];
+    //===========
+    // Rendering
+    //===========
 
-        for chunk_position in self.chunk_manager.active_chunks.clone() {
-            let chunk = self.chunk_manager.chunks.get(&chunk_position).unwrap();
-            let x_offset = chunk_position.x * CHUNK_SIZE;
-            let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
+    pub fn render(&self, pixels: &mut Pixels, mesh_renderer: &mut MeshRenderer) {
+        {
+            let frame = pixels.frame_mut();
 
-            let chunk_data = chunk.chunk_data.read().unwrap();
-
-            #[cfg(feature = "dirty_chunk_rendering")]
-            let (dirty_rect_x, dirty_rect_y) = chunk_data.dirty_rect.get_ranges_render();
-
-            for x in 0..CHUNK_SIZE {
+            for chunk_position in self.chunk_manager.active_chunks.clone() {
+                let chunk = self.chunk_manager.chunks.get(&chunk_position).unwrap();
+                let x_offset = chunk_position.x * CHUNK_SIZE;
+                let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
+    
+                let chunk_data = chunk.chunk_data.read().unwrap();
+    
+                #[cfg(feature = "dirty_chunk_rendering")]
+                let (dirty_rect_x, dirty_rect_y) = chunk_data.dirty_rect.get_ranges_render();
+    
+                for x in 0..CHUNK_SIZE {
+                    for y in 0..CHUNK_SIZE {
+                        let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
+                        let cell = &chunk_data.cells[get_cell_index(x as i32, y as i32)];
+                        let offset = rand::thread_rng().gen_range(0..10);
+                    
+                        let rgba = match cell.element {
+                            MatterType::Empty => [0, 0, 0, 255],
+                            MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
+                                color[0].saturating_add(cell.ra),
+                                color[1].saturating_add(cell.ra),
+                                color[2].saturating_add(cell.ra),
+                                color[3].saturating_add(cell.ra),
+                            ],
+                            MatterType::Liquid { color, .. } => [
+                                color[0].saturating_add(offset),
+                                color[1].saturating_add(offset), 
+                                color[2].saturating_add(offset), 
+                                color[3].saturating_add(offset), 
+                            ],
+                            MatterType::Gas { color, .. } => [
+                                color[0].saturating_add(offset * 2),
+                                color[1].saturating_add(offset * 2), 
+                                color[2].saturating_add(offset * 2), 
+                                color[3].saturating_add(offset * 2),
+                            ],
+                        };
+    
+                        frame[pixel_index as usize] = rgba[0];
+                        frame[pixel_index as usize + 1] = rgba[1];
+                        frame[pixel_index as usize + 2] = rgba[2];
+                        frame[pixel_index as usize + 3] = rgba[3];
+    
+                        #[cfg(feature = "dirty_chunk_rendering")]
+                        if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
+                            frame[pixel_index as usize] = frame[pixel_index as usize].saturating_add(50);
+                            frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(25);
+                            frame[pixel_index as usize + 2] = frame[pixel_index as usize + 2].saturating_add(25);
+                            frame[pixel_index as usize + 3] = frame[pixel_index as usize + 3].saturating_add(25);
+                        }
+                    }
+                }
+    
+                chunk.particles.lock().unwrap().iter()
+                    .for_each(|particle| {
+                        match particle.simulation {
+                            SimulationType::Particle { x, y, .. } => {
+                                let x = (x * CHUNK_SIZE as f32).floor() as i32;
+                                let y = (y * CHUNK_SIZE as f32).floor() as i32;
+                                let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
+    
+                                let offset = rand::thread_rng().gen_range(0..10);
+                    
+                                let rgba = match particle.element {
+                                    MatterType::Empty => [0, 0, 0, 255],
+                                    MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
+                                        color[0].saturating_add(particle.ra),
+                                        color[1].saturating_add(particle.ra),
+                                        color[2].saturating_add(particle.ra),
+                                        color[3].saturating_add(particle.ra),
+                                    ],
+                                    MatterType::Liquid { color, .. } => [
+                                        color[0].saturating_add(offset),
+                                        color[1].saturating_add(offset), 
+                                        color[2].saturating_add(offset), 
+                                        color[3].saturating_add(offset), 
+                                    ],
+                                    MatterType::Gas { color, .. } => [
+                                        color[0].saturating_add(offset * 2),
+                                        color[1].saturating_add(offset * 2), 
+                                        color[2].saturating_add(offset * 2), 
+                                        color[3].saturating_add(offset * 2),
+                                    ],
+                                };
+    
+                                frame[pixel_index as usize] = rgba[0];
+                                frame[pixel_index as usize + 1] = rgba[1];
+                                frame[pixel_index as usize + 2] = rgba[2];
+                                frame[pixel_index as usize + 3] = rgba[3];
+    
+                                #[cfg(feature = "dirty_chunk_rendering")]
+                                if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
+                                    frame[pixel_index as usize] = frame[pixel_index as usize].saturating_add(50);
+                                    frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(25);
+                                    frame[pixel_index as usize + 2] = frame[pixel_index as usize + 2].saturating_add(25);
+                                    frame[pixel_index as usize + 3] = frame[pixel_index as usize + 3].saturating_add(25);
+                                }
+                            },
+                            _ => panic!()
+                        }
+                    });
+    
+                #[cfg(feature = "chunk_border_rendering")]
+                for x in 0..CHUNK_SIZE {
+                    let start_offset = ((x + x_offset + y_offset)*4) as usize;
+                    let end_offset = (((CHUNK_SIZE-1) * (WORLD_WIDTH * CHUNK_SIZE) + x + x_offset + y_offset) * 4) as usize;
+                    frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
+                    frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
+                    frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
+                    frame[start_offset+3 as usize] = frame[start_offset+3 as usize].saturating_add(25);
+    
+                    frame[end_offset as usize] = frame[end_offset as usize].saturating_add(25);
+                    frame[end_offset+1 as usize] = frame[end_offset+1 as usize].saturating_add(25);
+                    frame[end_offset+2 as usize] = frame[end_offset+2 as usize].saturating_add(25);
+                    frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
+                }
+    
+                #[cfg(feature = "chunk_border_rendering")]
                 for y in 0..CHUNK_SIZE {
-                    let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
-                    let cell = &chunk_data.cells[get_cell_index(x as i32, y as i32)];
-                    let offset = rand::thread_rng().gen_range(0..10);
-                
-                    let rgba = match cell.element {
-                        MatterType::Empty => [0, 0, 0, 255],
-                        MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
-                            color[0].saturating_add(cell.ra),
-                            color[1].saturating_add(cell.ra),
-                            color[2].saturating_add(cell.ra),
-                            color[3].saturating_add(cell.ra),
-                        ],
-                        MatterType::Liquid { color, .. } => [
-                            color[0].saturating_add(offset),
-                            color[1].saturating_add(offset), 
-                            color[2].saturating_add(offset), 
-                            color[3].saturating_add(offset), 
-                        ],
-                        MatterType::Gas { color, .. } => [
-                            color[0].saturating_add(offset * 2),
-                            color[1].saturating_add(offset * 2), 
-                            color[2].saturating_add(offset * 2), 
-                            color[3].saturating_add(offset * 2),
-                        ],
-                        // MatterType::Coal | MatterType::Sand | MatterType::Wood | MatterType::Dirt => {
-                        //     for color in rgba.iter_mut() {
-                        //         *color = color.saturating_add(cell.ra);
-                        //     }
-                        // }
-                        
-                        // MatterType::Water => {
-                        //     for color in rgba.iter_mut() {
-                        //         *color = color.saturating_add(offset);
-                        //     }
-                        // }
-                        
-                        // MatterType::Gas => {
-                        //     for color in rgba.iter_mut() {
-                        //         *color = color.saturating_add(offset * 3);
-                        //     }
-                        // }
-                        // _ => {}
-                    };
-
-                    frame[pixel_index as usize] = rgba[0];
-                    frame[pixel_index as usize + 1] = rgba[1];
-                    frame[pixel_index as usize + 2] = rgba[2];
-                    frame[pixel_index as usize + 3] = rgba[3];
-
-                    #[cfg(feature = "dirty_chunk_rendering")]
-                    if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
-                        frame[pixel_index as usize] = frame[pixel_index as usize].saturating_add(50);
-                        frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(25);
-                        frame[pixel_index as usize + 2] = frame[pixel_index as usize + 2].saturating_add(25);
-                        frame[pixel_index as usize + 3] = frame[pixel_index as usize + 3].saturating_add(25);
+                    let start_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + x_offset + y_offset)*4) as usize;
+                    let end_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + CHUNK_SIZE - 1 + x_offset + y_offset)*4) as usize;
+                    frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
+                    frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
+                    frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
+                    frame[start_offset+3 as usize] = frame[start_offset+3 as usize].saturating_add(25);
+    
+                    frame[end_offset as usize] = frame[end_offset as usize].saturating_add(25);
+                    frame[end_offset+1 as usize] = frame[end_offset+1 as usize].saturating_add(25);
+                    frame[end_offset+2 as usize] = frame[end_offset+2 as usize].saturating_add(25);
+                    frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
+                }
+            }
+    
+            for chunk_position in self.chunk_manager.suspended_chunks.clone() {
+                self.chunk_manager.suspended_chunks.remove(&chunk_position);
+                let chunk = self.chunk_manager.chunks.get(&chunk_position).unwrap();
+                let x_offset = chunk_position.x * CHUNK_SIZE;
+                let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
+    
+                let chunk_data = chunk.chunk_data.read().unwrap();
+    
+                for x in 0..CHUNK_SIZE {
+                    for y in 0..CHUNK_SIZE {
+                        let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x + x_offset) * 4;
+                        let cell = &chunk_data.cells[get_cell_index(x as i32, y as i32)];
+                        let offset = rand::thread_rng().gen_range(0..25);
+    
+                        let rgba = match cell.element {
+                            MatterType::Empty => [0, 0, 0, 255],
+                            MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
+                                color[0].saturating_add(cell.ra),
+                                color[1].saturating_add(cell.ra),
+                                color[2].saturating_add(cell.ra),
+                                color[3].saturating_add(cell.ra),
+                            ],
+                            MatterType::Liquid { color, .. } => [
+                                color[0].saturating_add(offset),
+                                color[1].saturating_add(offset),
+                                color[2].saturating_add(offset),
+                                color[3].saturating_add(offset),
+                            ],
+                            MatterType::Gas { color, .. } => [
+                                color[0].saturating_add(offset * 2),
+                                color[1].saturating_add(offset * 2),
+                                color[2].saturating_add(offset * 2),
+                                color[3].saturating_add(offset * 2),
+                            ],
+                        };
+    
+                        frame[pixel_index as usize] = rgba[0];
+                        frame[pixel_index as usize + 1] = rgba[1];
+                        frame[pixel_index as usize + 2] = rgba[2];
+                        frame[pixel_index as usize + 3] = rgba[3];
                     }
                 }
             }
+        }        
 
-            chunk.particles.lock().unwrap().iter()
-                .for_each(|particle| {
-                    match particle.simulation {
-                        SimulationType::Particle { x, y, .. } => {
-                            let x = (x * CHUNK_SIZE as f32).floor() as i32;
-                            let y = (y * CHUNK_SIZE as f32).floor() as i32;
-                            let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x_offset + x) * 4;
+        let physics_engine = self.chunk_manager.physics_engine.lock().unwrap();
 
-                            let offset = rand::thread_rng().gen_range(0..10);
-                
-                            let rgba = match particle.element {
-                                MatterType::Empty => [0, 0, 0, 255],
-                                MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
-                                    color[0].saturating_add(particle.ra),
-                                    color[1].saturating_add(particle.ra),
-                                    color[2].saturating_add(particle.ra),
-                                    color[3].saturating_add(particle.ra),
-                                ],
-                                MatterType::Liquid { color, .. } => [
-                                    color[0].saturating_add(offset),
-                                    color[1].saturating_add(offset), 
-                                    color[2].saturating_add(offset), 
-                                    color[3].saturating_add(offset), 
-                                ],
-                                MatterType::Gas { color, .. } => [
-                                    color[0].saturating_add(offset * 2),
-                                    color[1].saturating_add(offset * 2), 
-                                    color[2].saturating_add(offset * 2), 
-                                    color[3].saturating_add(offset * 2),
-                                ],
-                            };
-
-                            frame[pixel_index as usize] = rgba[0];
-                            frame[pixel_index as usize + 1] = rgba[1];
-                            frame[pixel_index as usize + 2] = rgba[2];
-                            frame[pixel_index as usize + 3] = rgba[3];
-
-                            #[cfg(feature = "dirty_chunk_rendering")]
-                            if dirty_rect_x.contains(&x) && dirty_rect_y.contains(&y) {
-                                frame[pixel_index as usize] = frame[pixel_index as usize].saturating_add(50);
-                                frame[pixel_index as usize + 1] = frame[pixel_index as usize + 1].saturating_add(25);
-                                frame[pixel_index as usize + 2] = frame[pixel_index as usize + 2].saturating_add(25);
-                                frame[pixel_index as usize + 3] = frame[pixel_index as usize + 3].saturating_add(25);
-                            }
-                        },
-                        _ => panic!()
-                    }
-                });
-
-
-
-
-            #[cfg(feature = "chunk_border_rendering")]
-            for x in 0..CHUNK_SIZE {
-                let start_offset = ((x + x_offset + y_offset)*4) as usize;
-                let end_offset = (((CHUNK_SIZE-1) * (WORLD_WIDTH * CHUNK_SIZE) + x + x_offset + y_offset) * 4) as usize;
-                frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
-                frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
-                frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
-                frame[start_offset+3 as usize] = frame[start_offset+3 as usize].saturating_add(25);
-
-                frame[end_offset as usize] = frame[end_offset as usize].saturating_add(25);
-                frame[end_offset+1 as usize] = frame[end_offset+1 as usize].saturating_add(25);
-                frame[end_offset+2 as usize] = frame[end_offset+2 as usize].saturating_add(25);
-                frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
-            }
-
-            #[cfg(feature = "chunk_border_rendering")]
-            for y in 0..CHUNK_SIZE {
-                let start_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + x_offset + y_offset)*4) as usize;
-                let end_offset = ((y * (WORLD_WIDTH * CHUNK_SIZE) + CHUNK_SIZE - 1 + x_offset + y_offset)*4) as usize;
-                frame[start_offset as usize] = frame[start_offset as usize].saturating_add(25);
-                frame[start_offset+1 as usize] = frame[start_offset+1 as usize].saturating_add(25);
-                frame[start_offset+2 as usize] = frame[start_offset+2 as usize].saturating_add(25);
-                frame[start_offset+3 as usize] = frame[start_offset+3 as usize].saturating_add(25);
-
-                frame[end_offset as usize] = frame[end_offset as usize].saturating_add(25);
-                frame[end_offset+1 as usize] = frame[end_offset+1 as usize].saturating_add(25);
-                frame[end_offset+2 as usize] = frame[end_offset+2 as usize].saturating_add(25);
-                frame[end_offset+3 as usize] = frame[end_offset+3 as usize].saturating_add(25);
-            }
-
-            // Convert from chunk coordinates to screen coordinates
-            // chunk_data.colliders.iter()
-            //     .map(|collider| collider.shape().as_compound().unwrap().shapes())
-            //     .for_each(|shapes| {
-            //         shapes.iter()
-            //             .map(|shape| shape.1.as_triangle().unwrap().vertices())
-            //             .for_each(|vertices| {
-            //                 colliders.push(
-            //                     vertices.iter().map(|vertex|
-            //                         Vertex {
-            //                             position: [
-            //                                 ((((vertex.x + chunk_position.x as f32) * CHUNK_SIZE as f32) / (CHUNK_SIZE * WORLD_WIDTH) as f32) - 0.5) * 2.0, 
-            //                                 ((-((vertex.y + chunk_position.y as f32) * CHUNK_SIZE as f32) / (CHUNK_SIZE * WORLD_HEIGHT) as f32) + 0.5) * 2.0
-            //                             ]
-            //                         }
-            //                     ).collect()
-            //                 );
-            //             })
-            //     });
-        }
-
-        for chunk_position in self.chunk_manager.suspended_chunks.clone() {
-            self.chunk_manager.suspended_chunks.remove(&chunk_position);
-            let chunk = self.chunk_manager.chunks.get(&chunk_position).unwrap();
-            let x_offset = chunk_position.x * CHUNK_SIZE;
-            let y_offset = chunk_position.y * CHUNK_SIZE * (WORLD_WIDTH * CHUNK_SIZE);
-
-            let chunk_data = chunk.chunk_data.read().unwrap();
-
-            for x in 0..CHUNK_SIZE {
-                for y in 0..CHUNK_SIZE {
-                    let pixel_index = ((y_offset + y * (WORLD_WIDTH * CHUNK_SIZE)) + x + x_offset) * 4;
-                    let cell = &chunk_data.cells[get_cell_index(x as i32, y as i32)];
-                    let offset = rand::thread_rng().gen_range(0..25);
-
-                    let rgba = match cell.element {
-                        MatterType::Empty => [0, 0, 0, 255],
-                        MatterType::Static { color, .. } | MatterType::Powder { color, .. } => [
-                            color[0].saturating_add(cell.ra),
-                            color[1].saturating_add(cell.ra),
-                            color[2].saturating_add(cell.ra),
-                            color[3].saturating_add(cell.ra),
-                        ],
-                        MatterType::Liquid { color, .. } => [
-                            color[0].saturating_add(offset),
-                            color[1].saturating_add(offset),
-                            color[2].saturating_add(offset),
-                            color[3].saturating_add(offset),
-                        ],
-                        MatterType::Gas { color, .. } => [
-                            color[0].saturating_add(offset * 2),
-                            color[1].saturating_add(offset * 2),
-                            color[2].saturating_add(offset * 2),
-                            color[3].saturating_add(offset * 2),
-                        ],
-                    };
-
-                    frame[pixel_index as usize] = rgba[0];
-                    frame[pixel_index as usize + 1] = rgba[1];
-                    frame[pixel_index as usize + 2] = rgba[2];
-                    frame[pixel_index as usize + 3] = rgba[3];
-                }
-            }
-        }
-
-        colliders
+        mesh_renderer.update(pixels.device(), &physics_engine.collider_set);
     }
 }

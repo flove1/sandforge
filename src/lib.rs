@@ -128,8 +128,7 @@ pub fn run() {
                     let (chunks_updated, pixels_updated) = world.update();
                     input_manager.update_frame_info(chunks_updated, pixels_updated, now);
 
-                    let object_boundaries = world.render(pixels.frame_mut());
-                    mesh_renderer.update(pixels.device(), &object_boundaries);
+                    world.render(&mut pixels, &mut mesh_renderer);
                 }
 
                 let render_result = pixels.render_with(|encoder, render_target, context| {
