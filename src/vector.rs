@@ -15,7 +15,7 @@ macro_rules! pos2 {
 }
 
 impl Pos2 {
-    pub fn is_between(&mut self, min: i32, max: i32) -> bool {
+    pub fn is_between(&self, min: i32, max: i32) -> bool {
         self.x >= min && self.x <= max && self.y >= min && self.y <= max
     }
 

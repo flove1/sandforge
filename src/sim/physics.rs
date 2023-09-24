@@ -1,15 +1,19 @@
-use ahash::HashSet;
-use rapier2d::{prelude::*, na::Isometry2};
+use rapier2d::{prelude::*, na::{Isometry2, Vector2}};
 
-use crate::constants::{CHUNK_SIZE, WORLD_WIDTH, WORLD_HEIGHT, PHYSICS_TO_WORLD};
+use crate::{constants::{CHUNK_SIZE, WORLD_WIDTH, WORLD_HEIGHT, PHYSICS_TO_WORLD, PHYSICS_SCALE}, pos2, vector::Pos2};
 
-use super::{cell::{Cell, EMPTY_CELL, SimulationType}, elements::MatterType, colliders::create_triangulated_collider};
+use super::{cell::{Cell, SimulationType}, colliders::create_triangulated_collider};
 
 pub struct PhysicsObject {
     pub rb_handle: RigidBodyHandle,
     pub collider_handle: ColliderHandle,
-    pub matrix: Vec<Cell>,
-    pub object_size: usize
+    pub cells: Vec<ObjectPoint>,
+    pub object_size: usize,
+}
+
+pub struct ObjectPoint {
+    pub texture_coords: Vector2<f32>,
+    pub cell: Cell,
 }
 
 pub struct Physics {
@@ -27,6 +31,7 @@ pub struct Physics {
     event_handler: Box<dyn EventHandler>,
 
     pub objects: Vec<PhysicsObject>,
+    pub active_object_ids: Vec<usize>,
 }
 
 impl Physics {
@@ -44,19 +49,21 @@ impl Physics {
             ccd_solver: CCDSolver::default(),
             physics_hooks: Box::new(()),
             event_handler: Box::new(()),
+
             objects: vec![],
+            active_object_ids: vec![],
         }
     }
 
-    pub fn modify_object(&mut self, object_id: usize, cell_index: usize, cell: Cell) {
-        self.objects[object_id].matrix[cell_index] = cell;
-    }
+    // pub fn modify_object(&mut self, object_id: usize, cell_index: usize, cell: Cell) {
+    //     self.objects[object_id].matrix[cell_index] = cell;
+    // }
     
-    pub fn new_object(&mut self, positions: HashSet<(i32, i32)>, element: &MatterType, static_flag: bool) {
-        let mut x_positions = positions.iter().map(|position| position.0).collect::<Vec<i32>>();
+    pub fn new_object(&mut self, cells: Vec<((i32, i32), Cell)>, static_flag: bool) {
+        let mut x_positions = cells.iter().map(|(position, _)| position.0).collect::<Vec<i32>>();
         x_positions.sort();
 
-        let mut y_positions = positions.iter().map(|position| position.1).collect::<Vec<i32>>();
+        let mut y_positions = cells.iter().map(|(position, _)| position.1).collect::<Vec<i32>>();
         y_positions.sort();
 
         let (x_min, x_max) = (
@@ -82,12 +89,23 @@ impl Physics {
         };
 
         let mut matrix = vec![0; size.pow(2)];
-        let mut cell_matrix = vec![EMPTY_CELL.clone(); size.pow(2)];
+        // let mut cell_matrix = vec![EMPTY_CELL.clone(); size.pow(2)];
 
-        positions.iter().for_each(|(x, y)| {
+        let mut object_cells = vec![];
+
+        cells.into_iter().for_each(|((x, y), mut cell)| {
             let index = ((y - y_min + y_offset) * size as i32 + (x - x_min + x_offset)) as usize;
-            cell_matrix[index] = Cell::new(&element, 0);
-            cell_matrix[index].simulation = SimulationType::RigiBody(self.objects.len() as u64);
+
+            cell.simulation = SimulationType::RigidBody(self.objects.len(), object_cells.len());
+
+            object_cells.push(ObjectPoint {
+                texture_coords: vector![
+                    ((x - x_min + x_offset) as f32 - size as f32 / 2.0) / PHYSICS_TO_WORLD as f32,
+                    ((y - y_min + y_offset) as f32 - size as f32 / 2.0) / PHYSICS_TO_WORLD as f32 
+                ],
+                cell
+            });
+
             matrix[index] = 1;
         });
 
@@ -112,7 +130,7 @@ impl Physics {
             PhysicsObject { 
                 rb_handle, 
                 collider_handle,
-                matrix: cell_matrix,
+                cells: object_cells,
                 object_size: size
             }
         );
@@ -151,7 +169,7 @@ impl Physics {
 
     pub fn step(&mut self) {
         self.physics_pipeline.step(
-            &vector![0.0, 1.0],
+            &vector![0.0, 1.0 / PHYSICS_SCALE],
             &self.integration_parameters,
             &mut self.island_manager,
             &mut self.broad_phase,
@@ -168,7 +186,10 @@ impl Physics {
 
         self.objects.retain(|object| {
             let position = self.rigid_body_set[object.rb_handle].position().translation;
-            if position.x * PHYSICS_TO_WORLD / CHUNK_SIZE as f32 > WORLD_WIDTH as f32 && position.y * PHYSICS_TO_WORLD / CHUNK_SIZE as f32 > WORLD_HEIGHT as f32 {
+            let x = position.x * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
+            let y = position.y * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
+            if x < 0.0 || y < 0.0 || x > WORLD_WIDTH as f32 || y > WORLD_HEIGHT as f32 {
+                println!("Object left boundaries");
                 self.rigid_body_set.remove(
                     object.rb_handle, 
                     &mut self.island_manager, 
@@ -182,6 +203,33 @@ impl Physics {
             else {
                 true
             }
-        })
+        });
+    }
+
+    pub fn rb_to_ca(&self) -> Vec<(&PhysicsObject, Vec<(&ObjectPoint, Pos2)>)> {
+        self.objects.iter()
+            .map(|object| {
+                let rb = &self.rigid_body_set[object.rb_handle];
+                (object, rb.position().translation.vector, rb.rotation().angle())
+            })
+            .map(|(object, center, angle)| {                
+                let rotation_matrix = nalgebra::Matrix2::new(
+                    angle.cos(), 
+                    -angle.sin(), 
+                    angle.sin(), 
+                    angle.cos()
+                );
+
+                (
+                    object, 
+                    object.cells.iter()
+                        .map(|cell| {
+                                let position = rotation_matrix * cell.texture_coords + center;
+                                (cell, pos2!((position.x * PHYSICS_TO_WORLD).trunc() as i32, (position.y * PHYSICS_TO_WORLD).trunc() as i32))
+                            })
+                        .collect::<Vec<(&ObjectPoint, Pos2)>>()
+                )
+            })
+            .collect::<Vec<(&PhysicsObject, Vec<(&ObjectPoint, Pos2)>)>>()
     }
 }

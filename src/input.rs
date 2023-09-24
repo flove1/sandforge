@@ -1,26 +1,44 @@
 use std::time::Instant;
 
-use ahash::HashSet;
+use ahash::HashMap;
 use fps_counter::FPSCounter;
+use rand::{SeedableRng, Rng};
 use winit::{dpi::PhysicalPosition, event::ElementState};
 
-use crate::{helpers::line_from_pixels, sim::elements::MatterType};
+use crate::{helpers::line_from_pixels, sim::{elements::MatterType, cell::Cell}};
+
+pub struct Brush {
+    pub element: MatterType,
+    pub brush_type: BrushType,
+    pub shape: BrushShape,
+    pub size: i32, 
+}
+
+#[derive(PartialEq)]
+pub enum BrushType {
+    Cell,
+    Object,
+    StaticObject,
+    Particle(u8)
+}
+
+#[derive(PartialEq)]
+pub enum BrushShape {
+    Circle,
+    Square,
+}
 
 pub struct InputManager {
-    pub element: MatterType,
-    pub draw_object: bool,
-    pub draw_static_object: bool,
-    pub render_objects: bool,
+    pub brush: Brush,
 
     pub mouse: Mouse,
     pub previous_frame: Frame,
-    pub placing_queue: HashSet<(i32, i32)>,
+    pub placing_queue: HashMap<(i32, i32), Cell>,
 }
 
 pub struct Mouse {
     pub mouse_keys: [ElementState; 3],
     pub last_mouse_position: Option<PhysicalPosition<f64>>,
-    pub brush_size: i32,
 }
 
 pub struct Frame {
@@ -34,15 +52,16 @@ pub struct Frame {
 impl InputManager {
     pub fn new() -> Self {
         Self {
-            element: MatterType::Empty,
-            draw_object: false,
-            draw_static_object: false,
-            render_objects: true,
-            placing_queue: HashSet::default(),
+            brush: Brush { 
+                element: MatterType::Empty, 
+                brush_type: BrushType::Object, 
+                shape: BrushShape::Circle, 
+                size: 10
+            },
+            placing_queue: HashMap::default(),
             mouse: Mouse { 
                 mouse_keys: [ElementState::Released; 3],
                 last_mouse_position: None,
-                brush_size: 2
             },
             previous_frame: Frame {
                 instant: Instant::now(),
@@ -54,14 +73,14 @@ impl InputManager {
         }
     }
 
-    pub fn change_brush_size(&mut self, size_delta: i32) {
-        if size_delta > 0 {
-            self.mouse.brush_size = (self.mouse.brush_size + size_delta).min(15);
-        }
-        else {
-            self.mouse.brush_size = (self.mouse.brush_size + size_delta).max(2);
-        }
-    }
+    // pub fn change_brush_size(&mut self, size_delta: i32) {
+    //     if size_delta > 0 {
+    //         self.mouse.brush_size = (self.mouse.brush_size + size_delta).min(15);
+    //     }
+    //     else {
+    //         self.mouse.brush_size = (self.mouse.brush_size + size_delta).max(2);
+    //     }
+    // }
 
     #[allow(unused)]
     pub fn handle_keyboard_input(&mut self, control_flow: &mut winit::event_loop::ControlFlow, input: &winit::event::KeyboardInput) {
@@ -97,11 +116,45 @@ impl InputManager {
     pub fn handle_mouse_movement(&mut self, pixels: &pixels::Pixels, position: &winit::dpi::PhysicalPosition<f64>) {
         if self.mouse.mouse_keys[0] == ElementState::Pressed {
             if let Some(last_position) = self.mouse.last_mouse_position {
-                let mut function = |x, y| {
-                    for dx in (-self.mouse.brush_size+1)..(self.mouse.brush_size) {
-                        for dy in (-self.mouse.brush_size+1)..(self.mouse.brush_size) {
-                            self.placing_queue.insert((x + dx, y + dy));
-                        }
+                let mut rng = rand::rngs::SmallRng::from_entropy();
+
+                let mut function = |x: i32, y: i32| {
+                    match self.brush.shape {
+                        BrushShape::Circle => {
+                            for dx in -self.brush.size..=self.brush.size {
+                                for dy in -self.brush.size..=self.brush.size {
+                                    if (dx).pow(2) + (dy).pow(2) <= self.brush.size.pow(2) {
+                                        match self.brush.brush_type {
+                                            BrushType::Particle(rate) => {
+                                                if rng.gen_range(0..255) <= rate {
+                                                    self.placing_queue.insert((x + dx, y + dy), Cell::new(&self.brush.element, 0));
+                                                }
+                                            },
+                                            _ => {
+                                                self.placing_queue.insert((x + dx, y + dy), Cell::new(&self.brush.element, 0));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        BrushShape::Square => {
+                            for dx in -self.brush.size..=self.brush.size {
+                                for dy in -self.brush.size..=self.brush.size {
+                                    match self.brush.brush_type {
+                                        BrushType::Particle(rate) => {
+                                            if rng.gen_range(0..255) <= rate {
+                                                self.placing_queue.insert((x + dx, y + dy), Cell::new(&self.brush.element, 0));
+                                            }
+                                        },
+                                        _ => {
+                                            self.placing_queue.insert((x + dx, y + dy), Cell::new(&self.brush.element, 0));
+                                        }
+                                    }
+                                    
+                                }
+                            }
+                        },
                     }
                     true
                 };

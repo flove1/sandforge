@@ -1,10 +1,7 @@
 use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
 
-use crate::constants::CHUNK_SIZE;
-use crate::helpers::line_from_pixels;
-
-use super::cell::{Cell, SimulationType};
+use super::cell::Cell;
 use super::chunk::ChunkApi;
 
 
@@ -33,6 +30,18 @@ pub enum MatterType {
     },
 }
 
+impl ToString for MatterType {
+    fn to_string(&self) -> String {
+        match self {
+            MatterType::Empty => "Empty".to_string(),
+            MatterType::Static { .. } => "Static".to_string(),
+            MatterType::Powder { .. } => "Powder".to_string(),
+            MatterType::Liquid { .. } => "Liquid".to_string(),
+            MatterType::Gas { .. } => "Gas".to_string(),
+        }
+    }
+}
+
 impl Default for MatterType {
     fn default() -> Self {
         Self::Empty
@@ -53,55 +62,57 @@ lazy_static! {
     };
 }
 
-pub fn update_particle<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
-    if let SimulationType::Particle { x, y, dx, dy, collided } = &mut cell.simulation {
-        if *collided {
-            return;
-        }
+// pub fn update_particle<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
+//     if let SimulationType::Particle { x, y, dx, dy, collided } = &mut cell.simulation {
+//         if *collided {
+//             return;
+//         }
         
-        let mut last_x = 0;
-        let mut last_y = 0;
+//         let mut last_x = 0;
+//         let mut last_y = 0;
 
-        let mut operation = |dx, dy| {
-            let cell = api.get(dx, dy);
+//         let mut operation = |current_dx, current_dy| {
+//             let current_cell = api.get(current_dx, current_dy);
 
-            if matches!(cell.element, MatterType::Empty) || !matches!(cell.simulation, SimulationType::Ca) {
-                last_x = dx;
-                last_y = dy;
-                true
-            }
-            else {
-                false
-            }
+//             if !matches!(current_cell.element, MatterType::Static { .. }) || matches!(current_cell.simulation, SimulationType::RigiBody(..)) {
+//                 last_x = current_dx;
+//                 last_y = current_dy;
+//                 true
+//             }
+//             else {
+//                 false
+//             }
             
-        };
+//         };
 
-        let return_to_ca = line_from_pixels(
-            0, 
-            0, 
-            (*dx * CHUNK_SIZE as f32).floor() as i32, 
-            (*dy * CHUNK_SIZE as f32).floor() as i32, 
-            &mut operation
-        );
+//         let return_to_ca = line_from_pixels(
+//             0, 
+//             0, 
+//             (*dx * CHUNK_SIZE as f32).round() as i32, 
+//             (*dy * CHUNK_SIZE as f32).round() as i32, 
+//             &mut operation
+//         );
 
-        if return_to_ca {
-            *collided = true;
-        }
-        else {
-            *x = *x + *dx;
-            *y = *y + *dy;
-            *dy = f32::min(*dy + (1.0 / CHUNK_SIZE as f32) / 10.0, dy.signum() * 9.1 * (1.0 / CHUNK_SIZE as f32) / 10.0);
-        }
+//         if return_to_ca {
+//             *collided = true;
+//             *x = *x + (last_x as f32 / CHUNK_SIZE as f32);
+//             *y = *y + (last_y as f32 / CHUNK_SIZE as f32);
+//         }
+//         else {
+//             *x = *x + *dx;
+//             *y = *y + *dy;
+//             *dy = f32::min(*dy + (1.0 / CHUNK_SIZE as f32) / 10.0, dy.signum() * 9.1 * (1.0 / CHUNK_SIZE as f32) / 10.0);
+//         }
 
-        // api.update(cell.clone());
-        api.keep_alive(last_x, last_y);
-    }
-    else {
-        panic!("particle method called for non-particle cell");
-    }
-}
+//         // api.update(cell.clone());
+//         api.keep_alive(last_x, last_y);
+//     }
+//     else {
+//         panic!("particle method called for non-particle cell");
+//     }
+// }
 
-pub fn update_sand<'a, 'b>(cell: &Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
+pub fn update_sand<'a>(cell: &Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let dx = api.rand_dir();
     
     if matches!(api.get(0, 1).element, MatterType::Empty | MatterType::Gas{..}) {
@@ -125,7 +136,7 @@ pub fn update_sand<'a, 'b>(cell: &Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
     api.update(cell.clone());
 }
 
-// pub fn update_fire<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
+// pub fn update_fire<'a>(cell: &mut Cell, mut api: ChunkApi<'a>, _dt: f32) -> ChunkApi<'a> {
 //     let directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)];
 
 //     for (dx, dy) in directions {
@@ -170,7 +181,7 @@ pub fn update_sand<'a, 'b>(cell: &Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
 //     api
 // }
 
-pub fn update_liquid<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
+pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let mut dx = api.rand_dir();
 
     if matches!(api.get(0, 1).element, MatterType::Empty | MatterType::Gas{..}) {
@@ -258,7 +269,7 @@ pub fn update_liquid<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f
     api.update(cell.clone());
 }
 
-pub fn update_gas<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
+pub fn update_gas<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let mut dx = api.rand_dir();
 
     if matches!(api.get(dx, 0).element, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, -1).element, MatterType::Empty | MatterType::Gas{..}) {

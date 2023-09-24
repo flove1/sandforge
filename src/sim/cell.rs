@@ -17,14 +17,7 @@ pub struct Cell {
 pub enum SimulationType {
     #[default]
     Ca,
-    Particle {
-        x: f32,
-        y: f32,
-        dx: f32,
-        dy: f32,
-        collided: bool,
-    },
-    RigiBody(u64),
+    RigidBody(usize, usize),
 }
 
 pub static EMPTY_CELL: Cell = Cell {
@@ -56,6 +49,26 @@ impl Cell {
         cell
     }
 
+    // pub fn new_particle(element: &MatterType, x: f32, y: f32, dx: f32, dy: f32) -> Self {
+    //     let mut cell = Self {
+    //         element: element.clone(),
+    //         clock: 0,
+    //         simulation: SimulationType::Particle { x, y, dx, dy, collided: false },
+    //         ..Default::default()
+    //     };
+
+    //     match cell.element {
+    //         MatterType::Empty => {},
+    //         MatterType::Static { color_offset, .. } 
+    //             | MatterType::Powder { color_offset, .. } 
+    //             | MatterType::Liquid { color_offset, .. }
+    //             | MatterType::Gas { color_offset, .. }
+    //             => cell.ra = rand::thread_rng().gen_range(0..=color_offset),
+    //     }
+
+    //     cell
+    // }
+
     pub fn new_with_rb(element: &MatterType, clock: u8, rb: u8) -> Self {
         let mut cell = Self::new(element, clock);
         cell.rb = rb;
@@ -63,7 +76,7 @@ impl Cell {
         cell
     }
 
-    pub fn update<'a, 'b>(&mut self, api: &mut ChunkApi<'a, 'b>, dt: f32, clock: u8) {
+    pub fn update_cell<'a>(&mut self, api: &mut ChunkApi<'a>, dt: f32, clock: u8) {
         self.clock = clock;
 
         match self.simulation {
@@ -75,8 +88,8 @@ impl Cell {
                     _ => {}
                 };
             },
-            SimulationType::Particle { .. } => update_particle(self, api, dt),
-            SimulationType::RigiBody (_) => {},
+            // SimulationType::Particle { .. } => update_particle(self, api, dt),
+            SimulationType::RigidBody ( .. ) => {},
         }
     }
 }

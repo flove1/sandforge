@@ -103,27 +103,45 @@ pub fn run() {
 
                 let now = Instant::now();
                 if world.needs_update(now.duration_since(input_manager.previous_frame.instant).as_millis()) {
-                    if input_manager.draw_object {
-                        if input_manager.element == MatterType::Empty {
-                            input_manager.placing_queue.clear();
-                        }
-                        
-                        if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
-                            world.place_object(
-                                input_manager.placing_queue.drain().collect(), 
-                                &input_manager.element, 
-                                input_manager.draw_static_object
-                            );
-                        }
+                    if input_manager.brush.element == MatterType::Empty {
+                        world.place_batch(
+                            input_manager.placing_queue.drain().collect(),
+                        );
                     }
                     else {
-                        if !input_manager.placing_queue.is_empty() {
-                            world.place_batch(
-                                input_manager.placing_queue.drain().collect(), 
-                                &input_manager.element
-                            );
-                        }
-                    }                        
+                        match input_manager.brush.brush_type {
+                            input::BrushType::Cell => {
+                                if !input_manager.placing_queue.is_empty() {
+                                    world.place_batch(
+                                        input_manager.placing_queue.drain().collect(),
+                                    );
+                                }
+                            },
+                            input::BrushType::Object => {
+                                if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
+                                    world.place_object(
+                                        input_manager.placing_queue.drain().collect(),
+                                        false
+                                    );
+                                }
+                            },
+                            input::BrushType::StaticObject => {
+                                if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
+                                    world.place_object(
+                                        input_manager.placing_queue.drain().collect(),
+                                        true
+                                    );
+                                }
+                            },
+                            input::BrushType::Particle(_) => {
+                                if !input_manager.placing_queue.is_empty() {
+                                    world.place_particles(
+                                        input_manager.placing_queue.drain().collect(),
+                                    );
+                                }
+                            },
+                        }          
+                    }         
 
                     let (chunks_updated, pixels_updated) = world.update();
                     input_manager.update_frame_info(chunks_updated, pixels_updated, now);

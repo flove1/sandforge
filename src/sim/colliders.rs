@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
 
+use poly2tri_rs::{Point, SweeperBuilder};
 use rapier2d::{prelude::{ColliderBuilder, Collider, Real, SharedShape}, na::{Point2, Isometry2}};
 
-use crate::constants::{COLLIDER_PRECISION, PHYSICS_TO_WORLD};
+use crate::constants::{COLLIDER_PRECISION, PHYSICS_TO_WORLD, PHYSICS_SCALE};
        
 /// Connected-component labeling
 /// 
@@ -144,7 +145,7 @@ fn create_simplified_outlines(object_count: i32, matrix: &[i32], matrix_size: i3
         .filter_map(|boundary| {
             match boundary {
                 Some(boundary) => {
-                    Some(douglas_peucker(boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32))
+                    Some(douglas_peucker(boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32 / PHYSICS_SCALE))
                 },
                 None => None,
             }
@@ -196,76 +197,80 @@ pub fn create_polyline_colliders(object_count: i32, matrix: &[i32], matrix_size:
 }
 
 pub fn create_triangulated_collider(matrix: &[i32], matrix_size: i32) -> (Collider, (f32, f32)) {
-    create_simplified_outlines(1, matrix, matrix_size, 1.0).iter()
+    let mut object = marching_squares(1, matrix, matrix_size, 1.0).pop().unwrap();
+
+    object.sort_by(|boundary_1, boundary_2| {
+        if boundary_1.len() > boundary_2.len() {
+            Ordering::Less
+        }
+        else {
+            Ordering::Greater
+        }
+    });
+
+    let mut boundaries = object
+        .into_iter()
+        .filter(|simplified_boundary| {
+            simplified_boundary.len() >= 3
+        })
+        .map(|boundary| {
+            douglas_peucker(&boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32 / PHYSICS_SCALE)
+        })
+        .filter(|simplified_boundary| {
+            simplified_boundary.len() >= 3
+        })
         .map(|simplified_boundary| {
             simplified_boundary.iter()
                 .map(|point| {
-                    (point.0 as f64, point.1 as f64)
+                    Point::new(
+                        point.0 as f64, 
+                        point.1 as f64
+                    )
                 })
-                .collect::<Vec<(f64, f64)>>()
+                .collect::<Vec<Point>>()
         })
-        .map(|simplified_boundary| {
-            let triangulatio_result = 
-                cdt::triangulate_contours(
-                    &simplified_boundary, 
-                    &[(0..simplified_boundary.len()).chain(0..=0).collect::<Vec<usize>>()]
-                );
+        .collect::<Vec<Vec<Point>>>();
 
-            (simplified_boundary, triangulatio_result)
-        })
-        
-        .map(|(simplified_boundary, triangulatio_result)| {
-            (
-                simplified_boundary.iter()
-                    .map(|pos| (pos.0 as f32, pos.1 as f32))
-                    .collect::<Vec<(f32, f32)>>(), 
-                triangulatio_result
-            )
-        })
-        .filter(|(_, triangulation_result)| { 
-            if triangulation_result.is_err() {
-                println!("{}", triangulation_result.clone().as_deref().unwrap_err());
-                return false;
-            }
-            triangulation_result.is_ok()
-        })
-        .map(|(simplified_boundary, triangulation_result)| {
-            ColliderBuilder::compound(
-                triangulation_result.unwrap().iter()
-                    .map(|i| {
-                        (
-                            Isometry2::default(),
-                            SharedShape::triangle(
-                                Point2::new(simplified_boundary[i.0].0, simplified_boundary[i.0].1),
-                                Point2::new(simplified_boundary[i.1].0, simplified_boundary[i.1].1),
-                                Point2::new(simplified_boundary[i.2].0, simplified_boundary[i.2].1),
-                            )
-                        )
-                    })
-                    .collect::<Vec<(Isometry2<Real>, SharedShape)>>()
-            ).build()
-        })
-        .map(|mut collider| {
-            let shapes = collider.shape().as_compound().unwrap().shapes();
-            let count = shapes.len();
+    let builder = SweeperBuilder::new(
+        boundaries.remove(0)
+        )
+    .add_holes(boundaries.into_iter());
+    
+    let triangles = builder.build().triangulate();
 
-            let center = shapes.iter() 
-                .map(|shape| {
-                    shape.1.as_triangle().unwrap().center()
-                })
-                .map(|center| {
-                    (center.x / count as f32, center.y / count as f32)
-                })
-                .fold((0.0, 0.0), |sum, value| {
-                    ((sum.0 + value.0), (sum.1 + value.1))
-                });
+    let mut collider = ColliderBuilder::compound(
+        triangles
+            .map(|triangle| {
+                (
+                    Isometry2::default(),
+                    SharedShape::triangle(
+                        Point2::new(triangle.points[0].x as f32, triangle.points[0].y as f32),
+                        Point2::new(triangle.points[1].x as f32, triangle.points[1].y as f32),
+                        Point2::new(triangle.points[2].x as f32, triangle.points[2].y as f32),
+                    )
+                )
+            })
+            .collect::<Vec<(Isometry2<Real>, SharedShape)>>()
+    ).build();
 
-            collider.set_density(10.0);
-            collider.set_restitution(0.1);
+    let shapes = collider.shape().as_compound().unwrap().shapes();
+    let count = shapes.len();
 
-            (collider, center)
+    let center = shapes.iter() 
+        .map(|shape| {
+            shape.1.as_triangle().unwrap().center()
         })
-        .next().unwrap()
+        .map(|center| {
+            (center.x / count as f32, center.y / count as f32)
+        })
+        .fold((0.0, 0.0), |sum, value| {
+            ((sum.0 + value.0), (sum.1 + value.1))
+        });
+
+    collider.set_density(10.0);
+    collider.set_restitution(0.1);
+
+    (collider, center)
 }
 
 fn perpendicular_squared_distance(point: (f32, f32), line: ((f32, f32), (f32, f32))) -> f32 {

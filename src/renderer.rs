@@ -1,6 +1,8 @@
 use pixels::{wgpu::{self, util::DeviceExt}, TextureError};
 use rapier2d::{prelude::ColliderSet, na::Matrix2};
 
+use crate::constants::PHYSICS_SCALE;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -101,8 +103,8 @@ impl MeshRenderer {
                         .map(|vertex| {
                             Vertex {
                                 position: [
-                                    (vertex.x + collider.position().translation.x) / 4.0 - 1.0,
-                                    -(vertex.y + collider.position().translation.y) / 4.0 + 1.0
+                                    (vertex.x + collider.position().translation.x) / 4.0 * PHYSICS_SCALE - 1.0,
+                                    -(vertex.y + collider.position().translation.y) / 4.0 * PHYSICS_SCALE + 1.0
                                 ]
                             }
                         })
@@ -142,8 +144,8 @@ impl MeshRenderer {
                                     vertices.push(
                                         Vertex {
                                             position: [
-                                                (rotated_vertex.x + collider.position().translation.x) / 4.0 - 1.0,
-                                                -(rotated_vertex.y + collider.position().translation.y) / 4.0 + 1.0
+                                                (rotated_vertex.x + collider.position().translation.x) / 4.0 * PHYSICS_SCALE - 1.0,
+                                                -(rotated_vertex.y + collider.position().translation.y) / 4.0 * PHYSICS_SCALE + 1.0
                                             ]
                                         }
                                     )

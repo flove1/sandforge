@@ -204,12 +204,6 @@ impl Gui {
                     egui::Color32::WHITE,
                     format!("Pixels updated: {}", input_manager.previous_frame.pixels_updated)
                 );
-
-                ui.separator();
-
-                ui.colored_label(
-                    egui::Color32::WHITE,format!("Brush size: {}", input_manager.mouse.brush_size)
-                );
             });
 
         egui::Window::new("Elements")
@@ -252,7 +246,7 @@ impl Gui {
                                 egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
                             );
 
-                            if &input_manager.element == element {
+                            if &input_manager.brush.element == element {
                                 ui.painter().rect_stroke(
                                     rect,
                                     egui::Rounding::default().at_most(0.5), 
@@ -268,7 +262,7 @@ impl Gui {
                                     
                                     ui.colored_label(
                                         {
-                                            if &input_manager.element == element {
+                                            if &input_manager.brush.element == element {
                                                 egui::Color32::GOLD
                                             }
                                             else {
@@ -293,44 +287,89 @@ impl Gui {
                 });
 
                 if response.clicked() {
-                    input_manager.element = element.clone();
+                    input_manager.brush.element = element.clone();
                 }
             }
 
             ui.add_space(ctx.pixels_per_point() * 8.0);
+
+            egui::ComboBox::from_label("Shape")
+                .selected_text( 
+                    match input_manager.brush.shape {
+                        crate::input::BrushShape::Circle => "Circle",
+                        crate::input::BrushShape::Square => "Square",
+                    }
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut input_manager.brush.shape, 
+                        crate::input::BrushShape::Square, 
+                        "Square",
+                    );
+                    ui.selectable_value(
+                        &mut input_manager.brush.shape, 
+                        crate::input::BrushShape::Circle, 
+                        "Circle",
+                    );
+                }
+            );
+
+            ui.add_space(ctx.pixels_per_point() * 8.0);
             
-            ui.horizontal_top(|ui| {
-                ui.add_space(ctx.pixels_per_point() * 4.0);
+            ui.label("Brush size");
+
+            ui.add(
+                egui::widgets::Slider::new(&mut input_manager.brush.size, 2..=32)
+                    .show_value(true)
+                    .trailing_fill(true)
+            );
+
+            ui.add_space(ctx.pixels_per_point() * 8.0);
+
+            egui::ComboBox::from_label("Type")
+                .selected_text( 
+                    match input_manager.brush.brush_type {
+                        crate::input::BrushType::Cell => "Cell",
+                        crate::input::BrushType::Object => "Object",
+                        crate::input::BrushType::StaticObject => "Static Object",
+                        crate::input::BrushType::Particle(_) => "Particle",
+                    }
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut input_manager.brush.brush_type, 
+                        crate::input::BrushType::Cell, 
+                        "Cell",
+                    );
+                    ui.selectable_value(
+                        &mut input_manager.brush.brush_type, 
+                        crate::input::BrushType::Particle(1), 
+                        "Particle",
+                    );
+                    ui.selectable_value(
+                        &mut input_manager.brush.brush_type, 
+                        crate::input::BrushType::Object, 
+                        "Object",
+                    );
+                    ui.selectable_value(
+                        &mut input_manager.brush.brush_type, 
+                        crate::input::BrushType::StaticObject, 
+                        "Static Object",
+                    );
+                }
+            );
+
+            if let crate::input::BrushType::Particle(size) = &mut input_manager.brush.brush_type {
+                ui.add_space(ctx.pixels_per_point() * 8.0);
+
+                ui.label("Particle spawn rate");
 
                 ui.add(
-                    egui::widgets::Slider::new(&mut input_manager.mouse.brush_size, 2..=32)
+                    egui::widgets::Slider::new(size, 1..=255)
                         .show_value(true)
                         .trailing_fill(true)
                 );
-            });
-
-            ui.add_space(ctx.pixels_per_point() * 8.0);
-
-            ui.horizontal_top(|ui| {
-                ui.add_space(ctx.pixels_per_point() * 8.0);
-                ui.checkbox(&mut input_manager.draw_object, " Draw objects");
-            });
-
-            if input_manager.draw_object {
-                ui.add_space(ctx.pixels_per_point() * 8.0);
-    
-                ui.horizontal_top(|ui| {
-                    ui.add_space(ctx.pixels_per_point() * 8.0);
-                    ui.checkbox(&mut input_manager.draw_static_object, " Is object static?");
-                });
             }
-
-            ui.add_space(ctx.pixels_per_point() * 8.0);
-
-            ui.horizontal_top(|ui| {
-                ui.add_space(ctx.pixels_per_point() * 8.0);
-                ui.checkbox(&mut input_manager.render_objects, " Render objects");
-            });
 
             ui.add_space(ctx.pixels_per_point() * 4.0);
         });
