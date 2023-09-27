@@ -1,10 +1,48 @@
-- !Powder {name: Sand, color: [0xf2, 0xf1, 0xa3, 0xff], color_offset: 25}
-- !Powder {name: Coal, color: [0x09, 0x09, 0x09, 0xff], color_offset: 25}
+- !Element {
+    name: Sand, 
+    color: [0xf2, 0xf1, 0xa3, 0xff], 
+    color_offset: 25, 
+    matter: Powder
+  }
 
-- !Static {name: Stone, color: [0x77, 0x77, 0x77, 0xff], color_offset: 20}
-- !Static {name: Wood, color: [0x6a, 0x4b, 0x35, 0xff], color_offset: 50}
-- !Static {name: Dirt, color: [0x6d, 0x5f, 0x3d, 0xff], color_offset: 50}
+- !Element {
+    name: Coal,
+    color: [0x09, 0x09, 0x09, 0xff],
+    color_offset: 25,
+    matter: Powder
+    }
 
-- !Liquid {name: Water, color: [0x47, 0x7C, 0xB8, 0xff], color_offset: 0}
+- !Element {
+    name: Stone,
+    color: [0x77, 0x77, 0x77, 0xff],
+    color_offset: 20,
+    matter: Static
+    }
 
-- !Gas {name: Gas, color: [0x55, 0x74, 0x56, 0x99], color_offset: 0}
+- !Element {
+    name: Wood,
+    color: [0x6a, 0x4b, 0x35, 0xff],
+    color_offset: 50,
+    matter: Static
+    }
+
+- !Element {
+    name: Dirt,
+    color: [0x6d, 0x5f, 0x3d, 0xff],
+    color_offset: 50,
+    matter: Static
+    }
+
+- !Element {
+    name: Water,
+    color: [0x47, 0x7C, 0xB8, 0xff],
+    color_offset: 0,
+    matter: Liquid
+    }
+    
+- !Element {
+    name: Gas,
+    color: [0x55, 0x74, 0x56, 0x99],
+    color_offset: 0,
+    matter: Gas
+    }

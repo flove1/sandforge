@@ -54,3 +54,4 @@ serde = { version = "1.0.188", features = ["derive"] }
 pretty_env_logger = "0.5.0"
 poly2tri-rs = "0.1.2"
 bitflags = "2.4.0"
+rayon = "1.8.0"

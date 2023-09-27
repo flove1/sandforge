@@ -19,6 +19,7 @@ use log::error;
 use parking_lot::deadlock;
 use pixels::{Pixels, SurfaceTexture};
 use renderer::MeshRenderer;
+use sim::elements::Element;
 use sim::world::{World, WorldApi};
 use ui::Framework;
 use winit::dpi::LogicalSize;
@@ -64,7 +65,7 @@ pub fn run() {
     let mut mesh_renderer = MeshRenderer::new(&pixels).unwrap();
 
     event_loop.run(move |event, _, control_flow| {        
-        control_flow.set_wait();
+        control_flow.set_poll();
 
         match &event {
             Event::WindowEvent { event, .. } => {
@@ -96,61 +97,69 @@ pub fn run() {
                         _ => {}
                     }
                 }
-            }
+            },
 
-            Event::RedrawRequested(_) => {
-                input_manager.next_frame();
-
+            Event::MainEventsCleared => {
                 let now = Instant::now();
-                if world.needs_update(now.duration_since(input_manager.previous_frame.instant).as_millis()) {
-                    if input_manager.brush.element == MatterType::Empty {
-                        world.place_batch(
-                            input_manager.placing_queue.drain().collect(),
-                        );
+
+                if now.duration_since(input_manager.previous_frame.instant).as_millis() > 30 {
+                    if world.needs_update(now.duration_since(input_manager.previous_frame.instant).as_millis()) {
+                        if input_manager.brush.element.matter == MatterType::Empty {
+                            world.place_batch(
+                                input_manager.placing_queue.drain().collect(),
+                            );
+                        }
+                        else {
+                            match input_manager.brush.brush_type {
+                                input::BrushType::Cell => {
+                                    if !input_manager.placing_queue.is_empty() {
+                                        world.place_batch(
+                                            input_manager.placing_queue.drain().collect(),
+                                        );
+                                    }
+                                },
+                                input::BrushType::Object => {
+                                    if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
+                                        world.place_object(
+                                            input_manager.placing_queue.drain().collect(),
+                                            false
+                                        );
+                                    }
+                                },
+                                input::BrushType::StaticObject => {
+                                    if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
+                                        world.place_object(
+                                            input_manager.placing_queue.drain().collect(),
+                                            true
+                                        );
+                                    }
+                                },
+                                input::BrushType::Particle(_) => {
+                                    if !input_manager.placing_queue.is_empty() {
+                                        world.place_particles(
+                                            input_manager.placing_queue.drain().collect(),
+                                        );
+                                    }
+                                },
+                            }          
+                        }
+
+                        let (chunks_updated, pixels_updated) = world.update();
+                        input_manager.update_frame_info(chunks_updated, pixels_updated, now);
+
+                        world.render(&mut pixels, &mut mesh_renderer);    
                     }
-                    else {
-                        match input_manager.brush.brush_type {
-                            input::BrushType::Cell => {
-                                if !input_manager.placing_queue.is_empty() {
-                                    world.place_batch(
-                                        input_manager.placing_queue.drain().collect(),
-                                    );
-                                }
-                            },
-                            input::BrushType::Object => {
-                                if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
-                                    world.place_object(
-                                        input_manager.placing_queue.drain().collect(),
-                                        false
-                                    );
-                                }
-                            },
-                            input::BrushType::StaticObject => {
-                                if !input_manager.placing_queue.is_empty() && input_manager.mouse.mouse_keys[0] == ElementState::Released {
-                                    world.place_object(
-                                        input_manager.placing_queue.drain().collect(),
-                                        true
-                                    );
-                                }
-                            },
-                            input::BrushType::Particle(_) => {
-                                if !input_manager.placing_queue.is_empty() {
-                                    world.place_particles(
-                                        input_manager.placing_queue.drain().collect(),
-                                    );
-                                }
-                            },
-                        }          
-                    }         
-
-                    let (chunks_updated, pixels_updated) = world.update();
-                    input_manager.update_frame_info(chunks_updated, pixels_updated, now);
-
-                    world.render(&mut pixels, &mut mesh_renderer);
+                    
+                    window.request_redraw();
                 }
 
+            },
+            
+            Event::RedrawRequested(_) => {
+                input_manager.next_frame();
+                
                 let render_result = pixels.render_with(|encoder, render_target, context| {
-                    context.scaling_renderer.render(encoder, render_target);
+                    // context.scaling_renderer.render(encoder, render_target);
     
                     mesh_renderer.render(encoder, render_target);
 
@@ -167,8 +176,6 @@ pub fn run() {
             },
             _ => {}
         }
-
-        window.request_redraw();
     });
 }
 
@@ -196,21 +203,22 @@ pub fn bench_init() -> WorldApi {
 }
 
 pub fn bench_fill(world: &mut WorldApi) {
-    let matter = MatterType::Powder { 
+    let element = Element {
         name: "Bench".to_string(), 
         color: [0, 0, 0, 0], 
-        color_offset: 0 
+        color_offset: 0,
+        matter: MatterType::Powder,
     };
 
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
         for y in 0..CHUNK_SIZE {
-            world.place(x, y, &matter);
+            world.place(x, y, &element);
         }
     }
 
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
         for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
-            world.place(x, y, &matter);
+            world.place(x, y, &element);
         }
     }
 }

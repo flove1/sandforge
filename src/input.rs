@@ -5,10 +5,10 @@ use fps_counter::FPSCounter;
 use rand::{SeedableRng, Rng};
 use winit::{dpi::PhysicalPosition, event::ElementState};
 
-use crate::{helpers::line_from_pixels, sim::{elements::MatterType, cell::Cell}};
+use crate::{helpers::line_from_pixels, sim::{elements::Element, cell::Cell}, constants::{WORLD_HEIGHT, CHUNK_SIZE}};
 
 pub struct Brush {
-    pub element: MatterType,
+    pub element: Element,
     pub brush_type: BrushType,
     pub shape: BrushShape,
     pub size: i32, 
@@ -53,8 +53,8 @@ impl InputManager {
     pub fn new() -> Self {
         Self {
             brush: Brush { 
-                element: MatterType::Empty, 
-                brush_type: BrushType::Object, 
+                element: Element::default(), 
+                brush_type: BrushType::Cell, 
                 shape: BrushShape::Circle, 
                 size: 10
             },
@@ -160,7 +160,7 @@ impl InputManager {
                 };
                 
                 let (x1, y1) = if let Ok((x, y)) = pixels.window_pos_to_pixel((last_position.x as f32, last_position.y as f32)) {
-                    (x as i32, y as i32)
+                    (x as i32, WORLD_HEIGHT * CHUNK_SIZE - y as i32)
                 }
                 else {
                     self.mouse.last_mouse_position = Some(*position);
@@ -168,7 +168,7 @@ impl InputManager {
                 };
 
                 let (x2, y2) = if let Ok((x, y)) = pixels.window_pos_to_pixel((position.x as f32, position.y as f32)) {
-                    (x as i32, y as i32)
+                    (x as i32, WORLD_HEIGHT * CHUNK_SIZE - y as i32)
                 }
                 else {
                     self.mouse.last_mouse_position = Some(*position);
@@ -182,12 +182,14 @@ impl InputManager {
     }
 
     pub fn next_frame(&mut self) {
+        self.previous_frame.pixels_updated = 0;
+        self.previous_frame.chunks_updated = 0;
         self.previous_frame.fps = self.previous_frame.fps_counter.tick();
     }
 
     pub fn update_frame_info(&mut self, chunks_updated: u128, pixels_updated: u128, instant: Instant) {
-        self.previous_frame.pixels_updated = pixels_updated;
-        self.previous_frame.chunks_updated = chunks_updated;
+        self.previous_frame.pixels_updated += pixels_updated;
+        self.previous_frame.chunks_updated += chunks_updated;
         self.previous_frame.instant = instant;
     }
 }

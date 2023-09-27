@@ -6,7 +6,7 @@ use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 
 use crate::input::InputManager;
-use crate::sim::elements::{MatterType, MATTERS};
+use crate::sim::elements::{MatterType, ELEMENTS};
 
 pub(crate) struct Framework {
     egui_ctx: Context,
@@ -20,6 +20,7 @@ pub(crate) struct Framework {
 }
 
 struct Gui {
+    menu_bar_open: bool,
     info_open: bool,
     elements_open: bool,
 }
@@ -35,7 +36,7 @@ impl Framework {
         fonts.font_data.insert(
             "pixel font".to_owned(),
             egui::FontData::from_static(include_bytes!(
-                "../assets/font.ttf"
+                "../assets/PeaberryBase.ttf"
             )),
         );
 
@@ -82,9 +83,12 @@ impl Framework {
                     if let Some(keycode) = input.virtual_keycode {
                         match keycode {
                             winit::event::VirtualKeyCode::F1 => {
-                                self.gui.info_open = !self.gui.info_open;
+                                self.gui.menu_bar_open = !self.gui.menu_bar_open;
                             },
                             winit::event::VirtualKeyCode::F2 => {
+                                self.gui.info_open = !self.gui.info_open;
+                            },
+                            winit::event::VirtualKeyCode::F3 => {
                                 self.gui.elements_open = !self.gui.elements_open;
                             },
                             _ => {}
@@ -158,13 +162,15 @@ impl Framework {
 impl Gui {
     fn new() -> Self {
         Self { 
+            menu_bar_open: false,
             info_open: true, 
             elements_open: true,
         }
     }
 
     fn ui(&mut self, input_manager: &mut InputManager , ctx: &Context) {
-        egui::TopBottomPanel::top("menubar_container").show(ctx, |ui| {
+        egui::TopBottomPanel::top("menubar_container")
+            .show_animated(ctx, self.menu_bar_open, |ui| {
             egui::menu::bar(ui, |ui| {
                 if ui.button("Info").clicked() {
                     self.info_open = !self.info_open;
@@ -215,7 +221,7 @@ impl Gui {
             ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
             let mut empty = true;
-            for element in MATTERS.iter() {
+            for element in ELEMENTS.iter() {
                 if !empty {
                     ui.separator();
                 }
@@ -223,13 +229,7 @@ impl Gui {
                     empty = false;
                 }
 
-                let color = match *element {
-                    MatterType::Empty => [0, 0, 0, 0],
-                    MatterType::Static { color, .. } => color,
-                    MatterType::Powder { color, .. } => color,
-                    MatterType::Liquid { color, .. } => color,
-                    MatterType::Gas { color, .. } => color,
-                };
+                let color = element.color;
 
                 let (rect, response) = ui.allocate_exact_size(egui::Vec2 { x: ui.available_width(), y: ctx.pixels_per_point() * 16.0 }, egui::Sense { click: true, drag: false, focusable: true });
                 
@@ -271,13 +271,7 @@ impl Gui {
                                         },
 
 
-                                        match element {
-                                            MatterType::Empty => "Eraser",
-                                            MatterType::Static { name, .. } => name,
-                                            MatterType::Powder { name, .. } => name,
-                                            MatterType::Liquid { name, .. } => name,
-                                            MatterType::Gas { name, .. } => name,
-                                        }
+                                        element.name.clone()
                                     );
                                 });
                             });

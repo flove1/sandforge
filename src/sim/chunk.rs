@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
+use egui_wgpu::wgpu::{self, Texture};
+use egui_wgpu::wgpu::util::DeviceExt;
+use pixels::Pixels;
 use rand::{Rng, SeedableRng};
+use rapier2d::na::RealField;
 use rapier2d::prelude::{Collider, RigidBodyHandle};
 
 use super::cell::*;
-use super::elements::MatterType;
+use super::elements::{MatterType, Element};
 use super::helpers::get_cell_index;
 use super::colliders::{label_matrix, create_polyline_colliders};
 use super::world::World;
@@ -20,6 +24,7 @@ pub struct Chunk {
     pub(super) particles: Vec<Cell>,
     pub(super) placing_queue: Vec<(Pos2, Cell)>,
     pub(super) cell_count: u64,
+    pub(super) texture: Option<Texture>,
 }
 
 #[derive(Default)]
@@ -124,7 +129,7 @@ impl  ChunkData {
         self.cells[cell_position.to_index(CHUNK_SIZE)].clone()
     }
 
-    pub(crate) fn match_cell(&self, cell_position: Pos2, element: &MatterType) -> bool {
+    pub(crate) fn match_cell(&self, cell_position: Pos2, element: &Element) -> bool {
         self.cells[cell_position.to_index(CHUNK_SIZE)].element == *element
     }
 
@@ -219,7 +224,7 @@ impl Chunk {
         let mut label = 0;
 
         let condition = |index: usize| {
-            matches!(self.chunk_data.cells[index].element, MatterType::Static { .. }) && !matches!(self.chunk_data.cells[index].simulation, SimulationType::RigidBody(..))
+            matches!(self.chunk_data.cells[index].element.matter, MatterType::Static { .. }) && !matches!(self.chunk_data.cells[index].simulation, SimulationType::RigidBody(..))
         };
         
         for x in 0..CHUNK_SIZE {
@@ -239,6 +244,61 @@ impl Chunk {
     //==========
     // Updating
     //==========
+
+    pub fn create_texture(&mut self, pixels: &mut Pixels) {
+        let mut pixel_data: Vec<u8> = Vec::with_capacity(self.chunk_data.cells.len());
+        let size = (self.chunk_data.cells.len() as f32).sqrt().trunc() as u32;
+
+        let mut color = [0, 0, 0, 255];
+        
+        for (index, cell) in self.chunk_data.cells.iter().enumerate() {
+            pixel_data.extend(&color);
+            if index % 2 == 0 {
+                color[0] = color[0].saturating_add(1);
+                // color[1] = color[1].saturating_add(1);
+                // color[2] = color[2].saturating_add(1);
+                // color[3] = color[3].saturating_add(1);
+            }
+        }
+
+        let extent = wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        };
+        
+        let texture = pixels.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("Chunk Texture"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm, // Adjust format as needed
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        pixels.queue().write_texture(
+            // Tells wgpu where to copy the pixel data
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            // The actual pixel data
+            &pixel_data,
+            // The layout of the texture
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * size),
+                rows_per_image: Some(size),
+            },
+            extent,
+        );
+
+        self.texture = Some(texture);
+    }
     
     pub(crate) fn process_placing(&mut self, clock: u8) {
         if self.placing_queue.is_empty() && self.chunk_data.dirty_rect.is_empty() {
@@ -249,14 +309,14 @@ impl Chunk {
             let index = get_cell_index(cell_position.x, cell_position.y);
             cell.clock = clock.wrapping_add(4);
 
-            if self.chunk_data.cells[index].element == MatterType::Empty {
-                if cell.element != MatterType::Empty {
+            if self.chunk_data.cells[index].element.matter == MatterType::Empty {
+                if cell.element.matter != MatterType::Empty {
                     self.chunk_data.set_cell(cell_position, cell);
                     self.cell_count += 1;
                 }
             }
-            else if self.chunk_data.cells[index].element != MatterType::Empty && !matches!(self.chunk_data.cells[index].simulation, SimulationType::RigidBody( .. )) {
-                if cell.element == MatterType::Empty {
+            else if self.chunk_data.cells[index].element.matter != MatterType::Empty && !matches!(self.chunk_data.cells[index].simulation, SimulationType::RigidBody( .. )) {
+                if cell.element.matter == MatterType::Empty {
                     self.cell_count -= 1;
                     self.chunk_data.set_cell(cell_position, cell);
                 }
@@ -292,7 +352,7 @@ impl Chunk {
                     for y in y_range.iter().rev() {
                         let cell = &api.chunk.chunk_data.cells[get_cell_index(*x, *y)];
                     
-                        if cell.element == MatterType::Empty {
+                        if cell.element.matter == MatterType::Empty {
                             continue;
                         }
         
@@ -420,7 +480,7 @@ impl<'a> ChunkApi<'a> {
         }
     }
 
-    pub fn match_element(&self, dx: i32, dy: i32, element: &MatterType) -> bool {
+    pub fn match_element(&self, dx: i32, dy: i32, element: &Element) -> bool {
         let cell_position = self.cell_position.add(dx, dy);
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) {
@@ -475,10 +535,10 @@ impl<'a> ChunkApi<'a> {
                 let old_cell = self.chunk.chunk_data.get_cell(cell_position);
                 let new_cell = self.chunk_manager.replace_cell(self.chunk.position, new_cell_position, old_cell.clone());
 
-                if old_cell.element != MatterType::Empty && new_cell.element == MatterType::Empty {
+                if old_cell.element.matter != MatterType::Empty && new_cell.element.matter == MatterType::Empty {
                     self.chunk.cell_count -= 1;
                 }
-                else if old_cell.element == MatterType::Empty && new_cell.element != MatterType::Empty {
+                else if old_cell.element.matter == MatterType::Empty && new_cell.element.matter != MatterType::Empty {
                     self.chunk.cell_count += 1;
                 }
 

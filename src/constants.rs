@@ -11,4 +11,4 @@ pub const PHYSICS_TO_WORLD: f32 = CHUNK_SIZE as f32 * PHYSICS_SCALE;
 pub const COLLIDER_PRECISION: f32 = 2.0;
 
 pub const DIRTY_CHUNK_OFFSET: i32 = 2;
-pub const DELAY_MS: u128 = 10;
+pub const DELAY_MS: u128 = 50;

@@ -5,7 +5,7 @@ use super::elements::*;
 
 #[derive(Default, Clone)]
 pub struct Cell {
-    pub element: MatterType,
+    pub element: Element,
     pub ra: u8,
     pub rb: u8,
     pub clock: u8,
@@ -20,33 +20,14 @@ pub enum SimulationType {
     RigidBody(usize, usize),
 }
 
-pub static EMPTY_CELL: Cell = Cell {
-    element: MatterType::Empty,
-    ra: 0,
-    rb: 0,
-    clock: 0,
-    flags: 0,
-    simulation: SimulationType::Ca,
-};
-
 impl Cell {
-    pub fn new(element: &MatterType, clock: u8) -> Self {
-        let mut cell = Self {
+    pub fn new(element: &Element, clock: u8) -> Self {
+        Self {
+            ra: rand::thread_rng().gen_range(0..=element.color_offset),
             element: element.clone(),
             clock,
             ..Default::default()
-        };
-
-        match cell.element {
-            MatterType::Empty => {},
-            MatterType::Static { color_offset, .. } 
-                | MatterType::Powder { color_offset, .. } 
-                | MatterType::Liquid { color_offset, .. }
-                | MatterType::Gas { color_offset, .. }
-                => cell.ra = rand::thread_rng().gen_range(0..=color_offset),
         }
-
-        cell
     }
 
     // pub fn new_particle(element: &MatterType, x: f32, y: f32, dx: f32, dy: f32) -> Self {
@@ -69,7 +50,7 @@ impl Cell {
     //     cell
     // }
 
-    pub fn new_with_rb(element: &MatterType, clock: u8, rb: u8) -> Self {
+    pub fn new_with_rb(element: &Element, clock: u8, rb: u8) -> Self {
         let mut cell = Self::new(element, clock);
         cell.rb = rb;
 
@@ -81,7 +62,7 @@ impl Cell {
 
         match self.simulation {
             SimulationType::Ca => {
-                match self.element {
+                match self.element.matter {
                     MatterType::Powder{ .. } => update_sand(self, api, dt),
                     MatterType::Liquid{ .. } => update_liquid(self, api, dt),
                     MatterType::Gas{ .. } => update_gas(self, api, dt),

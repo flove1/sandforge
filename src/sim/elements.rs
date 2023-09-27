@@ -6,28 +6,31 @@ use super::chunk::ChunkApi;
 
 
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
+pub struct Element {
+    pub name: String,
+    pub color: [u8; 4],
+    pub color_offset: u8,
+    pub matter: MatterType
+}
+
+impl Default for Element {
+    fn default() -> Self {
+        Self {
+            name: "Air".to_string(),
+            color: [0; 4],
+            color_offset: 0,
+            matter: MatterType::Empty,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub enum MatterType {
     Empty,
-    Static {
-        name: String,
-        color: [u8; 4],
-        color_offset: u8,
-    },
-    Powder {
-        name: String,
-        color: [u8; 4],
-        color_offset: u8,
-    },
-    Liquid {
-        name: String,
-        color: [u8; 4],
-        color_offset: u8,
-    },
-    Gas {
-        name: String,
-        color: [u8; 4],
-        color_offset: u8,
-    },
+    Static,
+    Powder,
+    Liquid,
+    Gas,
 }
 
 impl ToString for MatterType {
@@ -44,13 +47,13 @@ impl ToString for MatterType {
 
 impl Default for MatterType {
     fn default() -> Self {
-        Self::Empty
+        Self::Empty 
     }
 }
 
 lazy_static! {
-    pub static ref MATTERS: Vec<MatterType> = {
-        let mut elements = vec![MatterType::Empty];
+    pub static ref ELEMENTS: Vec<Element> = {
+        let mut elements = vec![Element::default()];
         
         elements.append(
             &mut serde_yaml::from_str(
@@ -115,21 +118,21 @@ lazy_static! {
 pub fn update_sand<'a>(cell: &Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let dx = api.rand_dir();
     
-    if matches!(api.get(0, 1).element, MatterType::Empty | MatterType::Gas{..}) {
-        if api.once_in(5) && matches!(api.get(dx, 1).element, MatterType::Empty | MatterType::Gas{..}) {
-            api.swap(dx, 1);
+    if matches!(api.get(0, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
+        if api.once_in(5) && matches!(api.get(dx, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
+            api.swap(dx, -1);
         }
         else {
-            api.swap(0, 1);
+            api.swap(0, -1);
         }
     } 
-    else if matches!(api.get(dx, 1).element, MatterType::Empty | MatterType::Gas{..})  {
-        api.swap(dx, 1);
+    else if matches!(api.get(dx, -1).element.matter, MatterType::Empty | MatterType::Gas{..})  {
+        api.swap(dx, -1);
     } 
-    else if matches!(api.get(-dx, 1).element, MatterType::Empty | MatterType::Gas{..}) {
+    else if matches!(api.get(-dx, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         api.swap(-dx, 1);
     } 
-    else if matches!(api.get(0, 1).element, MatterType::Liquid{..}) {
+    else if matches!(api.get(0, -1).element.matter, MatterType::Liquid{..}) {
         api.swap(0, 1);
     }
 
@@ -184,29 +187,29 @@ pub fn update_sand<'a>(cell: &Cell, api: &mut ChunkApi<'a>, _dt: f32) {
 pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let mut dx = api.rand_dir();
 
-    if matches!(api.get(0, 1).element, MatterType::Empty | MatterType::Gas{..}) {
+    if matches!(api.get(0, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         if api.once_in(5) {
             //randomize direction when falling sometimes
             cell.ra = api.rand_int(20) as u8;
         }
 
-        if api.once_in(5) && matches!(api.get(((cell.ra % 2) * 2) as i32 - 1, 1).element, MatterType::Empty | MatterType::Gas{..}) {
-            api.swap(((cell.ra % 2) * 2) as i32 - 1, 1);
+        if api.once_in(5) && matches!(api.get(((cell.ra % 2) * 2) as i32 - 1, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
+            api.swap(((cell.ra % 2) * 2) as i32 - 1, -1);
         }
         else {
-            api.swap(0, 1);
+            api.swap(0, -1);
         }
 
         api.update(cell.clone());
         return
     }
-    else if matches!(api.get(dx, 0).element, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, 1).element, MatterType::Empty | MatterType::Gas{..}) {
+    else if matches!(api.get(dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         api.swap(dx, 0);
 
         api.update(cell.clone());
         return
     }
-    else if matches!(api.get(-dx, 0).element, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(-dx, 1).element, MatterType::Empty | MatterType::Gas{..}) {
+    else if matches!(api.get(-dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(-dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         api.swap(-dx, 0);
 
         api.update(cell.clone());
@@ -218,7 +221,7 @@ pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let dx0 = api.get(dx, 0);
     let dxd = api.get(dx * 2, 0);
 
-    if dx0.element == MatterType::Empty && dxd.element == MatterType::Empty {
+    if dx0.element.matter == MatterType::Empty && dxd.element.matter == MatterType::Empty {
         // scoot double
         cell.rb = 6;
         api.swap(dx * 2, 0);
@@ -227,7 +230,7 @@ pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
         let nbr = api.get(dx, dy);
 
         // spread opinion
-        if matches!(nbr.element, MatterType::Liquid{..}) {
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(dx, dy,
                     Cell {
@@ -237,14 +240,14 @@ pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
                 )
             }
         }
-    } else if dx0.element == MatterType::Empty {
+    } else if dx0.element.matter == MatterType::Empty {
         cell.rb = 3;
         api.swap(dx, 0);
 
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
-        if matches!(nbr.element, MatterType::Liquid{..}) {
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(
                     dx,
@@ -257,7 +260,7 @@ pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
             }
         }
     } else if cell.rb == 0 {
-        if matches!(api.get(-dx, 0).element, MatterType::Empty) {
+        if matches!(api.get(-dx, 0).element.matter, MatterType::Empty) {
             // bump
             cell.ra = ((cell.ra as i32) + dx) as u8;
         }
@@ -272,15 +275,15 @@ pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
 pub fn update_gas<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let mut dx = api.rand_dir();
 
-    if matches!(api.get(dx, 0).element, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, -1).element, MatterType::Empty | MatterType::Gas{..}) {
+    if matches!(api.get(dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         api.swap(dx, 0);
     }
-    else if matches!(api.get(-dx, 0).element, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(-dx, -1).element, MatterType::Empty | MatterType::Gas{..}) {
+    else if matches!(api.get(-dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(-dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         api.swap(-dx, 0);
     }
     
-    if matches!(api.get(0, -1).element, MatterType::Empty | MatterType::Gas{..}) {
-        api.swap(0, -1);
+    if matches!(api.get(0, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
+        api.swap(0, 1);
         if api.once_in(20) {
             //randomize direction when falling sometimes
             cell.ra = api.rand_int(20) as u8;
@@ -295,7 +298,7 @@ pub fn update_gas<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     let dx0 = api.get(dx, 0);
     let dxd = api.get(dx * 2, 0);
 
-    if dx0.element == MatterType::Empty && dxd.element == MatterType::Empty {
+    if dx0.element.matter == MatterType::Empty && dxd.element.matter == MatterType::Empty {
         // scoot double
         cell.rb = 6;
         api.swap(dx * 2, 0);
@@ -304,7 +307,7 @@ pub fn update_gas<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
         let nbr = api.get(dx, dy);
 
         // spread opinion
-        if matches!(nbr.element, MatterType::Liquid{..}) {
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(dx, dy,
                     Cell {
@@ -314,14 +317,14 @@ pub fn update_gas<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
                 )
             }
         }
-    } else if dx0.element == MatterType::Empty {
+    } else if dx0.element.matter == MatterType::Empty {
         cell.rb = 3;
         api.swap(dx, 0);
 
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
-        if matches!(nbr.element, MatterType::Liquid{..}) {
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
             if nbr.ra % 2 != cell.ra % 2 {
                 api.set(
                     dx,
@@ -334,7 +337,7 @@ pub fn update_gas<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
             }
         }
     } else if cell.rb == 0 {
-        if matches!(api.get(-dx, 0).element, MatterType::Empty) {
+        if matches!(api.get(-dx, 0).element.matter, MatterType::Empty) {
             // bump
             cell.ra = ((cell.ra as i32) + dx) as u8;
         }
