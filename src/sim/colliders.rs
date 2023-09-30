@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use poly2tri_rs::{Point, SweeperBuilder};
 use rapier2d::{prelude::{ColliderBuilder, Collider, Real, SharedShape}, na::{Point2, Isometry2}};
 
-use crate::constants::{COLLIDER_PRECISION, PHYSICS_TO_WORLD, PHYSICS_SCALE};
+use crate::constants::{COLLIDER_PRECISION, PHYSICS_TO_WORLD, PHYSICS_SCALE, CHUNK_SIZE};
        
 /// Connected-component labeling
 /// 
@@ -16,44 +16,46 @@ pub fn label_matrix<F: Fn(usize) -> bool>(
     y: i32, 
     label: i32, 
     matrix: &mut [i32], 
-    matrix_size: i32, 
+    width: i32,
+    height: i32,
     condition: &F
  ) {
-    if x < 0 || x > matrix_size - 1 || y < 0 || y > matrix_size - 1 {
+    if x < 0 || x > width - 1 || y < 0 || y > height - 1 {
         return;
     }
 
-    let index = (y * matrix_size + x) as usize;
+    let index = (y * width + x) as usize;
     if matrix[index] != 0 || !condition(index) {
         return;
     }
 
     matrix[index] = label;
 
-    label_matrix(x + 1, y, label, matrix, matrix_size, condition);
-    label_matrix(x - 1, y, label, matrix, matrix_size, condition);
-    label_matrix(x, y + 1, label, matrix, matrix_size, condition);
-    label_matrix(x, y - 1, label, matrix, matrix_size, condition);
+    label_matrix(x + 1, y, label, matrix, width, height, condition);
+    label_matrix(x - 1, y, label, matrix, width, height, condition);
+    label_matrix(x, y + 1, label, matrix, width, height, condition);
+    label_matrix(x, y - 1, label, matrix, width, height, condition);
 }
 
 fn classify_cell(
     x: i32, 
     y: i32, 
     matrix: &[i32], 
-    matrix_size: i32
+    width: i32,
+    height: i32
 ) -> u8 {
     let mut mask = 0;
 
-    if is_set(x - 1, y - 1, matrix, matrix_size) {
+    if is_set(x - 1, y - 1, matrix, width, height) {
         mask |= 1; 
     }
-    if is_set(x, y - 1, matrix, matrix_size) {
+    if is_set(x, y - 1, matrix, width, height) {
         mask |= 2; 
     }
-    if is_set(x - 1, y, matrix, matrix_size) {
+    if is_set(x - 1, y, matrix, width, height) {
         mask |= 4; 
     }
-    if is_set(x, y, matrix, matrix_size) {
+    if is_set(x, y, matrix, width, height) {
         mask |= 8; 
     }
 
@@ -63,25 +65,26 @@ fn classify_cell(
 fn is_set(
     x: i32, 
     y: i32, 
-    matrix: &[i32], 
-    matrix_size: i32
+    matrix: &[i32],
+    width: i32,
+    height: i32
 ) -> bool {
-    if x < 0 || x > matrix_size - 1 || y < 0 || y > matrix_size - 1 {
+    if x < 0 || x > width - 1 || y < 0 || y > height - 1 {
         false
     }
     else {
-        matrix[(y * matrix_size + x) as usize] != 0
+        matrix[(y * width + x) as usize] != 0
     }
 }
 
-pub fn marching_squares(object_count: i32, matrix: &[i32], matrix_size: i32, size_modifier: f32) -> Vec<Vec<Vec<(f32, f32)>>> {
-    let mut visited = vec![false; matrix_size.pow(2) as usize];
+pub fn marching_squares(object_count: i32, matrix: &[i32], width: i32, height: i32, size_modifier: f32) -> Vec<Vec<Vec<(f32, f32)>>> {
+    let mut visited = vec![false; (width * height) as usize];
 
     let mut objects = vec![vec![vec![]]; object_count as usize];
-    for x in 0..matrix_size {
-        for y in 0..matrix_size {
-            let index = (y * matrix_size + x) as usize;
-            let mask = classify_cell(x, y, matrix, matrix_size);
+    for x in 0..width {
+        for y in 0..height {
+            let index = (y * width + x) as usize;
+            let mask = classify_cell(x, y, matrix, width, height);
             if matrix[index] > 0 && !visited[index] && mask != 0 && mask != 15 {
                 let object_label = matrix[index];
 
@@ -91,10 +94,10 @@ pub fn marching_squares(object_count: i32, matrix: &[i32], matrix_size: i32, siz
                 let (mut dx, mut dy) = (0, 0);
 
                 'march: loop {
-                    if current_x >= 0 && current_x < matrix_size && current_y >= 0 && current_y < matrix_size {
-                        visited[(current_y * matrix_size + current_x) as usize] = true;
+                    if current_x >= 0 && current_x < width && current_y >= 0 && current_y < height {
+                        visited[(current_y * width + current_x) as usize] = true;
                     }
-                    match classify_cell(current_x, current_y, matrix, matrix_size) {
+                    match classify_cell(current_x, current_y, matrix, width, height) {
                         1 | 5 | 13 => { dx = 0; dy = -1;  },
                         2 | 3 | 7 => { dx = 1; dy = 0 },
                         8 | 10 | 11 => { dx = 0; dy = 1 },
@@ -110,8 +113,8 @@ pub fn marching_squares(object_count: i32, matrix: &[i32], matrix_size: i32, siz
                     } 
 
                     vertices.push((
-                        (current_x as f32 + (dx as f32 / 2.0) - (matrix_size as f32 / 2.0)) / PHYSICS_TO_WORLD * size_modifier,  
-                        (current_y as f32 + (dy as f32 / 2.0) - (matrix_size as f32 / 2.0)) / PHYSICS_TO_WORLD * size_modifier
+                        (current_x as f32 + (dx as f32 / 2.0) - (width as f32 / 2.0)) / PHYSICS_TO_WORLD * size_modifier,  
+                        (current_y as f32 + (dy as f32 / 2.0) - (height as f32 / 2.0)) / PHYSICS_TO_WORLD * size_modifier
                     ));
 
                     current_x += dx;
@@ -127,7 +130,7 @@ pub fn marching_squares(object_count: i32, matrix: &[i32], matrix_size: i32, siz
 }
 
 fn create_simplified_outlines(object_count: i32, matrix: &[i32], matrix_size: i32, size_modifier: f32) -> Vec<Vec<(f32, f32)>> {
-    marching_squares(object_count, matrix, matrix_size, size_modifier)
+    marching_squares(object_count, matrix, matrix_size, matrix_size, size_modifier)
         .iter()
         .map(|object| {
             object.iter()
@@ -196,8 +199,8 @@ pub fn create_polyline_colliders(object_count: i32, matrix: &[i32], matrix_size:
         .collect::<Vec<(Collider, (f32, f32))>>()
 }
 
-pub fn create_triangulated_collider(matrix: &[i32], matrix_size: i32) -> (Collider, (f32, f32)) {
-    let mut object = marching_squares(1, matrix, matrix_size, 1.0).pop().unwrap();
+pub fn create_triangulated_collider(matrix: &[i32], width: i32, height: i32) -> (Collider, (f32, f32)) {
+    let mut object = marching_squares(1, matrix, width, height, 1.0).pop().unwrap();
 
     object.sort_by(|boundary_1, boundary_2| {
         if boundary_1.len() > boundary_2.len() {
@@ -214,7 +217,7 @@ pub fn create_triangulated_collider(matrix: &[i32], matrix_size: i32) -> (Collid
             simplified_boundary.len() >= 3
         })
         .map(|boundary| {
-            douglas_peucker(&boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32 / PHYSICS_SCALE)
+            douglas_peucker(&boundary, COLLIDER_PRECISION / CHUNK_SIZE.pow(2) as f32 / PHYSICS_SCALE)
         })
         .filter(|simplified_boundary| {
             simplified_boundary.len() >= 3

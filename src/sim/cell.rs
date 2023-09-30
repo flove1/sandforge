@@ -30,6 +30,30 @@ impl Cell {
         }
     }
 
+    pub fn get_color(&self) -> [u8; 4] {
+        match self.element.matter {
+            MatterType::Empty => [0; 4],
+            MatterType::Static | MatterType::Powder => [
+                self.element.color[0].saturating_add(self.ra),
+                self.element.color[1].saturating_add(self.ra),
+                self.element.color[2].saturating_add(self.ra),
+                self.element.color[3].saturating_add(self.ra),
+            ],
+            MatterType::Liquid => [
+                self.element.color[0].saturating_add(fastrand::u8(0..10)),
+                self.element.color[1].saturating_add(fastrand::u8(0..10)),
+                self.element.color[2].saturating_add(fastrand::u8(0..10)),
+                self.element.color[3].saturating_add(fastrand::u8(0..10)),
+            ],
+            MatterType::Gas => [
+                self.element.color[0].saturating_add(fastrand::u8(0..50)),
+                self.element.color[1].saturating_add(fastrand::u8(0..50)),
+                self.element.color[2].saturating_add(fastrand::u8(0..50)),
+                self.element.color[3].saturating_add(fastrand::u8(0..50)),
+            ],
+        }
+    }
+
     // pub fn new_particle(element: &MatterType, x: f32, y: f32, dx: f32, dy: f32) -> Self {
     //     let mut cell = Self {
     //         element: element.clone(),

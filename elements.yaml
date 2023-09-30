@@ -1,7 +1,7 @@
 - !Element {
     name: Sand, 
-    color: [0xf2, 0xf1, 0xa3, 0xff], 
-    color_offset: 25, 
+    color: [0xa2, 0xa1, 0x63, 0xff], 
+    color_offset: 40, 
     matter: Powder
   }
 
@@ -14,8 +14,8 @@
 
 - !Element {
     name: Stone,
-    color: [0x77, 0x77, 0x77, 0xff],
-    color_offset: 20,
+    color: [0x71, 0x77, 0x77, 0xff],
+    color_offset: 25,
     matter: Static
     }
 

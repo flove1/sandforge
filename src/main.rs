@@ -18,5 +18,5 @@ fn main() {
 
     std::thread::spawn(|| { sandforge::deadlock_checker() });
 
-    sandforge::run();
+    pollster::block_on(sandforge::run());
 }

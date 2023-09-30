@@ -20,10 +20,7 @@ harness = false
 inherits = "release"
 debug = true
 
-[profile.release]
-
-
-[profile.release-optimized]
+[profile.optimized]
 inherits = "release"
 panic = "abort"
 codegen-units = 1
@@ -31,15 +28,11 @@ lto = true
 
 [dependencies]
 winit = "0.28.6"
-pixels = "0.13.0"
 env_logger = "0.10"
 error-iter = "0.4.1"
 log = "0.4"
 rand = { version = "0.8.4", features = ["small_rng"] }
-egui-winit = "0.22.0"
 dashmap = { version = "5.5.1", features = ["inline"] }
-egui = "0.22.0"
-egui-wgpu = "0.22.0"
 fps_counter = "2.0.0"
 parking_lot = { version = "0.12.1", features = ["deadlock_detection"] }
 bytemuck = "1.13.1"
@@ -55,3 +48,12 @@ pretty_env_logger = "0.5.0"
 poly2tri-rs = "0.1.2"
 bitflags = "2.4.0"
 rayon = "1.8.0"
+fastrand = "2.0.1"
+wgpu = "0.17.1"
+egui-wgpu = "0.23.0"
+egui-winit = "0.23.0"
+epaint = "0.23.0"
+pollster = "0.3.0"
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.5"

@@ -8,7 +8,9 @@ pub struct PhysicsObject {
     pub rb_handle: RigidBodyHandle,
     pub collider_handle: ColliderHandle,
     pub cells: Vec<ObjectPoint>,
-    pub object_size: usize,
+    pub width: i32,
+    pub height: i32,
+    pub texture: wgpu::Texture,
 }
 
 pub struct ObjectPoint {
@@ -31,7 +33,6 @@ pub struct Physics {
     event_handler: Box<dyn EventHandler>,
 
     pub objects: Vec<PhysicsObject>,
-    pub active_object_ids: Vec<usize>,
 }
 
 impl Physics {
@@ -51,7 +52,6 @@ impl Physics {
             event_handler: Box::new(()),
 
             objects: vec![],
-            active_object_ids: vec![],
         }
     }
 
@@ -59,7 +59,13 @@ impl Physics {
     //     self.objects[object_id].matrix[cell_index] = cell;
     // }
     
-    pub fn new_object(&mut self, cells: Vec<((i32, i32), Cell)>, static_flag: bool) {
+    pub fn new_object(
+        &mut self, 
+        cells: Vec<((i32, i32), Cell)>, 
+        static_flag: bool,
+        device: &wgpu::Device, 
+        queue: &wgpu::Queue
+    ) {
         let mut x_positions = cells.iter().map(|(position, _)| position.0).collect::<Vec<i32>>();
         x_positions.sort();
 
@@ -76,40 +82,41 @@ impl Physics {
             *y_positions.last().unwrap(),
         );
 
-        let (size, x_offset, y_offset) = {
-            let dx = x_max - x_min + 1;
-            let dy = y_max - y_min + 1;
-            
-            if dx > dy {
-                (dx as usize, 0, (dx - dy) / 2)
-            }
-            else {
-                (dy as usize, (dy - dx) / 2, 0)
-            }
+        let (width, height) = {
+            (
+                x_max - x_min + 1,
+                y_max - y_min + 1
+            )
         };
 
-        let mut matrix = vec![0; size.pow(2)];
-        // let mut cell_matrix = vec![EMPTY_CELL.clone(); size.pow(2)];
-
+        let mut matrix = vec![0; (width * height) as usize];
         let mut object_cells = vec![];
+        let mut pixel_data: Vec<u8> = vec![0; (width * height) as usize * 4];
 
         cells.into_iter().for_each(|((x, y), mut cell)| {
-            let index = ((y - y_min + y_offset) * size as i32 + (x - x_min + x_offset)) as usize;
+            let index = ((y - y_min) * width as i32 + (x - x_min)) as usize;
 
             cell.simulation = SimulationType::RigidBody(self.objects.len(), object_cells.len());
 
+            let color = cell.get_color();
+
             object_cells.push(ObjectPoint {
                 texture_coords: vector![
-                    ((x - x_min + x_offset) as f32 - size as f32 / 2.0) / PHYSICS_TO_WORLD as f32,
-                    ((y - y_min + y_offset) as f32 - size as f32 / 2.0) / PHYSICS_TO_WORLD as f32 
+                    ((x - x_min) as f32 - width as f32 / 2.0) / PHYSICS_TO_WORLD as f32,
+                    ((y - y_min) as f32 - height as f32 / 2.0) / PHYSICS_TO_WORLD as f32 
                 ],
                 cell
             });
 
+            pixel_data[index * 4] = color[0];
+            pixel_data[index * 4 + 1] = color[1];
+            pixel_data[index * 4 + 2] = color[2];
+            pixel_data[index * 4 + 3] = color[3];
+
             matrix[index] = 1;
         });
 
-        let (collider, _) = create_triangulated_collider(&mut matrix, size as i32);
+        let (collider, _) = create_triangulated_collider(&mut matrix, width, height);
         
         let rb_handle = self.rigid_body_set.insert(
             if static_flag {
@@ -126,12 +133,50 @@ impl Physics {
             &mut self.rigid_body_set
         );
 
+        let extent = wgpu::Extent3d {
+            width: width as u32,
+            height: height as u32,
+            depth_or_array_layers: 1,
+        };
+        
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Chunk Texture"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb, // Adjust format as needed
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            // Tells wgpu where to copy the pixel data
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            // The actual pixel data
+            &pixel_data,
+            // The layout of the texture
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width as u32),
+                rows_per_image: Some(height as u32),
+            },
+            extent,
+        );  
+
         self.objects.push(
             PhysicsObject { 
                 rb_handle, 
                 collider_handle,
                 cells: object_cells,
-                object_size: size
+                texture,
+                width,
+                height
             }
         );
     }

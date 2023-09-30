@@ -1,10 +1,5 @@
 use std::sync::Arc;
 
-use egui_wgpu::wgpu::{self, Texture};
-use egui_wgpu::wgpu::util::DeviceExt;
-use pixels::Pixels;
-use rand::{Rng, SeedableRng};
-use rapier2d::na::RealField;
 use rapier2d::prelude::{Collider, RigidBodyHandle};
 
 use super::cell::*;
@@ -24,7 +19,7 @@ pub struct Chunk {
     pub(super) particles: Vec<Cell>,
     pub(super) placing_queue: Vec<(Pos2, Cell)>,
     pub(super) cell_count: u64,
-    pub(super) texture: Option<Texture>,
+    pub(super) texture: Option<wgpu::Texture>,
 }
 
 #[derive(Default)]
@@ -126,7 +121,7 @@ impl  ChunkData {
     //==================
 
     pub(crate) fn get_cell(&self, cell_position: Pos2) -> Cell {
-        self.cells[cell_position.to_index(CHUNK_SIZE)].clone()
+        self.cells.get(cell_position.to_index(CHUNK_SIZE)).unwrap_or(&Cell::default()).clone()
     }
 
     pub(crate) fn match_cell(&self, cell_position: Pos2, element: &Element) -> bool {
@@ -232,7 +227,7 @@ impl Chunk {
                 let index = get_cell_index(x, y);
                 if matrix[index] == 0 && condition(index) {
                     label += 1;
-                    label_matrix(x, y, label, &mut matrix, CHUNK_SIZE, &condition);
+                    label_matrix(x, y, label, &mut matrix, CHUNK_SIZE, CHUNK_SIZE, &condition);
                 }
             }
         }
@@ -245,21 +240,12 @@ impl Chunk {
     // Updating
     //==========
 
-    pub fn create_texture(&mut self, pixels: &mut Pixels) {
+    pub fn create_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let mut pixel_data: Vec<u8> = Vec::with_capacity(self.chunk_data.cells.len());
         let size = (self.chunk_data.cells.len() as f32).sqrt().trunc() as u32;
 
-        let mut color = [0, 0, 0, 255];
-        
-        for (index, cell) in self.chunk_data.cells.iter().enumerate() {
-            pixel_data.extend(&color);
-            if index % 2 == 0 {
-                color[0] = color[0].saturating_add(1);
-                // color[1] = color[1].saturating_add(1);
-                // color[2] = color[2].saturating_add(1);
-                // color[3] = color[3].saturating_add(1);
-            }
-        }
+        self.chunk_data.cells.iter()
+            .for_each(|cell| pixel_data.extend(&cell.get_color()));
 
         let extent = wgpu::Extent3d {
             width: size,
@@ -267,18 +253,18 @@ impl Chunk {
             depth_or_array_layers: 1,
         };
         
-        let texture = pixels.device().create_texture(&wgpu::TextureDescriptor {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Chunk Texture"),
             size: extent,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm, // Adjust format as needed
+            format: wgpu::TextureFormat::Rgba8UnormSrgb, // Adjust format as needed
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
-        pixels.queue().write_texture(
+        queue.write_texture(
             // Tells wgpu where to copy the pixel data
             wgpu::ImageCopyTexture {
                 texture: &texture,
@@ -341,7 +327,6 @@ impl Chunk {
             chunk: self,
             chunk_manager: manager.clone(),
             clock,
-            rng: rand::rngs::SmallRng::from_entropy()
         };
 
         {
@@ -349,7 +334,7 @@ impl Chunk {
                 let (x_range, y_range) = api.chunk.chunk_data.dirty_rect.retrieve().get_ranges(clock);
 
                 for x in x_range.iter() {
-                    for y in y_range.iter().rev() {
+                    for y in y_range.iter() {
                         let cell = &api.chunk.chunk_data.cells[get_cell_index(*x, *y)];
                     
                         if cell.element.matter == MatterType::Empty {
@@ -465,7 +450,6 @@ pub struct ChunkApi<'a> {
     pub(super) chunk: &'a mut Chunk,
     pub(super) chunk_manager: Arc<World>,
     pub(super) clock: u8,
-    pub(super) rng: rand::rngs::SmallRng,
 }
 
 impl<'a> ChunkApi<'a> {
@@ -565,7 +549,7 @@ impl<'a> ChunkApi<'a> {
     }
     
     pub fn rand_int(&mut self, n: i32) -> i32 {
-        self.rng.gen_range(0..n)
+        fastrand::i32(0..n)
     }
  
     pub fn rand_dir(&mut self) -> i32 {
