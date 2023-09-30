@@ -65,7 +65,7 @@ lazy_static! {
     };
 }
 
-// pub fn update_particle<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
+// pub fn update_particle<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
 //     if let SimulationType::Particle { x, y, dx, dy, collided } = &mut cell.simulation {
 //         if *collided {
 //             return;
@@ -115,7 +115,7 @@ lazy_static! {
 //     }
 // }
 
-pub fn update_sand<'a>(cell: &Cell, api: &mut ChunkApi<'a>, _dt: f32) {
+pub fn update_sand<'a, 'b>(cell: &Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
     let dx = api.rand_dir();
     
     if matches!(api.get(0, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
@@ -139,7 +139,7 @@ pub fn update_sand<'a>(cell: &Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     api.update(cell.clone());
 }
 
-// pub fn update_fire<'a>(cell: &mut Cell, mut api: ChunkApi<'a>, _dt: f32) -> ChunkApi<'a> {
+// pub fn update_fire<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
 //     let directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)];
 
 //     for (dx, dy) in directions {
@@ -184,7 +184,7 @@ pub fn update_sand<'a>(cell: &Cell, api: &mut ChunkApi<'a>, _dt: f32) {
 //     api
 // }
 
-pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
+pub fn update_liquid<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
     let mut dx = api.rand_dir();
 
     if matches!(api.get(0, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
@@ -272,7 +272,7 @@ pub fn update_liquid<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
     api.update(cell.clone());
 }
 
-pub fn update_gas<'a>(cell: &mut Cell, api: &mut ChunkApi<'a>, _dt: f32) {
+pub fn update_gas<'a, 'b>(cell: &mut Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
     let mut dx = api.rand_dir();
 
     if matches!(api.get(dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {

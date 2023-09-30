@@ -21,7 +21,7 @@ use crate::sim::elements::MatterType;
 
 use parking_lot::deadlock;
 use sim::elements::Element;
-use sim::world::{World, WorldApi};
+use sim::world::World;
 use gui::Gui;
 use winit::dpi::LogicalSize;
 use winit::event::Event;
@@ -305,7 +305,7 @@ pub fn deadlock_checker() {
 //     World::new()
 // }
 
-pub fn bench_fill(world: &mut WorldApi) {
+pub fn bench_fill(world: &mut World) {
     let element = Element {
         name: "Bench".to_string(), 
         color: [0, 0, 0, 0], 
@@ -315,29 +315,25 @@ pub fn bench_fill(world: &mut WorldApi) {
 
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
         for y in 0..CHUNK_SIZE {
-            world.place(x, y, &element);
+            world.set_cell_by_pixel(x, y, &element);
         }
     }
 
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
         for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
-            world.place(x, y, &element);
+            world.set_cell_by_pixel(x, y, &element);
         }
     }
 }
 
-pub fn bench_until_empty(world: &mut WorldApi) {
+pub fn bench_until_empty(world: &mut World) {
     loop {
-        
-        let (_, pixels_count) = world.update_iteration();
-        if pixels_count == 0 {
-            return ;
-        }
+        world.forced_update();
     };
 }
 
-pub fn bench_number_of_updated(world: &mut WorldApi, n: usize) {
+pub fn bench_number_of_updated(world: &mut World, n: usize) {
     for _ in 0..n {
-        world.update_iteration();
+        world.forced_update();
     }
 }

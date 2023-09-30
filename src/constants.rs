@@ -20,5 +20,5 @@ pub const COLLIDER_PRECISION: f32 = 2.0;
 
 pub const DIRTY_CHUNK_OFFSET: i32 = 2;
 
-pub const TARGET_FPS: u128 = 60;
-pub const CA_DELAY_MS: u128 = 10;
+pub const TARGET_FPS: u128 = 120;
+pub const CA_DELAY_MS: u128 = 5;

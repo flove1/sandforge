@@ -187,6 +187,10 @@ impl Physics {
         )
     }
 
+    pub fn has_colliders(&mut self, rb_handle: RigidBodyHandle) -> bool {
+        self.rigid_body_set[rb_handle].colliders().len() > 0
+    }
+
     pub fn remove_collider_from_object(&mut self, rb_handle: RigidBodyHandle) {
         let colliders = self.rigid_body_set[rb_handle].colliders().iter().map(|handle| *handle).collect::<Vec<ColliderHandle>>();
 
@@ -200,7 +204,7 @@ impl Physics {
         };
     }
 
-    pub fn replace_colliders_to_static_body(&mut self, rb_handle: RigidBodyHandle, colliders: &[(Collider, (f32, f32))]) {
+    pub fn add_colliders_to_static_body(&mut self, rb_handle: RigidBodyHandle, colliders: &[(Collider, (f32, f32))]) {
         colliders.iter()
             .for_each(|(collider, _)| {
                 self.collider_set.insert_with_parent(
@@ -268,9 +272,14 @@ impl Physics {
                 (
                     object, 
                     object.cells.iter()
-                        .map(|cell| {
+                        .filter_map(|cell| {
                                 let position = rotation_matrix * cell.texture_coords + center;
-                                (cell, pos2!((position.x * PHYSICS_TO_WORLD).trunc() as i32, (position.y * PHYSICS_TO_WORLD).trunc() as i32))
+                                if position.x * PHYSICS_SCALE < 0.0 || position.y * PHYSICS_SCALE < 0.0 || position.x * PHYSICS_SCALE >= WORLD_WIDTH as f32 || position.y * PHYSICS_SCALE >= WORLD_HEIGHT as f32 {
+                                    None
+                                }
+                                else {
+                                    Some((cell, pos2!((position.x * PHYSICS_TO_WORLD).trunc() as i32, (position.y * PHYSICS_TO_WORLD).trunc() as i32)))
+                                }
                             })
                         .collect::<Vec<(&ObjectPoint, Pos2)>>()
                 )

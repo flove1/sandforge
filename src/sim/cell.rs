@@ -81,7 +81,7 @@ impl Cell {
         cell
     }
 
-    pub fn update_cell<'a>(&mut self, api: &mut ChunkApi<'a>, dt: f32, clock: u8) {
+    pub fn update_cell<'a, 'b>(&mut self, api: &mut ChunkApi<'a, 'b>, dt: f32, clock: u8) {
         self.clock = clock;
 
         match self.simulation {
