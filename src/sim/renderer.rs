@@ -5,16 +5,16 @@ use crate::{constants::{PHYSICS_SCALE, WORLD_WIDTH, WORLD_HEIGHT, CHUNK_SIZE}, v
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
+pub struct TextureVertex {
     pub position: [f32; 3],
     pub tex_coords: [f32; 2],
 }
 
-impl Vertex {
+impl TextureVertex {
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            array_stride: mem::size_of::<TextureVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -32,15 +32,99 @@ impl Vertex {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ColliderVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
+impl ColliderVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<ColliderVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ]
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ParticleVertex {
+    pub position: [f32; 3],
+}
+
+impl ParticleVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<ParticleVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ]
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ParticleInstance {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
+impl ParticleInstance {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<ParticleInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ]
+        }
+    }
+}
+
 pub struct Renderer {
     objects: Vec<(wgpu::BindGroup, wgpu::Buffer)>,
     chunks: Vec<(wgpu::BindGroup, wgpu::Buffer)>,
     colliders: Vec<(wgpu::Buffer, wgpu::Buffer, u32)>,
 
-    texture_indices: wgpu::Buffer,
+    particles: Vec<ParticleInstance>,
+    particle_instance_buffer: Option<wgpu::Buffer>,
+    particle_vertex_buffer: wgpu::Buffer,
 
     texture_render_pipeline: wgpu::RenderPipeline,
     collider_render_pipeline: wgpu::RenderPipeline,
+    particle_render_pipeline: wgpu::RenderPipeline,
 
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -50,6 +134,7 @@ impl Renderer {
     pub fn new(device: &wgpu::Device, format: &wgpu::TextureFormat) -> Self {
         let texture_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/texture.wgsl"));
         let collider_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/collider.wgsl"));
+        let particle_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/particle.wgsl"));
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -83,7 +168,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: &texture_shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
+                buffers: &[TextureVertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &texture_shader,
@@ -98,7 +183,7 @@ impl Renderer {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Cw,
                 cull_mode: Some(wgpu::Face::Back),
@@ -121,7 +206,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: &collider_shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
+                buffers: &[ColliderVertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &collider_shader,
@@ -159,50 +244,121 @@ impl Renderer {
             ..Default::default()
         });
 
-        let texture_indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Renderer index buffer"),
-            contents: bytemuck::cast_slice(&[
-                0u32, 1u32, 2u32,
-                2u32, 1u32, 3u32
-            ]),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        let particle_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Renderer pipeline layout"),
+                bind_group_layouts: &[],
+                push_constant_ranges: &[],
+            })),
+            vertex: wgpu::VertexState {
+                module: &particle_shader,
+                entry_point: "vs_main",
+                buffers: &[ParticleVertex::desc(), ParticleInstance::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &particle_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: *format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent::REPLACE,
+                        alpha: wgpu::BlendComponent::REPLACE,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multiview: None,
+            multisample: wgpu::MultisampleState::default(),
         });
 
+        let particle_vertices = [
+            ParticleVertex {
+                position: [
+                    0.0, 
+                    0.0, 
+                    0.0,
+                ],
+            },
+            ParticleVertex {
+                position: [
+                    0.0,
+                    0.25 / (WORLD_HEIGHT + CHUNK_SIZE) as f32, 
+                    0.0,
+                ],
+            },
+            ParticleVertex {
+                position: [
+                    0.25 / (WORLD_WIDTH + CHUNK_SIZE) as f32,
+                    0.0,
+                    0.0,
+                ],
+            },
+            ParticleVertex {
+                position: [
+                    0.25 / (WORLD_WIDTH + CHUNK_SIZE) as f32,
+                    0.25 / (WORLD_HEIGHT + CHUNK_SIZE) as f32,
+                    0.0,
+                ],
+            },
+        ];
+
+        let particle_vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Camera Buffer"),
+                contents: bytemuck::cast_slice(&[particle_vertices]),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        
         Self {
             objects: vec![],
             chunks: vec![],
             colliders: vec![],
 
+            particles: vec![],
+            particle_vertex_buffer,
+            particle_instance_buffer: None,
+
             texture_render_pipeline,
             collider_render_pipeline,
-            bind_group_layout,
+            particle_render_pipeline,
+
             sampler,
-            texture_indices
+            bind_group_layout,
         }
     }
 
-    pub(crate) fn update(
+    fn create_collider_buffers(
         &mut self, 
         device: &wgpu::Device,
         colliders: &rapier2d::prelude::ColliderSet,
-        chunk_textures: Vec<(wgpu::TextureView, Pos2)>,
-        object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>,
     ) {
         self.colliders = colliders.iter()
             .map(|(_, collider)| {
                 if let Some(shape) = collider.shape().as_polyline() {
                     let vertices = shape.vertices().iter()
                         .map(|vertex| {
-                            Vertex {
+                            ColliderVertex {
                                 position: [
                                     (vertex.x + collider.position().translation.x) / 4.0 * PHYSICS_SCALE - 1.0,
                                     (vertex.y + collider.position().translation.y) / 4.0 * PHYSICS_SCALE - 1.0,
                                     0.0,
                                 ],
-                                tex_coords: [0.0; 2],
+                                color: [0.0, 0.5, 1.0, 0.5],
                             }
                         })
-                        .collect::<Vec<Vertex>>();
+                        .collect::<Vec<ColliderVertex>>();
 
                     let mut indices = vec![];
 
@@ -236,13 +392,13 @@ impl Renderer {
                                     let rotated_vertex = rotation_matrix * vertex;
 
                                     vertices.push(
-                                        Vertex {
+                                        ColliderVertex {
                                             position: [
                                                 (rotated_vertex.x + collider.position().translation.x) / 4.0 * PHYSICS_SCALE - 1.0,
                                                 (rotated_vertex.y + collider.position().translation.y) / 4.0 * PHYSICS_SCALE - 1.0,
                                                 0.0,
                                             ],
-                                            tex_coords: [0.0; 2],
+                                            color: [0.0, 1.0, 0.0, 0.5],
                                         }
                                     )
                                 })
@@ -285,8 +441,14 @@ impl Renderer {
                 (vertices_buffer, indeces_buffer, indeces.len() as u32)
             })
             .collect();
+    }
 
-        self.chunks = chunk_textures.into_iter()
+    fn create_chunk_buffers(
+        &mut self, 
+        device: &wgpu::Device,
+        chunk_textures: Vec<(wgpu::TextureView, Pos2)>,
+    ) {
+            self.chunks = chunk_textures.into_iter()
             .map(|(texture, pos)| {
                 let bind_group = device.create_bind_group(
                     &wgpu::BindGroupDescriptor {
@@ -308,7 +470,7 @@ impl Renderer {
                 let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Renderer index buffer"),
                     contents: bytemuck::cast_slice(&[
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0,
                                 (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0,
@@ -316,7 +478,7 @@ impl Renderer {
                             ], 
                             tex_coords: [0.0, 0.0] 
                         },
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0,
                                 ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0,
@@ -324,7 +486,7 @@ impl Renderer {
                             ], 
                             tex_coords: [0.0, 1.0] 
                         },
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0,
                                 (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0,
@@ -332,7 +494,7 @@ impl Renderer {
                             ], 
                             tex_coords: [1.0, 0.0] 
                         },
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0,
                                 ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0,
@@ -347,7 +509,13 @@ impl Renderer {
                 (bind_group, buffer)
             })
             .collect();
+    }
 
+    fn create_objects_buffers(
+        &mut self, 
+        device: &wgpu::Device,
+        object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>,
+    ) {
         self.objects = object_textures.into_iter()
             .map(|(texture, pos, angle, width, height)| {
                 let bind_group = device.create_bind_group(
@@ -373,7 +541,6 @@ impl Renderer {
                     angle.sin(), 
                     angle.cos()
                 );
-
 
                 let points = [
                     rotation_matrix * 
@@ -401,7 +568,7 @@ impl Renderer {
                 let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Renderer index buffer"),
                     contents: bytemuck::cast_slice(&[
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 pos.x / 4.0 * PHYSICS_SCALE + points[0].x - 1.0,
                                 pos.y / 4.0 * PHYSICS_SCALE + points[0].y - 1.0,
@@ -409,7 +576,7 @@ impl Renderer {
                             ], 
                             tex_coords: [0.0, 0.0] 
                         },
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 pos.x / 4.0 * PHYSICS_SCALE + points[1].x - 1.0,
                                 pos.y / 4.0 * PHYSICS_SCALE + points[1].y - 1.0,
@@ -417,7 +584,7 @@ impl Renderer {
                             ], 
                             tex_coords: [0.0, 1.0] 
                         },
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 pos.x / 4.0 * PHYSICS_SCALE + points[2].x - 1.0,
                                 pos.y / 4.0 * PHYSICS_SCALE + points[2].y - 1.0,
@@ -425,7 +592,7 @@ impl Renderer {
                             ], 
                             tex_coords: [1.0, 0.0] 
                         },
-                        Vertex { 
+                        TextureVertex { 
                             position: [
                                 pos.x / 4.0 * PHYSICS_SCALE + points[3].x - 1.0,
                                 pos.y / 4.0 * PHYSICS_SCALE + points[3].y - 1.0,
@@ -441,6 +608,61 @@ impl Renderer {
 
             })
             .collect()
+    }
+
+
+    fn create_particle_buffers(
+        &mut self, 
+        device: &wgpu::Device,
+        particles: Vec<(f32, f32, [u8; 4])>,
+    ) {
+        self.particles = particles.into_iter()
+            .map(|(x, y, color)| {
+                let color = [
+                    color[0] as f32 / 255.0,
+                    color[1] as f32 / 255.0,
+                    color[2] as f32 / 255.0,
+                    color[3] as f32 / 255.0,
+                ];
+
+                ParticleInstance { 
+                    position: [
+                        (x / WORLD_WIDTH as f32 - 0.5) * 2.0,
+                        (y / WORLD_HEIGHT as f32 - 0.5) * 2.0,
+                        0.0,
+                    ], 
+                    color,
+                }
+            })
+            .collect();
+
+        if self.particles.len() > 0 {
+            self.particle_instance_buffer = Some(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Renderer index buffer"),
+                    contents: bytemuck::cast_slice(&self.particles),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+            );
+        }
+        else {
+            self.particle_instance_buffer = None;
+        }
+        
+    }
+
+    pub(crate) fn update(
+        &mut self, 
+        device: &wgpu::Device,
+        colliders: &rapier2d::prelude::ColliderSet,
+        chunk_textures: Vec<(wgpu::TextureView, Pos2)>,
+        object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>,
+        particles: Vec<(f32, f32, [u8; 4])>
+    ) {
+        self.create_chunk_buffers(device, chunk_textures);
+        self.create_objects_buffers(device, object_textures);
+        self.create_particle_buffers(device, particles);
+        self.create_collider_buffers(device, colliders);
     }
 
     pub(crate) fn render(
@@ -467,11 +689,8 @@ impl Renderer {
                 rpass.set_pipeline(&self.texture_render_pipeline);
                 rpass.set_bind_group(0, bind_group, &[]);
                 rpass.set_vertex_buffer(0, bind_buffer.slice(..));
-                rpass.set_index_buffer(self.texture_indices.slice(..), wgpu::IndexFormat::Uint32);
-                // rpass.draw(0..4, 0..1);
-                rpass.draw_indexed(0..6, 0, 0..1);
+                rpass.draw(0..4, 0..1);
             });
-
 
         self.objects.iter()
             .for_each(|(bind_group, bind_buffer)| {
@@ -491,10 +710,29 @@ impl Renderer {
                 rpass.set_pipeline(&self.texture_render_pipeline);
                 rpass.set_bind_group(0, bind_group, &[]);
                 rpass.set_vertex_buffer(0, bind_buffer.slice(..));
-                rpass.set_index_buffer(self.texture_indices.slice(..), wgpu::IndexFormat::Uint32);
-                // rpass.draw(0..4, 0..1);
-                rpass.draw_indexed(0..6, 0, 0..1);
+                rpass.draw(0..4, 0..1);
             });
+
+
+        if let Some(instance_buffer) = &self.particle_instance_buffer {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Renderer render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    },
+                })],
+                depth_stencil_attachment: None,
+            });
+    
+            rpass.set_pipeline(&self.particle_render_pipeline);
+            rpass.set_vertex_buffer(0, self.particle_vertex_buffer.slice(..));
+            rpass.set_vertex_buffer(1, instance_buffer.slice(..));
+            rpass.draw(0..4, 0..self.particles.len() as u32);
+        }
 
         self.colliders.iter()
             .for_each(|(vertices, indeces, index_count)| {

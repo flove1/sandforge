@@ -1,8 +1,8 @@
 use rapier2d::{prelude::*, na::{Isometry2, Vector2}};
 
-use crate::{constants::{CHUNK_SIZE, WORLD_WIDTH, WORLD_HEIGHT, PHYSICS_TO_WORLD, PHYSICS_SCALE}, pos2, vector::Pos2};
+use crate::{constants::{CHUNK_SIZE, WORLD_WIDTH, WORLD_HEIGHT, PHYSICS_TO_WORLD}, pos2, vector::Pos2};
 
-use super::{cell::{Cell, SimulationType}, colliders::create_triangulated_collider};
+use super::{cell::{Cell, SimulationType}, colliders::create_triangulated_collider, elements::MatterType};
 
 pub struct PhysicsObject {
     pub rb_handle: RigidBodyHandle,
@@ -15,6 +15,8 @@ pub struct PhysicsObject {
 
 pub struct ObjectPoint {
     pub texture_coords: Vector2<f32>,
+    pub world_coords: Pos2,
+    pub old_world_coords: Pos2,
     pub cell: Cell,
 }
 
@@ -93,28 +95,39 @@ impl Physics {
         let mut object_cells = vec![];
         let mut pixel_data: Vec<u8> = vec![0; (width * height) as usize * 4];
 
-        cells.into_iter().for_each(|((x, y), mut cell)| {
-            let index = ((y - y_min) * width as i32 + (x - x_min)) as usize;
+        cells.into_iter()
+            .filter(|(_, cell)| {
+                if cell.element.matter == MatterType::Empty {
+                    false
+                }
+                else {
+                    true
+                }
+            })
+            .for_each(|((x, y), mut cell)| {
+                let index = ((y - y_min) * width as i32 + (x - x_min)) as usize;
 
-            cell.simulation = SimulationType::RigidBody(self.objects.len(), object_cells.len());
+                cell.simulation = SimulationType::RigidBody(self.objects.len(), object_cells.len());
 
-            let color = cell.get_color();
+                let color = cell.get_color();
 
-            object_cells.push(ObjectPoint {
-                texture_coords: vector![
-                    ((x - x_min) as f32 - width as f32 / 2.0) / PHYSICS_TO_WORLD as f32,
-                    ((y - y_min) as f32 - height as f32 / 2.0) / PHYSICS_TO_WORLD as f32 
-                ],
-                cell
+                object_cells.push(ObjectPoint {
+                    texture_coords: vector![
+                        ((x - x_min) as f32 - width as f32 / 2.0) / PHYSICS_TO_WORLD as f32,
+                        ((y - y_min) as f32 - height as f32 / 2.0) / PHYSICS_TO_WORLD as f32 
+                    ],
+                    world_coords: pos2!(x, y),
+                    old_world_coords: pos2!(x, y),
+                    cell
+                });
+
+                pixel_data[index * 4] = color[0];
+                pixel_data[index * 4 + 1] = color[1];
+                pixel_data[index * 4 + 2] = color[2];
+                pixel_data[index * 4 + 3] = color[3];
+
+                matrix[index] = 1;
             });
-
-            pixel_data[index * 4] = color[0];
-            pixel_data[index * 4 + 1] = color[1];
-            pixel_data[index * 4 + 2] = color[2];
-            pixel_data[index * 4 + 3] = color[3];
-
-            matrix[index] = 1;
-        });
 
         let (collider, _) = create_triangulated_collider(&mut matrix, width, height);
         
@@ -218,7 +231,7 @@ impl Physics {
 
     pub fn step(&mut self) {
         self.physics_pipeline.step(
-            &vector![0.0, 1.0 / PHYSICS_SCALE],
+            &vector![0.0, -9.8 / PHYSICS_TO_WORLD * 4.0],
             &self.integration_parameters,
             &mut self.island_manager,
             &mut self.broad_phase,
@@ -253,15 +266,13 @@ impl Physics {
                 true
             }
         });
-    }
 
-    pub fn rb_to_ca(&self) -> Vec<(&PhysicsObject, Vec<(&ObjectPoint, Pos2)>)> {
-        self.objects.iter()
+        self.objects.iter_mut()
             .map(|object| {
                 let rb = &self.rigid_body_set[object.rb_handle];
                 (object, rb.position().translation.vector, rb.rotation().angle())
             })
-            .map(|(object, center, angle)| {                
+            .for_each(|(object, center, angle)| {                
                 let rotation_matrix = nalgebra::Matrix2::new(
                     angle.cos(), 
                     -angle.sin(), 
@@ -269,21 +280,24 @@ impl Physics {
                     angle.cos()
                 );
 
+                object.cells.iter_mut()
+                    .for_each(|cell| {
+                        cell.old_world_coords = cell.world_coords;
+                        
+                        let position = rotation_matrix * cell.texture_coords + center;
+                        cell.world_coords = pos2!((position.x * PHYSICS_TO_WORLD).trunc() as i32, (position.y * PHYSICS_TO_WORLD).trunc() as i32);
+                    });
+            });
+    }
+
+    pub fn rb_to_ca(&self) -> Vec<(&PhysicsObject, &Vec<ObjectPoint>)> {
+        self.objects.iter()
+            .map(|object| {
                 (
                     object, 
-                    object.cells.iter()
-                        .filter_map(|cell| {
-                                let position = rotation_matrix * cell.texture_coords + center;
-                                if position.x * PHYSICS_SCALE < 0.0 || position.y * PHYSICS_SCALE < 0.0 || position.x * PHYSICS_SCALE >= WORLD_WIDTH as f32 || position.y * PHYSICS_SCALE >= WORLD_HEIGHT as f32 {
-                                    None
-                                }
-                                else {
-                                    Some((cell, pos2!((position.x * PHYSICS_TO_WORLD).trunc() as i32, (position.y * PHYSICS_TO_WORLD).trunc() as i32)))
-                                }
-                            })
-                        .collect::<Vec<(&ObjectPoint, Pos2)>>()
+                    &object.cells
                 )
             })
-            .collect::<Vec<(&PhysicsObject, Vec<(&ObjectPoint, Pos2)>)>>()
+            .collect::<Vec<(&PhysicsObject, &Vec<ObjectPoint>)>>()
     }
 }

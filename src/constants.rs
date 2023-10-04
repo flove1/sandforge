@@ -10,8 +10,6 @@ pub const SCREEN_HEIGHT: f32 = (WORLD_HEIGHT * CHUNK_SIZE) as f32 * SCALE;
 
 pub const SCALE: f32 = 1.5;
 
-
-
 pub const PHYSICS_SCALE: f32 = 1.0;
 pub const PHYSICS_TO_WORLD: f32 = CHUNK_SIZE as f32 * PHYSICS_SCALE;
 

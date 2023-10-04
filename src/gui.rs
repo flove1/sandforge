@@ -68,19 +68,19 @@ impl BrushShape {
     }    
 }
 
-pub struct MouseInput {
-    pub brush: Brush,
-    pub mouse_keys: [ElementState; 3],
-    pub last_mouse_position: Option<LogicalPosition<f64>>,
-    pub placing_queue: HashMap<(i32, i32), Cell>,
-}
-
 pub struct Frame {
     pub instant: Instant,
     pub pixels_updated: u128,
     pub chunks_updated: u128,
     pub fps: usize,
     fps_counter: FPSCounter,
+}
+
+pub struct MouseInput {
+    pub brush: Brush,
+    pub mouse_keys: [ElementState; 3],
+    pub last_mouse_position: Option<LogicalPosition<f64>>,
+    pub placing_queue: HashMap<(i32, i32), Cell>,
 }
 
 impl MouseInput {
@@ -99,8 +99,17 @@ impl MouseInput {
         }
     }
 
+    pub fn get_pixel_position(&self) -> (i32, i32) {
+        if let Some(last_position) = self.last_mouse_position {
+            ((last_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - last_position.y as f32) / SCALE).round() as i32)
+        }
+        else {
+            (-1, -1)
+        }
+    }
+
     #[allow(unused)]
-    pub fn handle_mouse_buttons(&mut self, control_flow: &mut winit::event_loop::ControlFlow, state: &winit::event::ElementState, button: &winit::event::MouseButton) {
+    fn handle_mouse_buttons(&mut self, control_flow: &mut winit::event_loop::ControlFlow, state: &winit::event::ElementState, button: &winit::event::MouseButton) {
         match *button {
             winit::event::MouseButton::Left => {
                 self.mouse_keys[0] = *state;
@@ -115,50 +124,82 @@ impl MouseInput {
         }
     }
 
-    #[allow(unused)]
-    pub fn handle_mouse_movement(&mut self, position: &winit::dpi::PhysicalPosition<f64>, scale: f64) {
-        if self.mouse_keys[0] == ElementState::Pressed {
-            if let Some(last_position) = self.last_mouse_position {
-                let mut draw_operation = |x: i32, y: i32| {
-                    match self.brush.brush_type {
-                        BrushType::Particle(rate) => {
-                            if fastrand::u8(0..255) <= rate {
-                                self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
-                            }
-                        },
-                        _ => {
-                            self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
-                        }
+    fn handle_mouse_hold(&mut self) {
+        let mut draw_operation = |x: i32, y: i32| {
+            match self.brush.brush_type {
+                BrushType::Particle(rate) => {
+                    if fastrand::u8(0..255) <= rate {
+                        self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
                     }
-                };
-
-                let mut function = |x: i32, y: i32| {
-                    self.brush.shape.draw(x, y, self.brush.size, &mut draw_operation);
-                    true
-                };
-
-                let logical_position = position.to_logical::<f64>(scale);
-                
-                let (x1, y1) = if last_position.x < SCREEN_WIDTH as f64 && last_position.y < SCREEN_HEIGHT as f64 {
-                    ((last_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - last_position.y as f32) / SCALE).round() as i32)
+                },
+                _ => {
+                    self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
                 }
-                else {
-                    self.last_mouse_position = Some(logical_position);
-                    return
-                };
-                
-                let (x2, y2) = if logical_position.x < SCREEN_WIDTH as f64 && logical_position.y < SCREEN_HEIGHT as f64 {
-                    ((logical_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - logical_position.y as f32) / SCALE).round() as i32)
-                }
-                else {
-                    self.last_mouse_position = Some(logical_position);
-                    return
-                };
-
-                line_from_pixels(x1, y1, x2, y2, &mut function);
             }
+        };
+
+        if let Some(last_position) = self.last_mouse_position {
+            if last_position.x < 0.0 || last_position.x > SCREEN_WIDTH as f64 || last_position.y < 0.0 || last_position.y > SCREEN_HEIGHT as f64 {
+                return;
+            }
+
+            let (x, y) = {
+                ((last_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - last_position.y as f32) / SCALE).round() as i32)
+            };
+
+            self.brush.shape.draw(x, y, self.brush.size, &mut draw_operation);
         }
-        self.last_mouse_position = Some(position.to_logical::<f64>(scale));
+    }
+
+    #[allow(unused)]
+    fn handle_mouse_movement(&mut self, position: &winit::dpi::PhysicalPosition<f64>, scale: f64) {
+        if self.mouse_keys[0] == ElementState::Released {
+            self.last_mouse_position = Some(position.to_logical::<f64>(scale));
+            return;
+        }
+
+        let mut draw_operation = |x: i32, y: i32| {
+            match self.brush.brush_type {
+                BrushType::Particle(rate) => {
+                    if fastrand::u8(0..255) <= rate {
+                        self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                    }
+                },
+                _ => {
+                    self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                }
+            }
+        };
+
+        let mut function = |x: i32, y: i32| {
+            self.brush.shape.draw(x, y, self.brush.size, &mut draw_operation);
+            true
+        };
+
+        let logical_position = position.to_logical::<f64>(scale);
+
+        if let Some(last_position) = self.last_mouse_position {
+            if last_position.x < 0.0 || last_position.x > SCREEN_WIDTH as f64 || last_position.y < 0.0 || last_position.y > SCREEN_HEIGHT as f64 {
+                self.last_mouse_position = Some(logical_position);
+                return;
+            }
+            
+            let (x1, y1) = {
+                ((last_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - last_position.y as f32) / SCALE).round() as i32)
+            };
+
+            if logical_position.x < 0.0 || logical_position.x > SCREEN_WIDTH as f64 || logical_position.y < 0.0 || logical_position.y > SCREEN_HEIGHT as f64 {
+                return;
+            }
+            
+            let (x2, y2) = {
+                ((logical_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - logical_position.y as f32) / SCALE).round() as i32)
+            };
+
+            line_from_pixels(x1, y1, x2 + x2.signum() * 1, y2 + y2.signum() * 1, &mut function);
+        }
+
+        self.last_mouse_position = Some(logical_position);
     }
 }
 
@@ -179,6 +220,8 @@ struct Interface {
     menu_bar_open: bool,
     info_open: bool,
     elements_open: bool,
+    cell_info_open: bool,
+    selected_cell: Cell,
 }
 
 impl Gui {
@@ -263,40 +306,61 @@ impl Gui {
         control_flow: &mut winit::event_loop::ControlFlow, 
         scale_factor: f64
     ) -> EventResponse {
-        match event {
-            winit::event::WindowEvent::CursorMoved { position, .. } => {
-                self.mouse_input.handle_mouse_movement(position, scale_factor);
-            },
 
-            winit::event::WindowEvent::MouseInput {state, button, ..} => {
-                self.mouse_input.handle_mouse_buttons(control_flow, state, button);
-            },
 
-            winit::event::WindowEvent::KeyboardInput { input, .. } => {
-                if let winit::event::ElementState::Released = input.state {
-                    if let Some(keycode) = input.virtual_keycode {
-                        match keycode {
-                            winit::event::VirtualKeyCode::F1 => {
-                                self.interface.menu_bar_open = !self.interface.menu_bar_open;
-                            },
-                            winit::event::VirtualKeyCode::F2 => {
-                                self.interface.info_open = !self.interface.info_open;
-                            },
-                            winit::event::VirtualKeyCode::F3 => {
-                                self.interface.elements_open = !self.interface.elements_open;
-                            },
-                            winit::event::VirtualKeyCode::Escape | winit::event::VirtualKeyCode::Q  => {
-                                control_flow.set_exit();
-                            },
-                            _ => {}
+        let response = self.egui_state.on_event(&self.egui_ctx, event);
+
+        if !response.consumed {
+            match event { 
+                winit::event::WindowEvent::CursorMoved { position, .. } => {
+                    self.mouse_input.handle_mouse_movement(position, scale_factor);
+                },
+    
+                winit::event::WindowEvent::MouseInput {state, button, ..} => {
+                    self.mouse_input.handle_mouse_buttons(control_flow, state, button);
+                    
+                    if self.is_mouse_held(0) {
+                        self.mouse_input.handle_mouse_hold();
+                    }        
+                },
+    
+                winit::event::WindowEvent::KeyboardInput { input, .. } => {
+                    if let winit::event::ElementState::Released = input.state {
+                        if let Some(keycode) = input.virtual_keycode {
+                            match keycode {
+                                winit::event::VirtualKeyCode::F1 => {
+                                    self.interface.menu_bar_open = !self.interface.menu_bar_open;
+                                },
+                                winit::event::VirtualKeyCode::F2 => {
+                                    self.interface.info_open = !self.interface.info_open;
+                                },
+                                winit::event::VirtualKeyCode::F3 => {
+                                    self.interface.elements_open = !self.interface.elements_open;
+                                },
+                                winit::event::VirtualKeyCode::F4 => {
+                                    self.interface.cell_info_open = !self.interface.cell_info_open;
+                                },
+                                winit::event::VirtualKeyCode::Escape | winit::event::VirtualKeyCode::Q  => {
+                                    control_flow.set_exit();
+                                },
+                                _ => {}
+                            }
                         }
-                    }
-                }  
-            },
-            _ => {}
+                    }  
+                },
+                _ => {}
+            }
         }
 
-        self.egui_state.on_event(&self.egui_ctx, event)
+        response
+    }
+
+    pub fn get_pixel_position(&self) -> (i32, i32) {
+        self.mouse_input.get_pixel_position()
+    }
+
+    pub fn update_selected_cell(&mut self, cell: Cell) {
+        self.interface.selected_cell = cell;
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -366,8 +430,12 @@ impl Gui {
     // Mouse interaction
     //===================
     
-    pub fn is_key_released(&self, key: usize) -> bool {
+    pub fn is_mouse_released(&self, key: usize) -> bool {
         self.mouse_input.mouse_keys[key] == ElementState::Released
+    }
+    
+    pub fn is_mouse_held(&self, key: usize) -> bool {
+        self.mouse_input.mouse_keys[key] == ElementState::Pressed
     }
     
     pub fn get_brush(&self) -> Brush {
@@ -414,6 +482,8 @@ impl Interface {
             menu_bar_open: false,
             info_open: true, 
             elements_open: true,
+            cell_info_open: true,
+            selected_cell: Cell::default()
         }
     }
     fn ui(&mut self, ctx: &Context, frame_info: &Frame, mouse_input: &mut MouseInput) {
@@ -457,6 +527,56 @@ impl Interface {
                 ui.colored_label(
                     egui::Color32::WHITE,
                     format!("Pixels updated: {}", frame_info.pixels_updated)
+                );
+            });
+
+
+        egui::Window::new("Selected cell")
+            .open(&mut self.cell_info_open)
+            .auto_sized()
+            .title_bar(false)
+            .anchor(egui::Align2::LEFT_TOP, egui::Vec2 { x: ctx.pixels_per_point() * 8.0, y: ctx.pixels_per_point() * 56.0 })
+            .show(ctx, |ui| {
+                ui.set_max_width(ctx.pixels_per_point() * 80.0);
+
+                let (x, y) = mouse_input.get_pixel_position();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("Position: {}, {}", x, y)
+                );
+
+                ui.separator();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("Element name: {}", self.selected_cell.element.name)
+                );
+
+                ui.separator();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("ra: {}", self.selected_cell.ra)
+                );
+
+                ui.separator();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("rb: {}", self.selected_cell.rb)
+                );
+
+                ui.separator();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    {
+                        match self.selected_cell.simulation {
+                            crate::sim::cell::SimulationType::Ca => format!("simulation: ca"),
+                            crate::sim::cell::SimulationType::RigidBody(object_id, cell_id) => format!("simulation: rb({}), id({})", object_id, cell_id),
+                        }
+                    }
                 );
             });
 

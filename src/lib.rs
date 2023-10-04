@@ -215,7 +215,6 @@ pub async fn run() {
             },
 
             Event::MainEventsCleared => {
-
                 if gui.is_update_required() {
                     if world.needs_update(gui.ms_from_previous_update()) {
                         if gui.get_brush().element.matter == MatterType::Empty {
@@ -227,7 +226,7 @@ pub async fn run() {
                                     world.place_batch(gui.drain_placing_queue());
                                 },
                                 gui::BrushType::Object => {
-                                    if gui.is_cells_queued() && gui.is_key_released(0) {
+                                    if gui.is_cells_queued() && gui.is_mouse_released(0) {
                                         world.place_object(
                                             gui.drain_placing_queue(),
                                             false,
@@ -237,7 +236,7 @@ pub async fn run() {
                                     }
                                 },
                                 gui::BrushType::StaticObject => {
-                                    if gui.is_cells_queued() && gui.is_key_released(0) {
+                                    if gui.is_cells_queued() && gui.is_mouse_released(0) {
                                         world.place_object(
                                             gui.drain_placing_queue(),
                                             true,
@@ -247,7 +246,9 @@ pub async fn run() {
                                     }
                                 },
                                 gui::BrushType::Particle(_) => {
-                                    if gui.is_cells_queued() {world.place_particles(gui.drain_placing_queue());}
+                                    if gui.is_cells_queued() {
+                                        world.place_particles(gui.drain_placing_queue());
+                                    }
                                 },
                             }          
                         }
@@ -264,6 +265,11 @@ pub async fn run() {
             
             Event::RedrawRequested(_) => {
                 gui.next_frame();
+                
+                gui.update_selected_cell({
+                    let (x, y) = gui.get_pixel_position();
+                    world.get_cell_by_pixel(x, y)
+                });
 
                 if let Ok(_) = state.render_with(|encoder, view, device, queue| {
                     world.render(encoder, view);

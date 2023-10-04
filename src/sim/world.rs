@@ -2,31 +2,40 @@ use std::{collections::{BTreeMap, BTreeSet}, cell::RefCell};
 
 use ahash::{HashMap, HashMapExt};
 use dashmap::{DashMap, DashSet};
+use rapier2d::{na::Point2, prelude::{vector, nalgebra}};
 
 use crate::{constants::*, pos2, vector::Pos2};
-use super::{chunk::Chunk, cell::{Cell, SimulationType}, elements::{MatterType, Element}, physics::Physics, renderer::Renderer};
+use super::{chunk::{Chunk, ChunkApi}, cell::{Cell, SimulationType}, elements::{MatterType, Element}, physics::Physics, renderer::Renderer, particle::Particle};
 
 pub struct World {
     chunks: DashMap<Pos2, RefCell<Chunk>, ahash::RandomState>,
     active_chunks: DashSet<Pos2, ahash::RandomState>,
     suspended_chunks: DashSet<Pos2, ahash::RandomState>,
-    
+
     renderer: Renderer,
     physics_engine: Physics,
     previous_update_ms: u128,
     clock: u8,
+
+    particles: Vec<Particle>,
 }
 
 impl World {
-    pub fn new(device: &wgpu::Device, format: &wgpu::TextureFormat) -> World {
+    pub fn new(
+        device: &wgpu::Device, 
+        format: &wgpu::TextureFormat
+    ) -> World {
         let mut world = Self {
             chunks: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 8),
             active_chunks: DashSet::with_hasher(ahash::RandomState::new()),
             suspended_chunks: DashSet::with_hasher(ahash::RandomState::new()),
+
             physics_engine: Physics::new(),
             renderer: Renderer::new(device, format),
             previous_update_ms: 0,
             clock: 0,
+
+            particles: vec![],
         };
 
         for x in 0..WORLD_WIDTH {
@@ -47,15 +56,38 @@ impl World {
     // Interaction with ui
     //=====================
 
-    pub fn set_cell_by_pixel(&mut self, x: i32, y: i32, element: &Element) {
+    pub fn set_cell_by_pixel(
+        &mut self, 
+        x: i32, 
+        y: i32, 
+        element: &Element
+    ) {
         if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
             return;
         }
 
         let chunk_position = pos2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
         if let Some(chunk) = self.chunks.get(&chunk_position) {
-            chunk.borrow_mut().place(x % CHUNK_SIZE, y % CHUNK_SIZE, Cell::new(element, 0));
+            chunk.borrow_mut().place(x % CHUNK_SIZE, y % CHUNK_SIZE, Cell::new(element, 0), self.clock);
             self.active_chunks.insert(chunk_position);
+        }
+    }
+
+    pub fn get_cell_by_pixel(
+        &mut self, 
+        x: i32, 
+        y: i32, 
+    ) -> Cell {
+        if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
+            return Cell::default();
+        }
+
+        let chunk_position = pos2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
+        if let Some(chunk) = self.chunks.get(&chunk_position) {
+            chunk.borrow_mut().get_cell(pos2!(x % CHUNK_SIZE, y % CHUNK_SIZE))
+        }
+        else {
+            Cell::default()
         }
     }
 
@@ -77,7 +109,7 @@ impl World {
             .for_each(|(chunk_position, cells)| {
                 if let Some(result) = self.chunks.get(&chunk_position) {
                     let mut chunk = result.borrow_mut();
-                    chunk.place_batch(cells);
+                    chunk.place_batch(cells, self.clock);
                     self.active_chunks.insert(chunk_position);
 
                     if self.physics_engine.has_colliders(chunk.rb_handle) {
@@ -87,15 +119,29 @@ impl World {
                             chunk.create_colliders();
                             self.physics_engine.add_colliders_to_static_body(chunk.rb_handle, &chunk.colliders);
                         }
-        
-                        self.active_chunks.insert(chunk_position);
                     }
                 };
             });   
     }
 
-    pub fn place_particles(&mut self, _positions: Vec<((i32, i32), Cell)>) {
-    }
+    pub fn place_particles(
+        &mut self, 
+        positions: Vec<((i32, i32), Cell)>,
+    ) {
+        self.particles.append(&mut positions.into_iter()
+            .map(|(pos, cell)| {
+                Particle::new(
+                    cell,
+                    pos.0 as f32 / CHUNK_SIZE as f32, 
+                    pos.1 as f32 / CHUNK_SIZE as f32,
+                    0.0,
+                    0.0,
+                    false
+                )
+            })
+            .collect()
+        )
+    }    
 
     //=============
     // Rigidbodies
@@ -115,7 +161,12 @@ impl World {
     // Interaction of chunks with each other
     //=======================================
 
-    pub(crate) fn update_cell(&self, chunk_position: Pos2, cell_position: Pos2, cell: Cell) {
+    pub(crate) fn update_cell(
+        &self, 
+        chunk_position: Pos2, 
+        cell_position: Pos2, 
+        cell: Cell,
+    ) {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
         let new_chunk_position = chunk_position + chunk_offset;
 
@@ -129,7 +180,12 @@ impl World {
         chunk.set_cell(cell_position, cell);
     }    
 
-    pub(crate) fn set_cell(&self, chunk_position: Pos2, cell_position: Pos2, cell: Cell) {
+    pub(crate) fn set_cell(
+        &self, 
+        chunk_position: Pos2, 
+        cell_position: Pos2, 
+        cell: Cell,
+    ) {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
         let new_chunk_position = chunk_position + chunk_offset;
 
@@ -146,13 +202,17 @@ impl World {
             chunk.maximize_dirty_rect();
         }
         else {
-            chunk.update_dirty_rect(&cell_position);
+            chunk.update_dirty_rect_with_offset(&cell_position);
         }
 
         chunk.set_cell(cell_position, cell);
     }    
 
-    pub(crate) fn get_cell(&self, chunk_position: Pos2, cell_position: Pos2) -> Cell {
+    pub(crate) fn get_cell(
+        &self, 
+        chunk_position: Pos2, 
+        cell_position: Pos2,
+    ) -> Cell {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
         let new_chunk_position = chunk_position + chunk_offset;
 
@@ -164,8 +224,12 @@ impl World {
             .get_cell(cell_position).clone()
     }
         
-
-    pub(crate) fn match_cell(&self, chunk_position: Pos2, cell_position: Pos2, element: &Element) -> bool {
+    pub(crate) fn match_cell(
+        &self, 
+        chunk_position: Pos2, 
+        cell_position: Pos2, 
+        element: &Element
+    ) -> bool {
         let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
         let new_chunk_position = chunk_position + chunk_offset;
 
@@ -177,7 +241,12 @@ impl World {
             .match_cell(cell_position, &element)
     }
 
-    pub(crate) fn replace_cell(&self, chunk_position: Pos2, cell_offset: Pos2, cell: Cell) -> Cell {
+    pub(crate) fn replace_cell(
+        &self, 
+        chunk_position: Pos2, 
+        cell_offset: Pos2, 
+        cell: Cell
+    ) -> Cell {
         let (cell_position,chunk_offset ) = cell_offset.wrap(0, CHUNK_SIZE);
         let new_chunk_position = chunk_position + chunk_offset;
         
@@ -198,7 +267,7 @@ impl World {
             chunk.maximize_dirty_rect();
         }    
         else {
-            chunk.update_dirty_rect(&cell_position);
+            chunk.update_dirty_rect_with_offset(&cell_position);
         }
         
         let old_cell = chunk.replace_cell(cell_position, cell.clone());
@@ -229,7 +298,7 @@ impl World {
                     chunk.maximize_dirty_rect();
                 }
                 else {
-                    chunk.update_dirty_rect(cell_position);
+                    chunk.update_dirty_rect_with_offset(cell_position);
                 }
             }
         }
@@ -249,84 +318,162 @@ impl World {
         let mut pixels_count = 0;
 
         while self.previous_update_ms >= CA_DELAY_MS {
+            self.clock = self.clock.wrapping_add(1);    
             self.previous_update_ms -= CA_DELAY_MS;
+
             self.physics_step();
+
             let (updated_chunk_count, updated_pixels_count) = self.ca_step();
             chunks_count += updated_chunk_count;
             pixels_count += updated_pixels_count;
+
+            if self.clock % 4 == 0 {
+                self.particle_step();
+            }
         }
 
         (chunks_count, pixels_count)
     }
 
     pub fn forced_update(&mut self) {
-        self.physics_step();
         self.ca_step();
+        self.physics_step();
+        self.particle_step();
     }
     
-    fn physics_step(&mut self) {        
-        self.physics_engine.rb_to_ca().into_iter()
-            .for_each(|(_, cells)| {
+    fn physics_step(&mut self) {
+        self.physics_engine.objects.iter_mut()
+            .for_each(|object| {
+                let points = &object.cells;
                 let mut chunks = HashMap::new();
-                cells.into_iter()
-                    .for_each(|cell| {
-                        chunks.entry(pos2!(cell.1.x / CHUNK_SIZE, cell.1.y / CHUNK_SIZE))
+
+                points.into_iter()
+                    .for_each(|point| {
+                        chunks
+                            .entry(
+                                pos2!(
+                                    point.world_coords.x / CHUNK_SIZE, 
+                                    point.world_coords.y / CHUNK_SIZE
+                                ))
                             .or_insert(vec![])
-                            .push(cell);
+                            .push(point);
                     });
 
                 chunks.into_iter()
-                    .for_each(|(chunk_position, cells)| {
-                        if let Some(result) = self.chunks.get(&chunk_position) {
-                            let mut chunk = result.borrow_mut();
-
-                            cells.into_iter()
-                                .for_each(|point| {
-                                    let pos = pos2!(point.1.x % CHUNK_SIZE, point.1.y % CHUNK_SIZE);
-                                    let old_cell = chunk.get_cell(pos);
-    
-                                    if let SimulationType::RigidBody(_, _) = old_cell.simulation {
-                                        chunk.set_cell(pos, Cell::default())
-                                    }
-                                });
-
+                    .map(|(chunk_position, points)| {
+                        (self.chunks.get(&chunk_position), points)
+                    })
+                    .filter_map(|(result, points)| {
+                        if result.is_none() {
+                            None
                         }
+                        else {
+                            Some((result.unwrap(), points))
+                        }
+                    })
+                    .for_each(|(chunk_ref, points)| {
+                        let mut chunk = chunk_ref.borrow_mut();
+
+                        points.into_iter()
+                            .filter_map(|point| {
+                                let pos = pos2!(point.world_coords.x % CHUNK_SIZE, point.world_coords.y % CHUNK_SIZE);
+
+                                if pos.is_between(0, CHUNK_SIZE - 1) {
+                                    Some(pos)
+                                }
+                                else {
+                                    None
+                                }
+                            })
+                            .for_each(|pos| {
+                                match chunk.get_cell(pos).simulation {
+                                    SimulationType::Ca => {},
+                                    SimulationType::RigidBody( .. ) => chunk.set_cell(pos, Cell::default()),
+                                }
+                            });
                     })    
             });
         
         self.physics_engine.step();
 
-        let update_chunks = self.physics_engine.rb_to_ca().into_iter()
-            .map(|(_, cells)| {
+        let update_chunks = self.physics_engine.objects.iter_mut()
+            .map(|object| {
+                let points = &object.cells;
                 let mut chunks = HashMap::new();
 
-                cells.into_iter()
-                    .for_each(|cell| {
-                        chunks.entry(pos2!(cell.1.x / CHUNK_SIZE, cell.1.y / CHUNK_SIZE))
+                points.into_iter()
+                    .for_each(|point| {
+                        chunks
+                            .entry(
+                                pos2!(
+                                    point.world_coords.x / CHUNK_SIZE, 
+                                    point.world_coords.y / CHUNK_SIZE
+                                ))
                             .or_insert(vec![])
-                            .push(cell);
+                            .push(point);
                     });
 
                 chunks.iter()
-                    .for_each(|(chunk_position, cells)| {
-                        if let Some(result) = self.chunks.get(&chunk_position) {
-                            let mut chunk = result.borrow_mut();
-
-                            cells.into_iter()
-                                .for_each(|point| {
-                                    let pos = pos2!(point.1.x % CHUNK_SIZE, point.1.y % CHUNK_SIZE);
-                                    let old_cell = chunk.get_cell(pos);
-    
-                                    // if let SimulationType::RigidBody(_, _) = old_cell.simulation {
-                                    //     chunk.set_cell(pos, EMPTY_CELL.clone())
-                                    // }
-    
-                                    if old_cell.element.matter == MatterType::Empty {
-                                        chunk.set_cell(pos, point.0.cell.clone());
-                                        chunk.update_dirty_rect(&pos);
-                                    }
-                                });
+                    .map(|(chunk_position, points)| {
+                        (self.chunks.get(&chunk_position), chunk_position, points)
+                    })
+                    .filter_map(|(result, chunk_position, points)| {
+                        if result.is_none() {
+                            None
                         }
+                        else {
+                            Some((result.unwrap(), chunk_position, points))
+                        }
+                    })
+                    .for_each(|(chunk_ref, chunk_position, points)| {
+                        let rb = &mut self.physics_engine.rigid_body_set[object.rb_handle];
+                        let mut chunk = chunk_ref.borrow_mut();
+
+                        points.into_iter()
+                            .filter_map(|point| {
+                                let pos = pos2!(point.world_coords.x % CHUNK_SIZE, point.world_coords.y % CHUNK_SIZE);
+
+                                if pos.is_between(0, CHUNK_SIZE - 1) {
+                                    Some((point, pos))
+                                }
+                                else {
+                                    None
+                                }
+                            })
+                            .for_each(|(point, pos)| {
+                                let old_cell = chunk.get_cell(pos);
+
+                                match old_cell.element.matter {
+                                    MatterType::Empty => {
+                                        chunk.set_cell(pos, point.cell.clone());
+                                        chunk.update_dirty_rect_with_offset(&pos);
+                                    },
+                                    MatterType::Static => {},
+                                    MatterType::Powder | MatterType::Liquid | MatterType::Gas => {
+                                        chunk.set_cell(pos, point.cell.clone());
+                                        chunk.update_dirty_rect_with_offset(&pos);
+
+                                        let x = (pos.x + chunk_position.x * CHUNK_SIZE) as f32 / CHUNK_SIZE as f32;
+                                        let y = (pos.y + chunk_position.y * CHUNK_SIZE) as f32 / CHUNK_SIZE as f32;
+
+                                        let rb_position = rb.position().translation.vector;
+
+                                        let impulse = (rb_position - vector![x, y]) * 0.02 / rb.mass().sqrt();
+
+                                        rb.apply_impulse_at_point(impulse, Point2::new(rb_position.x, rb_position.y), true);
+
+
+                                        self.particles.push(Particle { 
+                                            cell: old_cell, 
+                                            x,
+                                            y,
+                                            dx: (point.old_world_coords.x as f32 / CHUNK_SIZE as f32 - x) * 5.0 + ((fastrand::f32() - 0.5) * 0.02), 
+                                            dy: (point.old_world_coords.y as f32 / CHUNK_SIZE as f32 - y) * 5.0, 
+                                            collided: false
+                                        })
+                                    },
+                                }
+                            });
                     });
 
                 chunks.into_keys()
@@ -338,9 +485,8 @@ impl World {
             .for_each(|chunk_position| {
                 if let Some(result) = self.chunks.get(&chunk_position) {
                     let mut chunk = result.borrow_mut();
-                    self.physics_engine.remove_collider_from_object(chunk.rb_handle);
-                    
-                    if chunk.cell_count != 0 {
+
+                    if !self.physics_engine.has_colliders(chunk.rb_handle) && chunk.cell_count != 0 {
                         chunk.create_colliders();
                         self.physics_engine.add_colliders_to_static_body(chunk.rb_handle, &chunk.colliders);
                     }
@@ -348,11 +494,67 @@ impl World {
                     self.active_chunks.insert(chunk_position);
                 }
             })
+            
+    }
+
+    fn particle_step(&mut self) {
+        let mut chunks = HashMap::new();
+
+        self.particles.drain(..)
+            .for_each(|particle| {
+                let chunk_position = pos2!(
+                    (particle.x * CHUNK_SIZE as f32) as i32 / CHUNK_SIZE,
+                    (particle.y * CHUNK_SIZE as f32) as i32 / CHUNK_SIZE
+                );
+
+                if chunk_position.x >= 0 && chunk_position.x < WORLD_WIDTH && chunk_position.y >= 0 && chunk_position.y < WORLD_HEIGHT {
+                    chunks
+                        .entry(chunk_position)
+                        .or_insert(vec![])
+                        .push(particle);
+                }
+            });
+
+        chunks.into_iter()
+            .for_each(|(chunk_position, particles)| {
+                if let Some(result) = self.chunks.get(&chunk_position) {
+                    let mut chunk = result.borrow_mut();
+
+                    let mut particles = {
+                        let mut api = ChunkApi {
+                            cell_position: pos2!(0, 0),
+                            chunk: &mut chunk,
+                            world: &self,
+                            clock: self.clock,
+                        };
+    
+                        particles.into_iter()
+                            .filter_map(|mut particle| {
+                                let pos = pos2!(
+                                    (particle.x * CHUNK_SIZE as f32) as i32 % CHUNK_SIZE,
+                                    (particle.y * CHUNK_SIZE as f32) as i32 % CHUNK_SIZE
+                                );
+    
+                                api.cell_position = pos;
+                                particle.update(&mut api);
+    
+                                if particle.collided {
+                                    None
+                                }
+                                else {
+                                    Some(particle)
+                                }
+                            })
+                            .collect::<Vec<Particle>>()
+                    };
+
+                    self.particles.append(&mut particles);
+                }
+            });
+
     }
 
     fn ca_step(&mut self) -> (u128, u128){
-        self.clock = self.clock.wrapping_add(1);
-
         let mut updated_pixels = 0;
         let positions: Vec<Pos2> = self.active_chunks.iter().map(|v| *v).collect();
 
@@ -412,7 +614,17 @@ impl World {
             })
             .collect();
 
-        self.renderer.update(device, &self.physics_engine.collider_set, chunk_textures, objects_textures);
+        let particles = self.particles.iter()
+            .map(|particle| {
+                (
+                    particle.x,
+                    particle.y,
+                    particle.cell.element.color
+                )
+            })
+            .collect::<Vec<(f32, f32, [u8; 4])>>();
+
+        self.renderer.update(device, &self.physics_engine.collider_set, chunk_textures, objects_textures, particles);
     }
 
     pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {

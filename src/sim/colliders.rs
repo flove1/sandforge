@@ -112,9 +112,12 @@ pub fn marching_squares(object_count: i32, matrix: &[i32], width: i32, height: i
                         break 'march;
                     } 
 
+                    let x = (current_x as f32 + (dx as f32 / 2.0) - (width as f32 / 2.0)) / PHYSICS_TO_WORLD;
+                    let y = (current_y as f32 + (dy as f32 / 2.0) - (height as f32 / 2.0)) / PHYSICS_TO_WORLD;
+
                     vertices.push((
-                        (current_x as f32 + (dx as f32 / 2.0) - (width as f32 / 2.0)) / PHYSICS_TO_WORLD * size_modifier,  
-                        (current_y as f32 + (dy as f32 / 2.0) - (height as f32 / 2.0)) / PHYSICS_TO_WORLD * size_modifier
+                        x + x.signum() * size_modifier,
+                        y + y.signum() * size_modifier,
                     ));
 
                     current_x += dx;
@@ -161,7 +164,7 @@ fn create_simplified_outlines(object_count: i32, matrix: &[i32], matrix_size: i3
 }
 
 pub fn create_polyline_colliders(object_count: i32, matrix: &[i32], matrix_size: i32) -> Vec<(Collider, (f32, f32))> {
-    create_simplified_outlines(object_count, matrix, matrix_size, 1.0).iter()
+    create_simplified_outlines(object_count, matrix, matrix_size, 0.0).iter()
         .map(|simplified_boundary| {
             let indices = 
                 (0..simplified_boundary.len() as u32)
@@ -200,7 +203,7 @@ pub fn create_polyline_colliders(object_count: i32, matrix: &[i32], matrix_size:
 }
 
 pub fn create_triangulated_collider(matrix: &[i32], width: i32, height: i32) -> (Collider, (f32, f32)) {
-    let mut object = marching_squares(1, matrix, width, height, 1.0).pop().unwrap();
+    let mut object = marching_squares(1, matrix, width, height, 0.02).pop().unwrap();
 
     object.sort_by(|boundary_1, boundary_2| {
         if boundary_1.len() > boundary_2.len() {

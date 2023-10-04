@@ -6,3 +6,4 @@ pub mod helpers;
 pub mod colliders;
 pub mod physics;
 pub mod renderer;
+pub mod particle;

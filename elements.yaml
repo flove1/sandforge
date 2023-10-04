@@ -1,6 +1,6 @@
 - !Element {
     name: Sand, 
-    color: [0xa2, 0xa1, 0x63, 0xff], 
+    color: [0xf2, 0xf1, 0xa3, 0xff], 
     color_offset: 40, 
     matter: Powder
   }
