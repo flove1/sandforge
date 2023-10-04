@@ -3,10 +3,6 @@ struct VertexInput {
     @location(1) tex_coords: vec2<f32>,
 }
 
-struct TextureInstance {
-    @location(2) position: vec3<f32>,
-};
-
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
@@ -15,7 +11,6 @@ struct VertexOutput {
 @vertex
 fn vs_main(
     model: VertexInput,
-    instance: TextureInstance
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;

@@ -2,6 +2,8 @@
 
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
+use wgpu::SurfaceError;
+use winit_input_helper::WinitInputHelper;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -11,7 +13,6 @@ use std::thread;
 use std::time::Duration;
 
 mod sim;
-mod utils;
 mod vector;
 mod constants;
 mod gui;
@@ -100,14 +101,14 @@ impl State {
         }
     }
 
-    pub fn render_with<F>(&self, render_function: F) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
+    pub fn render_with<F>(&self, render_function: F) -> Result<(), SurfaceError>
     where
         F: FnOnce(
             &mut wgpu::CommandEncoder,
             &wgpu::TextureView,
             &wgpu::Device,
             &wgpu::Queue,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>,
+        ),
     {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -135,7 +136,7 @@ impl State {
             });
         }
         
-        (render_function)(&mut encoder, &view, &self.device, &self.queue)?;
+        (render_function)(&mut encoder, &view, &self.device, &self.queue);
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -147,6 +148,7 @@ impl State {
 
 pub async fn run() {
     let event_loop = EventLoop::new();
+    let mut input = WinitInputHelper::new();
 
     let window = {
         let size = LogicalSize::new(SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
@@ -197,89 +199,77 @@ pub async fn run() {
     event_loop.run(move |event, _, control_flow| {        
         control_flow.set_poll();
 
+        if input.update(&event) {
+            if gui.is_update_required() {
+                window.request_redraw();
+
+                if world.needs_update(gui.ms_from_previous_update()) {
+                    if gui.get_brush().element.matter == MatterType::Empty {
+                        world.place_batch(gui.drain_placing_queue());
+                    }
+                    else {
+                        match gui.get_brush().brush_type {
+                            gui::BrushType::Cell => {
+                                world.place_batch(gui.drain_placing_queue());
+                            },
+                            gui::BrushType::Object => {
+                                if gui.is_cells_queued() && !input.mouse_held(0) {
+                                    world.place_object(
+                                        gui.drain_placing_queue(),
+                                        false,
+                                        &state.device,
+                                        &state.queue
+                                    );
+                                }
+                            },
+                            gui::BrushType::StaticObject => {
+                                if gui.is_cells_queued() && !input.mouse_held(0) {
+                                    world.place_object(
+                                        gui.drain_placing_queue(),
+                                        true,
+                                        &state.device,
+                                        &state.queue
+                                    );
+                                }
+                            },
+                            gui::BrushType::Particle(_) => {
+                                if gui.is_cells_queued() {
+                                    world.place_particles(gui.drain_placing_queue());
+                                }
+                            },
+                        }          
+                    }
+
+                    let (chunks_updated, pixels_updated) = world.update();
+                    gui.update_frame_info(chunks_updated, pixels_updated);
+
+                    world.update_textures(&state.device, &state.queue, gui.x, gui.y);
+                }
+            }
+        }
+
         match &event {
             Event::WindowEvent { event, .. } => {
-                if !gui.handle_event(event, control_flow, window.scale_factor()).consumed {
-                    match event {
-                        winit::event::WindowEvent::Resized( size ) => {
-                            gui.resize(size.width, size.height);
-                        },
+                if !gui.handle_event(&input, event, control_flow, window.scale_factor()).consumed {
 
-                        winit::event::WindowEvent::CloseRequested => {
-                            control_flow.set_exit();
-                        },
-
-                        _ => {}
-                    }
                 }
             },
 
-            Event::MainEventsCleared => {
-                if gui.is_update_required() {
-                    if world.needs_update(gui.ms_from_previous_update()) {
-                        if gui.get_brush().element.matter == MatterType::Empty {
-                            world.place_batch(gui.drain_placing_queue());
-                        }
-                        else {
-                            match gui.get_brush().brush_type {
-                                gui::BrushType::Cell => {
-                                    world.place_batch(gui.drain_placing_queue());
-                                },
-                                gui::BrushType::Object => {
-                                    if gui.is_cells_queued() && gui.is_mouse_released(0) {
-                                        world.place_object(
-                                            gui.drain_placing_queue(),
-                                            false,
-                                            &state.device,
-                                            &state.queue
-                                        );
-                                    }
-                                },
-                                gui::BrushType::StaticObject => {
-                                    if gui.is_cells_queued() && gui.is_mouse_released(0) {
-                                        world.place_object(
-                                            gui.drain_placing_queue(),
-                                            true,
-                                            &state.device,
-                                            &state.queue
-                                        );
-                                    }
-                                },
-                                gui::BrushType::Particle(_) => {
-                                    if gui.is_cells_queued() {
-                                        world.place_particles(gui.drain_placing_queue());
-                                    }
-                                },
-                            }          
-                        }
-
-                        let (chunks_updated, pixels_updated) = world.update();
-                        gui.update_frame_info(chunks_updated, pixels_updated);
-
-                        world.update_textures(&state.device, &state.queue);    
-                    }
-                    
-                    window.request_redraw();
-                }
-            },
-            
             Event::RedrawRequested(_) => {
                 gui.next_frame();
-                
-                gui.update_selected_cell({
-                    let (x, y) = gui.get_pixel_position();
-                    world.get_cell_by_pixel(x, y)
-                });
 
-                if let Ok(_) = state.render_with(|encoder, view, device, queue| {
+                if let Some((x, y)) = gui.get_last_position() {
+                    gui.update_selected_cell(world.get_cell_by_pixel(x, y));
+                }
+
+                if let Err(_) = state.render_with(|encoder, view, device, queue| {
                     world.render(encoder, view);
 
                     gui.prepare(&window);
                     gui.render(encoder, view, device, queue);
-
-                    Ok(())
                 }) {
-
+                    println!("error while rendering");
+                    control_flow.set_exit();
                 }
 
             },

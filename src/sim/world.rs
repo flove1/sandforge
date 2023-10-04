@@ -587,7 +587,7 @@ impl World {
     // Rendering
     //===========
 
-    pub fn update_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {                
+    pub fn update_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, x: i32, y: i32) {
         let chunk_textures = self.chunks.iter()
             .map(|entry| {
                 let mut chunk = entry.value().borrow_mut();
@@ -624,7 +624,15 @@ impl World {
             })
             .collect::<Vec<(f32, f32, [u8; 4])>>();
 
-        self.renderer.update(device, &self.physics_engine.collider_set, chunk_textures, objects_textures, particles);
+        self.renderer.update(
+            x,
+            y,
+            device, 
+            &self.physics_engine.collider_set, 
+            chunk_textures, 
+            objects_textures, 
+            particles
+        );
     }
 
     pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {

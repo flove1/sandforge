@@ -5,12 +5,11 @@ use egui::Context;
 use egui_wgpu::renderer::{Renderer, ScreenDescriptor};
 use egui_winit::{EventResponse, egui};
 use fps_counter::FPSCounter;
-use winit::dpi::LogicalPosition;
-use winit::event::ElementState;
 use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
+use winit_input_helper::WinitInputHelper;
 
-use crate::constants::{SCREEN_HEIGHT, SCREEN_WIDTH, SCALE, TARGET_FPS};
+use crate::constants::{SCREEN_HEIGHT, SCALE, TARGET_FPS};
 use crate::helpers::line_from_pixels;
 use crate::sim::cell::Cell;
 use crate::sim::elements::{ELEMENTS, Element};
@@ -21,6 +20,9 @@ pub struct Brush {
     pub brush_type: BrushType,
     pub shape: BrushShape,
     pub size: i32, 
+    pub last_mouse_position: Option<(f32, f32)>,
+
+    pub placing_queue: HashMap<(i32, i32), Cell>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -38,7 +40,7 @@ pub enum BrushShape {
 }
 
 impl BrushShape {
-    pub fn draw<F: FnMut(i32, i32)> (
+    pub fn draw_shape<F: FnMut(i32, i32)> (
         &self,
         x: i32, 
         y: i32, 
@@ -76,130 +78,56 @@ pub struct Frame {
     fps_counter: FPSCounter,
 }
 
-pub struct MouseInput {
-    pub brush: Brush,
-    pub mouse_keys: [ElementState; 3],
-    pub last_mouse_position: Option<LogicalPosition<f64>>,
-    pub placing_queue: HashMap<(i32, i32), Cell>,
-}
-
-impl MouseInput {
+impl Brush {
     pub fn new() -> Self {
         Self {
-            brush: Brush { 
-                element: Element::default(), 
-                brush_type: BrushType::Cell, 
-                shape: BrushShape::Circle, 
-                size: 10
-            },
+            element: Element::default(), 
+            brush_type: BrushType::Cell, 
+            shape: BrushShape::Circle, 
+            size: 10,
 
             placing_queue: HashMap::default(),
-            mouse_keys: [ElementState::Released; 3],
             last_mouse_position: None,
         }
     }
 
-    pub fn get_pixel_position(&self) -> (i32, i32) {
-        if let Some(last_position) = self.last_mouse_position {
-            ((last_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - last_position.y as f32) / SCALE).round() as i32)
-        }
-        else {
-            (-1, -1)
-        }
-    }
-
-    #[allow(unused)]
-    fn handle_mouse_buttons(&mut self, control_flow: &mut winit::event_loop::ControlFlow, state: &winit::event::ElementState, button: &winit::event::MouseButton) {
-        match *button {
-            winit::event::MouseButton::Left => {
-                self.mouse_keys[0] = *state;
-            },
-            winit::event::MouseButton::Right => {
-                self.mouse_keys[1] = *state;
-            },
-            winit::event::MouseButton::Middle => {
-                self.mouse_keys[2] = *state;
-            },
-            winit::event::MouseButton::Other(_) => {},
-        }
-    }
-
-    fn handle_mouse_hold(&mut self) {
+    fn draw_point(&mut self, x: i32, y: i32) {
         let mut draw_operation = |x: i32, y: i32| {
-            match self.brush.brush_type {
+            match self.brush_type {
                 BrushType::Particle(rate) => {
                     if fastrand::u8(0..255) <= rate {
-                        self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                        self.placing_queue.insert((x, y), Cell::new(&self.element, 0));
                     }
                 },
                 _ => {
-                    self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                    self.placing_queue.insert((x, y), Cell::new(&self.element, 0));
                 }
             }
         };
 
-        if let Some(last_position) = self.last_mouse_position {
-            if last_position.x < 0.0 || last_position.x > SCREEN_WIDTH as f64 || last_position.y < 0.0 || last_position.y > SCREEN_HEIGHT as f64 {
-                return;
-            }
-
-            let (x, y) = {
-                ((last_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - last_position.y as f32) / SCALE).round() as i32)
-            };
-
-            self.brush.shape.draw(x, y, self.brush.size, &mut draw_operation);
-        }
+        self.shape.draw_shape(x, y, self.size, &mut draw_operation);
     }
 
-    #[allow(unused)]
-    fn handle_mouse_movement(&mut self, position: &winit::dpi::PhysicalPosition<f64>, scale: f64) {
-        if self.mouse_keys[0] == ElementState::Released {
-            self.last_mouse_position = Some(position.to_logical::<f64>(scale));
-            return;
-        }
-
+    fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) {
         let mut draw_operation = |x: i32, y: i32| {
-            match self.brush.brush_type {
+            match self.brush_type {
                 BrushType::Particle(rate) => {
                     if fastrand::u8(0..255) <= rate {
-                        self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                        self.placing_queue.insert((x, y), Cell::new(&self.element, 0));
                     }
                 },
                 _ => {
-                    self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                    self.placing_queue.insert((x, y), Cell::new(&self.element, 0));
                 }
             }
         };
 
         let mut function = |x: i32, y: i32| {
-            self.brush.shape.draw(x, y, self.brush.size, &mut draw_operation);
+            self.shape.draw_shape(x, y, self.size, &mut draw_operation);
             true
         };
 
-        let logical_position = position.to_logical::<f64>(scale);
-
-        if let Some(last_position) = self.last_mouse_position {
-            if last_position.x < 0.0 || last_position.x > SCREEN_WIDTH as f64 || last_position.y < 0.0 || last_position.y > SCREEN_HEIGHT as f64 {
-                self.last_mouse_position = Some(logical_position);
-                return;
-            }
-            
-            let (x1, y1) = {
-                ((last_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - last_position.y as f32) / SCALE).round() as i32)
-            };
-
-            if logical_position.x < 0.0 || logical_position.x > SCREEN_WIDTH as f64 || logical_position.y < 0.0 || logical_position.y > SCREEN_HEIGHT as f64 {
-                return;
-            }
-            
-            let (x2, y2) = {
-                ((logical_position.x as f32 / SCALE).round() as i32, ((SCREEN_HEIGHT - logical_position.y as f32) / SCALE).round() as i32)
-            };
-
-            line_from_pixels(x1, y1, x2 + x2.signum() * 1, y2 + y2.signum() * 1, &mut function);
-        }
-
-        self.last_mouse_position = Some(logical_position);
+        line_from_pixels(x1, y1, x2 + x2.signum() * 1, y2 + y2.signum() * 1, &mut function);
     }
 }
 
@@ -211,7 +139,10 @@ pub struct Gui {
     paint_jobs: Vec<epaint::ClippedPrimitive>,
     textures: epaint::textures::TexturesDelta,
 
-    mouse_input: MouseInput,
+    pub x: i32,
+    pub y: i32,
+
+    brush: Brush,
     interface: Interface,
     frame_info: Frame,
 }
@@ -277,7 +208,7 @@ impl Gui {
 
         let textures = epaint::textures::TexturesDelta::default();
         let interface = Interface::new();
-        let mouse_input = MouseInput::new();
+        let brush = Brush::new();
 
         let frame_info = Frame {
             instant: Instant::now(),
@@ -294,69 +225,88 @@ impl Gui {
             renderer,
             paint_jobs: Vec::new(),
             textures,
-            mouse_input,
+            brush,
             interface,
-            frame_info
+            frame_info,
+
+            x: 0,
+            y: 0,
         }
     }
 
     pub fn handle_event(
         &mut self, 
+        input: &WinitInputHelper,
         event: &winit::event::WindowEvent, 
         control_flow: &mut winit::event_loop::ControlFlow, 
         scale_factor: f64
     ) -> EventResponse {
-
-
         let response = self.egui_state.on_event(&self.egui_ctx, event);
 
-        if !response.consumed {
-            match event { 
-                winit::event::WindowEvent::CursorMoved { position, .. } => {
-                    self.mouse_input.handle_mouse_movement(position, scale_factor);
-                },
-    
-                winit::event::WindowEvent::MouseInput {state, button, ..} => {
-                    self.mouse_input.handle_mouse_buttons(control_flow, state, button);
-                    
-                    if self.is_mouse_held(0) {
-                        self.mouse_input.handle_mouse_hold();
-                    }        
-                },
-    
-                winit::event::WindowEvent::KeyboardInput { input, .. } => {
-                    if let winit::event::ElementState::Released = input.state {
-                        if let Some(keycode) = input.virtual_keycode {
-                            match keycode {
-                                winit::event::VirtualKeyCode::F1 => {
-                                    self.interface.menu_bar_open = !self.interface.menu_bar_open;
-                                },
-                                winit::event::VirtualKeyCode::F2 => {
-                                    self.interface.info_open = !self.interface.info_open;
-                                },
-                                winit::event::VirtualKeyCode::F3 => {
-                                    self.interface.elements_open = !self.interface.elements_open;
-                                },
-                                winit::event::VirtualKeyCode::F4 => {
-                                    self.interface.cell_info_open = !self.interface.cell_info_open;
-                                },
-                                winit::event::VirtualKeyCode::Escape | winit::event::VirtualKeyCode::Q  => {
-                                    control_flow.set_exit();
-                                },
-                                _ => {}
-                            }
-                        }
-                    }  
-                },
-                _ => {}
+        if response.consumed {
+            return response;
+        }
+
+        self.brush.last_mouse_position = input.mouse().map(|(x, y)| (x / scale_factor as f32, y / scale_factor as f32));
+
+        if input.mouse_pressed(0) {
+            if let Some((x, y)) = self.brush.last_mouse_position {
+                let (x, y) = Self::get_world_position_from_pixel(x, y);
+                self.brush.draw_point(x - self.x, y - self.y);
             }
+        }
+
+        if input.mouse_held(0) {
+            if let Some((x, y)) = self.brush.last_mouse_position {
+                let (x1, y1) = Self::get_world_position_from_pixel(x, y);
+                let (dx, dy) = input.mouse_diff();
+
+                let (x2, y2) = Self::get_world_position_from_pixel(x + dx, y + dy);
+                self.brush.draw_line(x1 - self.x, y1 - self.y, x2 - self.x, y2 - self.y);
+            }
+        }
+
+        if input.key_pressed(winit::event::VirtualKeyCode::Grave) {
+            self.interface.menu_bar_open = !self.interface.menu_bar_open;
+        }
+
+        if input.key_pressed(winit::event::VirtualKeyCode::F1) {
+            self.interface.info_open = !self.interface.info_open;
+        }
+
+        if input.key_pressed(winit::event::VirtualKeyCode::F2) {
+            self.interface.elements_open = !self.interface.elements_open;
+        }
+
+        if input.key_pressed(winit::event::VirtualKeyCode::F3) {
+            self.interface.cell_info_open = !self.interface.cell_info_open;
+        }
+        
+        if input.key_pressed_os(winit::event::VirtualKeyCode::Left) {
+            self.x += 4;
+        }
+        
+        if input.key_pressed_os(winit::event::VirtualKeyCode::Right) {
+            self.x -= 4;
+        }
+        
+        if input.key_pressed_os(winit::event::VirtualKeyCode::Up) {
+            self.y -= 4;
+        }
+        
+        if input.key_pressed_os(winit::event::VirtualKeyCode::Down) {
+            self.y += 4;
+        }
+
+        if input.key_pressed(winit::event::VirtualKeyCode::Escape) || input.key_pressed(winit::event::VirtualKeyCode::Q) {
+            control_flow.set_exit();
         }
 
         response
     }
 
-    pub fn get_pixel_position(&self) -> (i32, i32) {
-        self.mouse_input.get_pixel_position()
+    pub fn get_world_position_from_pixel(x: f32, y: f32) -> (i32, i32) {
+        ((x / SCALE).round() as i32, ((SCREEN_HEIGHT - y) / SCALE).round() as i32)
     }
 
     pub fn update_selected_cell(&mut self, cell: Cell) {
@@ -376,7 +326,7 @@ impl Gui {
     pub fn prepare(&mut self, window: &Window) {
         let raw_input = self.egui_state.take_egui_input(window);
         let output = self.egui_ctx.run(raw_input, |egui_ctx| {
-            self.interface.ui(egui_ctx, &self.frame_info, &mut self.mouse_input);
+            self.interface.ui(egui_ctx, &self.frame_info, &mut self.brush);
         });
 
         self.textures.append(output.textures_delta);
@@ -429,17 +379,18 @@ impl Gui {
     //===================
     // Mouse interaction
     //===================
-    
-    pub fn is_mouse_released(&self, key: usize) -> bool {
-        self.mouse_input.mouse_keys[key] == ElementState::Released
-    }
-    
-    pub fn is_mouse_held(&self, key: usize) -> bool {
-        self.mouse_input.mouse_keys[key] == ElementState::Pressed
+
+    pub fn get_last_position(&self) -> Option<(i32, i32)> {
+        if let Some((x, y)) = self.brush.last_mouse_position {
+            Some(Self::get_world_position_from_pixel(x, y))
+        }
+        else {
+            None
+        }
     }
     
     pub fn get_brush(&self) -> Brush {
-        self.mouse_input.brush.clone()
+        self.brush.clone()
     }
 
     pub fn is_update_required(&self) -> bool {
@@ -447,16 +398,16 @@ impl Gui {
     }
 
     pub fn drain_placing_queue(&mut self) -> Vec<((i32, i32), Cell)> {
-        self.mouse_input.placing_queue.drain().collect()
+        self.brush.placing_queue.drain().collect()
     }
 
     pub fn is_cells_queued(&mut self) -> bool {
-        !self.mouse_input.placing_queue.is_empty()
+        !self.brush.placing_queue.is_empty()
     }
 
-    //===================
+    //============
     // Frame info
-    //===================
+    //============
 
     pub fn ms_from_previous_update(&self) -> u128 {
         let now = Instant::now();
@@ -479,24 +430,30 @@ impl Gui {
 impl Interface {
     fn new() -> Self {
         Self { 
-            menu_bar_open: false,
+            menu_bar_open: true,
             info_open: true, 
             elements_open: true,
             cell_info_open: true,
             selected_cell: Cell::default()
         }
     }
-    fn ui(&mut self, ctx: &Context, frame_info: &Frame, mouse_input: &mut MouseInput) {
+    fn ui(&mut self, ctx: &Context, frame_info: &Frame, brush: &mut Brush) {
         egui::TopBottomPanel::top("menubar_container")
             .show_animated(ctx, self.menu_bar_open, |ui| {
             egui::menu::bar(ui, |ui| {
-                if ui.button("Info").clicked() {
+                if ui.button("F1: Info").clicked() {
                     self.info_open = !self.info_open;
                 }
 
                 ui.separator();
 
-                if ui.button("Elements").clicked() {
+                if ui.button("F2: Elements").clicked() {
+                    self.elements_open = !self.elements_open;
+                }
+
+                ui.separator();
+
+                if ui.button("F3: Selected cell").clicked() {
                     self.elements_open = !self.elements_open;
                 }
             });
@@ -506,6 +463,15 @@ impl Interface {
             .open(&mut self.info_open)
             .auto_sized()
             .title_bar(false)
+            .frame(
+                egui::Frame{
+                    inner_margin: ctx.style().spacing.window_margin,
+                    rounding: ctx.style().visuals.window_rounding,
+                    shadow: ctx.style().visuals.window_shadow,
+                    stroke: ctx.style().visuals.window_stroke(),
+                    fill: egui::Color32::from_rgba_unmultiplied(27, 27, 27, 127),
+                    ..Default::default()
+                })
             .anchor(egui::Align2::LEFT_TOP, egui::Vec2 { x: ctx.pixels_per_point() * 8.0, y: ctx.pixels_per_point() * 8.0 })
             .show(ctx, |ui| {
                 ui.set_max_width(ctx.pixels_per_point() * 80.0);
@@ -535,16 +501,34 @@ impl Interface {
             .open(&mut self.cell_info_open)
             .auto_sized()
             .title_bar(false)
-            .anchor(egui::Align2::LEFT_TOP, egui::Vec2 { x: ctx.pixels_per_point() * 8.0, y: ctx.pixels_per_point() * 56.0 })
+            .frame(
+                egui::Frame{
+                    inner_margin: ctx.style().spacing.window_margin,
+                    rounding: ctx.style().visuals.window_rounding,
+                    shadow: ctx.style().visuals.window_shadow,
+                    stroke: ctx.style().visuals.window_stroke(),
+                    fill: egui::Color32::from_rgba_unmultiplied(27, 27, 27, 127),
+                    ..Default::default()
+                })
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::Vec2 { x: ctx.pixels_per_point() * 8.0, y: - ctx.pixels_per_point() * 8.0 })
             .show(ctx, |ui| {
                 ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
-                let (x, y) = mouse_input.get_pixel_position();
+                if brush.last_mouse_position.is_none() {
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("Position: NaN")
+                    );
+                }
+                else {
+                    let (screen_x, screen_y) = brush.last_mouse_position.unwrap();
+                    let (x, y) = Gui::get_world_position_from_pixel(screen_x, screen_y);
 
-                ui.colored_label(
-                    egui::Color32::WHITE,
-                    format!("Position: {}, {}", x, y)
-                );
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("Position: {}, {}", x, y)
+                    );
+                }
 
                 ui.separator();
 
@@ -584,6 +568,15 @@ impl Interface {
         .open(&mut self.elements_open)
         .auto_sized()
         .title_bar(false)
+        .frame(
+            egui::Frame{
+                inner_margin: ctx.style().spacing.window_margin,
+                rounding: ctx.style().visuals.window_rounding,
+                shadow: ctx.style().visuals.window_shadow,
+                stroke: ctx.style().visuals.window_stroke(),
+                fill: egui::Color32::from_rgba_unmultiplied(27, 27, 27, 127),
+                ..Default::default()
+            })
         .anchor(egui::Align2::RIGHT_TOP, egui::Vec2 { x: - ctx.pixels_per_point() * 8.0, y: ctx.pixels_per_point() * 8.0 })
         .show(ctx, |ui| {
             ui.set_max_width(ctx.pixels_per_point() * 80.0);
@@ -614,7 +607,7 @@ impl Interface {
                                 egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
                             );
 
-                            if &mouse_input.brush.element == element {
+                            if &brush.element == element {
                                 ui.painter().rect_stroke(
                                     rect,
                                     egui::Rounding::default().at_most(0.5), 
@@ -630,7 +623,7 @@ impl Interface {
                                     
                                     ui.colored_label(
                                         {
-                                            if &mouse_input.brush.element == element {
+                                            if &brush.element == element {
                                                 egui::Color32::GOLD
                                             }
                                             else {
@@ -649,7 +642,7 @@ impl Interface {
                 });
 
                 if response.clicked() {
-                    mouse_input.brush.element = element.clone();
+                    brush.element = element.clone();
                 }
             }
 
@@ -657,19 +650,19 @@ impl Interface {
 
             egui::ComboBox::from_label("Shape")
                 .selected_text( 
-                    match mouse_input.brush.shape {
+                    match brush.shape {
                         BrushShape::Circle => "Circle",
                         BrushShape::Square => "Square",
                     }
                 )
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
-                        &mut mouse_input.brush.shape, 
+                        &mut brush.shape, 
                         BrushShape::Square, 
                         "Square",
                     );
                     ui.selectable_value(
-                        &mut mouse_input.brush.shape, 
+                        &mut brush.shape, 
                         BrushShape::Circle, 
                         "Circle",
                     );
@@ -681,7 +674,7 @@ impl Interface {
             ui.label("Brush size");
 
             ui.add(
-                egui::widgets::Slider::new(&mut mouse_input.brush.size, 2..=32)
+                egui::widgets::Slider::new(&mut brush.size, 2..=32)
                     .show_value(true)
                     .trailing_fill(true)
             );
@@ -690,7 +683,7 @@ impl Interface {
 
             egui::ComboBox::from_label("Type")
                 .selected_text( 
-                    match mouse_input.brush.brush_type {
+                    match brush.brush_type {
                         BrushType::Cell => "Cell",
                         BrushType::Object => "Object",
                         BrushType::StaticObject => "Static Object",
@@ -699,29 +692,29 @@ impl Interface {
                 )
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
-                        &mut mouse_input.brush.brush_type, 
+                        &mut brush.brush_type, 
                         BrushType::Cell, 
                         "Cell",
                     );
                     ui.selectable_value(
-                        &mut mouse_input.brush.brush_type, 
+                        &mut brush.brush_type, 
                         BrushType::Particle(1), 
                         "Particle",
                     );
                     ui.selectable_value(
-                        &mut mouse_input.brush.brush_type, 
+                        &mut brush.brush_type, 
                         BrushType::Object, 
                         "Object",
                     );
                     ui.selectable_value(
-                        &mut mouse_input.brush.brush_type, 
+                        &mut brush.brush_type, 
                         BrushType::StaticObject, 
                         "Static Object",
                     );
                 }
             );
 
-            if let BrushType::Particle(size) = &mut mouse_input.brush.brush_type {
+            if let BrushType::Particle(size) = &mut brush.brush_type {
                 ui.add_space(ctx.pixels_per_point() * 8.0);
 
                 ui.label("Particle spawn rate");
