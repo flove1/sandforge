@@ -9,7 +9,7 @@ use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 use winit_input_helper::WinitInputHelper;
 
-use crate::constants::{SCREEN_HEIGHT, SCALE, TARGET_FPS};
+use crate::constants::{SCREEN_HEIGHT, SCALE, TARGET_FPS, WORLD_WIDTH, WORLD_HEIGHT, CHUNK_SIZE};
 use crate::helpers::line_from_pixels;
 use crate::sim::cell::Cell;
 use crate::sim::elements::{ELEMENTS, Element};
@@ -139,8 +139,7 @@ pub struct Gui {
     paint_jobs: Vec<epaint::ClippedPrimitive>,
     textures: epaint::textures::TexturesDelta,
 
-    pub x: i32,
-    pub y: i32,
+    pub screen_coords: [f32; 4],
 
     brush: Brush,
     interface: Interface,
@@ -228,9 +227,8 @@ impl Gui {
             brush,
             interface,
             frame_info,
-
-            x: 0,
-            y: 0,
+            
+            screen_coords: [0.0, 0.0, WORLD_WIDTH as f32, WORLD_HEIGHT as f32]
         }
     }
 
@@ -249,10 +247,13 @@ impl Gui {
 
         let new_mouse_position = input.mouse().map(|(x, y)| (x / scale_factor as f32, y / scale_factor as f32));
 
+        let x_offset = (self.screen_coords[0] * CHUNK_SIZE as f32) as i32;
+        let y_offset = (self.screen_coords[1] * CHUNK_SIZE as f32) as i32;
+
         if input.mouse_pressed(0) {
             if let Some((x, y)) = new_mouse_position {
                 let (x, y) = Self::get_world_position_from_pixel(x, y);
-                self.brush.draw_point(x - self.x, y - self.y);
+                self.brush.draw_point(x + x_offset, y + y_offset);
             }
         }
 
@@ -268,7 +269,8 @@ impl Gui {
                 };
 
                 let (x2, y2) = Self::get_world_position_from_pixel(new_x, new_y);
-                self.brush.draw_line(x1 - self.x, y1 - self.y, x2 - self.x, y2 - self.y);
+                // dbg!(x1 + x_offset);
+                self.brush.draw_line(x1 + x_offset, y1 + y_offset, x2 + x_offset, y2 + y_offset);
             }
         }
 
@@ -291,19 +293,23 @@ impl Gui {
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Left) {
-            self.x += 4;
+            self.screen_coords[0] -= 1.0;
+            self.screen_coords[2] -= 1.0;
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Right) {
-            self.x -= 4;
+            self.screen_coords[0] += 1.0;
+            self.screen_coords[2] += 1.0;
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Up) {
-            self.y -= 4;
+            self.screen_coords[1] += 1.0;
+            self.screen_coords[3] += 1.0;
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Down) {
-            self.y += 4;
+            self.screen_coords[1] -= 1.0;
+            self.screen_coords[3] -= 1.0;
         }
 
         if input.key_pressed(winit::event::VirtualKeyCode::Escape) || input.key_pressed(winit::event::VirtualKeyCode::Q) {

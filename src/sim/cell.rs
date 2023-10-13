@@ -1,4 +1,5 @@
 use rand::Rng;
+use lazy_static::lazy_static;
 
 use super::chunk::ChunkApi;
 use super::elements::*;
@@ -19,6 +20,17 @@ pub enum SimulationType {
     Ca,
     RigidBody(usize, usize),
     Particle(f32, f32),
+}
+
+lazy_static! {
+    pub static ref WALL: Cell = Cell {
+        element: Element { name: "WALL".to_string(), color: [0; 4], color_offset: 0, matter: MatterType::Static },
+        ra: 0,
+        rb: 0,
+        clock: 0,
+        flags: 0,
+        simulation: SimulationType::Ca,
+    };
 }
 
 impl Cell {

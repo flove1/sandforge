@@ -41,6 +41,10 @@ impl Chunk {
     //================
 
     pub fn place(&mut self, x: i32, y: i32, mut cell: Cell, clock: u8) {
+        if x < 0 || y < 0 || x >= CHUNK_SIZE || y >= CHUNK_SIZE {
+            return;
+        }
+
         let index = get_cell_index(x, y);
         cell.clock = clock.wrapping_add(4);
 
@@ -331,7 +335,7 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
 
             match result {
                 Some(chunk_reference) => chunk_reference.borrow().get_cell(cell_position),
-                None => Cell::default(),
+                None => WALL.clone(),
             }
         }
     }
@@ -350,7 +354,7 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
 
             match result {
                 Some(chunk_reference) => chunk_reference.borrow().match_cell(cell_position, element),
-                None => true,
+                None => false,
             }
         }
     }
@@ -562,32 +566,6 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                                 chunk_1.update_dirty_rect(&cell_position_1);
                                 chunk_2.set_cell(cell_position_2, cell_1);
                                 chunk_2.update_dirty_rect(&cell_position_2);
-                            }
-                            else if result_1.is_none() {
-                                let chunk_reference_2 = result_2.unwrap();
-    
-                                let mut chunk_2 = chunk_reference_2.borrow_mut();
-                                let cell_2 = chunk_2.get_cell(cell_position_2);
-    
-                                if cell_2.element.matter != MatterType::Empty {
-                                    chunk_2.cell_count -= 1;
-                                }
-    
-                                chunk_2.set_cell(cell_position_2, Cell::default());
-                                chunk_2.update_dirty_rect(&cell_position_2);
-                            }
-                            else {
-                                let chunk_reference_1 = result_1.unwrap();
-    
-                                let mut chunk_1 = chunk_reference_1.borrow_mut();
-                                let cell_1 = chunk_1.get_cell(cell_position_1);
-    
-                                if cell_1.element.matter != MatterType::Empty {
-                                    chunk_1.cell_count -= 1;
-                                }
-    
-                                chunk_1.set_cell(cell_position_1, Cell::default());
-                                chunk_1.update_dirty_rect(&cell_position_1);
                             }
                         }
                     },

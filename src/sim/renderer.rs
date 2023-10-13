@@ -342,13 +342,9 @@ impl Renderer {
     fn create_collider_buffers(
         &mut self, 
         device: &wgpu::Device,
-        colliders: &rapier2d::prelude::ColliderSet,
-        x: i32,
-        y: i32,
+        colliders: &rapier2d::prelude::ColliderSet, 
+        screen_coords: [f32;4 ]
     ) {
-        let x_offset = x as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-        let y_offset = y as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-
         self.colliders = colliders.iter()
             .map(|(_, collider)| {
                 if let Some(shape) = collider.shape().as_polyline() {
@@ -356,8 +352,8 @@ impl Renderer {
                         .map(|vertex| {
                             ColliderVertex {
                                 position: [
-                                    ((vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE + x_offset,
-                                    ((vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE + y_offset,
+                                    ((vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[0],
+                                    ((vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[1],
                                     0.0,
                                 ],
                                 color: [0.0, 0.5, 1.0, 0.5],
@@ -399,8 +395,8 @@ impl Renderer {
                                     vertices.push(
                                         ColliderVertex {
                                             position: [
-                                                ((rotated_vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE + x_offset,
-                                                ((rotated_vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE + y_offset,
+                                                ((rotated_vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[0],
+                                                ((rotated_vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[1],
                                                 0.0,
                                             ],
                                             color: [0.0, 1.0, 0.0, 0.5],
@@ -451,13 +447,9 @@ impl Renderer {
     fn create_chunk_buffers(
         &mut self, 
         device: &wgpu::Device,
-        chunk_textures: Vec<(wgpu::TextureView, Pos2)>,
-        x: i32,
-        y: i32,
+        chunk_textures: Vec<(wgpu::TextureView, Pos2)>, 
+        screen_coords: [f32;4 ]
     ) {
-        let x_offset = x as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-        let y_offset = y as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-
         self.chunks = chunk_textures.into_iter()
             .map(|(texture, pos)| {
                 let bind_group = device.create_bind_group(
@@ -482,32 +474,32 @@ impl Renderer {
                     contents: bytemuck::cast_slice(&[
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 + x_offset,
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 + y_offset,
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [0.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 + x_offset,
-                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 + y_offset,
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
+                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [0.0, 1.0] 
                         },
                         TextureVertex { 
                             position: [
-                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0  + x_offset,
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0  + y_offset,
+                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0  - screen_coords[0],
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0  - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [1.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 + x_offset,
-                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 + y_offset,
+                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
+                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [1.0, 1.0] 
@@ -524,13 +516,9 @@ impl Renderer {
     fn create_objects_buffers(
         &mut self, 
         device: &wgpu::Device,
-        object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>,
-        x: i32,
-        y: i32,
+        object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>, 
+        screen_coords: [f32;4 ]
     ) {
-        let x_offset = x as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-        let y_offset = y as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-
         self.objects = object_textures.into_iter()
             .map(|(texture, pos, angle, width, height)| {
                 let bind_group = device.create_bind_group(
@@ -585,32 +573,32 @@ impl Renderer {
                     contents: bytemuck::cast_slice(&[
                         TextureVertex { 
                             position: [
-                                pos.x / 4.0 * PHYSICS_SCALE + points[0].x - 1.0 + x_offset,
-                                pos.y / 4.0 * PHYSICS_SCALE + points[0].y - 1.0 + y_offset,
+                                pos.x / 4.0 * PHYSICS_SCALE + points[0].x - 1.0 - screen_coords[0],
+                                pos.y / 4.0 * PHYSICS_SCALE + points[0].y - 1.0 - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [0.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                pos.x / 4.0 * PHYSICS_SCALE + points[1].x - 1.0 + x_offset,
-                                pos.y / 4.0 * PHYSICS_SCALE + points[1].y - 1.0 + y_offset,
+                                pos.x / 4.0 * PHYSICS_SCALE + points[1].x - 1.0 - screen_coords[0],
+                                pos.y / 4.0 * PHYSICS_SCALE + points[1].y - 1.0 - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [0.0, 1.0] 
                         },
                         TextureVertex { 
                             position: [
-                                pos.x / 4.0 * PHYSICS_SCALE + points[2].x - 1.0 + x_offset,
-                                pos.y / 4.0 * PHYSICS_SCALE + points[2].y - 1.0 + y_offset,
+                                pos.x / 4.0 * PHYSICS_SCALE + points[2].x - 1.0 - screen_coords[0],
+                                pos.y / 4.0 * PHYSICS_SCALE + points[2].y - 1.0 - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [1.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                pos.x / 4.0 * PHYSICS_SCALE + points[3].x - 1.0 + x_offset,
-                                pos.y / 4.0 * PHYSICS_SCALE + points[3].y - 1.0 + y_offset,
+                                pos.x / 4.0 * PHYSICS_SCALE + points[3].x - 1.0 - screen_coords[0],
+                                pos.y / 4.0 * PHYSICS_SCALE + points[3].y - 1.0 - screen_coords[1],
                                 0.0,
                             ], 
                             tex_coords: [1.0, 1.0] 
@@ -628,13 +616,9 @@ impl Renderer {
     fn create_particle_buffers(
         &mut self, 
         device: &wgpu::Device,
-        particles: Vec<(f32, f32, [u8; 4])>,
-        x: i32,
-        y: i32,
+        particles: Vec<(f32, f32, [u8; 4])>, 
+        screen_coords: [f32;4 ]
     ) {
-        let x_offset = x as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-        let y_offset = y as f32 / (WORLD_WIDTH * CHUNK_SIZE) as f32 * 2.0;
-
         self.particles = particles.into_iter()
             .map(|(x, y, color)| {
                 let color = [
@@ -646,8 +630,8 @@ impl Renderer {
 
                 ParticleInstance { 
                     position: [
-                        (x / WORLD_WIDTH as f32 - 0.5) * 2.0 + x_offset,
-                        (y / WORLD_HEIGHT as f32 - 0.5) * 2.0 + y_offset,
+                        (x / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
+                        (y / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
                         0.0,
                     ], 
                     color,
@@ -672,18 +656,20 @@ impl Renderer {
 
     pub(crate) fn update(
         &mut self,
-        x: i32,
-        y: i32, 
+        mut screen_coords: [f32; 4],
         device: &wgpu::Device,
         colliders: &rapier2d::prelude::ColliderSet,
         chunk_textures: Vec<(wgpu::TextureView, Pos2)>,
         object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>,
         particles: Vec<(f32, f32, [u8; 4])>
     ) {
-        self.create_chunk_buffers(device, chunk_textures, x, y);
-        self.create_objects_buffers(device, object_textures, x, y);
-        self.create_particle_buffers(device, particles, x, y);
-        self.create_collider_buffers(device, colliders, x, y);
+        screen_coords.iter_mut()
+            .for_each(|cord| *cord = (*cord) / 4.0);
+
+        self.create_chunk_buffers(device, chunk_textures, screen_coords);
+        self.create_objects_buffers(device, object_textures, screen_coords);
+        self.create_particle_buffers(device, particles, screen_coords);
+        self.create_collider_buffers(device, colliders, screen_coords);
     }
 
     pub(crate) fn render(

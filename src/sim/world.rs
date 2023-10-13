@@ -7,10 +7,28 @@ use rapier2d::{na::Point2, prelude::{vector, nalgebra}};
 use crate::{constants::*, pos2, vector::Pos2, helpers::line_from_pixels};
 use super::{chunk::{Chunk, ChunkApi}, cell::{Cell, SimulationType}, elements::{MatterType, Element}, physics::Physics, renderer::Renderer, particle::Particle};
 
+fn terrain_fx(x: f64) -> f64 {
+    let term1 = (x / 1.5).sin() * (x / 1.5).cos() * x.sin();
+    let term2 = x / 8.0;
+    let term3 = 0.5;
+    
+    term1 + term2 + term3
+}
+
+fn surface_offset_fx() -> i32 {
+    let chance = fastrand::i32(0..2);
+
+    if chance == 0 {
+        let random_value = fastrand::i32(2..=4);
+        return random_value;
+    } else {
+        return 2;
+    }
+}
+
 pub struct World {
     chunks: DashMap<Pos2, RefCell<Chunk>, ahash::RandomState>,
     active_chunks: DashSet<Pos2, ahash::RandomState>,
-    suspended_chunks: DashSet<Pos2, ahash::RandomState>,
 
     renderer: Renderer,
     physics_engine: Physics,
@@ -28,7 +46,6 @@ impl World {
         let mut world = Self {
             chunks: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 8),
             active_chunks: DashSet::with_hasher(ahash::RandomState::new()),
-            suspended_chunks: DashSet::with_hasher(ahash::RandomState::new()),
 
             physics_engine: Physics::new(),
             renderer: Renderer::new(device, format),
@@ -40,12 +57,7 @@ impl World {
 
         for x in 0..WORLD_WIDTH {
             for y in 0..WORLD_HEIGHT {
-                let handler = world.physics_engine.new_empty_static_object(((x as f32 + 0.5) * CHUNK_SIZE as f32) / PHYSICS_TO_WORLD, ((y as f32 + 0.5) * CHUNK_SIZE as f32) / PHYSICS_TO_WORLD);
-
-                world.chunks.insert(
-                    pos2!(x, y), 
-                    RefCell::new(Chunk::new(pos2!(x, y), handler))
-                );
+                world.add_chunk(pos2!(x, y));
             }
         }
         
@@ -56,21 +68,65 @@ impl World {
     // Interaction with ui
     //=====================
 
+    pub fn add_chunk(&mut self, position: Pos2) {
+        let handler = self.physics_engine.new_empty_static_object(((position.x as f32 + 0.5) * CHUNK_SIZE as f32) / PHYSICS_TO_WORLD, ((position.y as f32 + 0.5) * CHUNK_SIZE as f32) / PHYSICS_TO_WORLD);
+
+        let mut chunk = Chunk::new(position, handler);
+
+        let underground_element = Element { 
+            name: "Hard ground".to_string(), 
+            color: [0x6d, 0x5f, 0x3d, 0xff], 
+            color_offset: 10, 
+            matter: MatterType::Static
+        };
+
+        let surface_element = Element { 
+            name: "Soft ground".to_string(), 
+            color: [0x7d, 0xaa, 0x4d, 0xff], 
+            color_offset: 10, 
+            matter: MatterType::Static
+        };
+
+        for x in 0..CHUNK_SIZE {
+            let max_y = terrain_fx(x as f64 / CHUNK_SIZE as f64 + position.x as f64);
+
+            let surface_level = ((max_y - position.y as f64) * CHUNK_SIZE as f64).floor() as i32;
+
+            let surface_offset_1 = surface_offset_fx();
+            let surface_offset_2 = surface_offset_fx();
+
+            for y in 0..(surface_level - surface_offset_1) {
+                chunk.place(x, y, Cell::new(&underground_element, 1), self.clock);
+            }
+
+            for y in (surface_level - surface_offset_1)..(surface_level + surface_offset_2) {
+                chunk.place(x, y, Cell::new(&surface_element, 1), self.clock);
+            }
+        };
+
+        self.chunks.insert(
+            position, 
+            RefCell::new(chunk)
+        );
+    }
+
     pub fn set_cell_by_pixel(
         &mut self, 
         x: i32, 
         y: i32, 
         element: &Element
     ) {
-        if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
-            return;
-        }
+        let chunk_position = pos2!(x.div_euclid(CHUNK_SIZE) , y.div_euclid(CHUNK_SIZE));
 
-        let chunk_position = pos2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
-        if let Some(chunk) = self.chunks.get(&chunk_position) {
-            chunk.borrow_mut().place(x % CHUNK_SIZE, y % CHUNK_SIZE, Cell::new(element, 0), self.clock);
-            self.active_chunks.insert(chunk_position);
-        }
+        let chunk_reference = {
+            if !self.chunks.contains_key(&chunk_position) {
+                self.add_chunk(chunk_position);
+            }
+            self.chunks.get(&chunk_position).unwrap()
+        };
+
+        chunk_reference.borrow_mut().place(x.rem_euclid(CHUNK_SIZE), y.rem_euclid(CHUNK_SIZE), Cell::new(element, 0), self.clock);
+        self.active_chunks.insert(chunk_position);
     }
 
     pub fn get_cell_by_pixel(
@@ -78,13 +134,10 @@ impl World {
         x: i32, 
         y: i32, 
     ) -> Cell {
-        if x < 0 || y < 0 || x >= (WORLD_WIDTH * CHUNK_SIZE) || y >= (WORLD_HEIGHT * CHUNK_SIZE) {
-            return Cell::default();
-        }
+        let chunk_position = pos2!(x.div_euclid(CHUNK_SIZE) , y.div_euclid(CHUNK_SIZE));
 
-        let chunk_position = pos2!(x / CHUNK_SIZE, y / CHUNK_SIZE);
         if let Some(chunk) = self.chunks.get(&chunk_position) {
-            chunk.borrow_mut().get_cell(pos2!(x % CHUNK_SIZE, y % CHUNK_SIZE))
+            chunk.borrow_mut().get_cell(pos2!(x.rem_euclid(CHUNK_SIZE), y.rem_euclid(CHUNK_SIZE)))
         }
         else {
             Cell::default()
@@ -95,14 +148,14 @@ impl World {
         let mut groups_by_chunks = HashMap::default();
         
         cells.into_iter()
-            .filter(|(pos, _)| {
-                pos.0 >= 0 && pos.1 >= 0 && pos.0 < (WORLD_WIDTH * CHUNK_SIZE) && pos.1 < (WORLD_HEIGHT * CHUNK_SIZE)
-            })
             .for_each(|(pos, cell)| {
+                let chunk_position = pos2!(pos.0.div_euclid(CHUNK_SIZE), pos.1.div_euclid(CHUNK_SIZE));
+                self.chunks.contains_key(&chunk_position);
+
                 groups_by_chunks
-                    .entry(pos2!(pos.0 / CHUNK_SIZE, pos.1 / CHUNK_SIZE))
+                    .entry(chunk_position)
                     .or_insert(vec![])
-                    .push(((pos.0 % CHUNK_SIZE, pos.1 % CHUNK_SIZE), cell));
+                    .push(((pos.0.rem_euclid(CHUNK_SIZE), pos.1.rem_euclid(CHUNK_SIZE)), cell));
             });
 
         groups_by_chunks.into_iter()
@@ -169,11 +222,6 @@ impl World {
         self.active_chunks.insert(chunk_position)
     }
 
-    pub(crate) fn release_chunk(&self, chunk_position: &Pos2) {
-        self.active_chunks.remove(chunk_position);
-        self.suspended_chunks.insert(*chunk_position);
-    }
-
     pub(crate) fn refresh_chunk(&self, chunk_position: &Pos2, cell_position: &Pos2) {
         let result = self.chunks.get(chunk_position);
 
@@ -201,15 +249,35 @@ impl World {
         self.previous_update_ms >= CA_DELAY_MS
     }
 
-    pub fn update(&mut self) -> (u128, u128) {
+    pub fn update(&mut self, visible_world: [f32; 4]) -> (u128, u128) {
         let mut chunks_count = 0;
         let mut pixels_count = 0;
+
+        let bl_corner = [visible_world[0].floor() as i32, visible_world[1].floor() as i32];
+        let tr_corner = [visible_world[2].ceil() as i32, visible_world[3].ceil() as i32];
+
+        self.active_chunks.retain(|position| {
+            position.x >= bl_corner[0] && position.x < tr_corner[0] && position.y >= bl_corner[1] && position.y < bl_corner[1]
+        });
+
+        for x in bl_corner[0]..tr_corner[0] {
+            for y in bl_corner[1]..tr_corner[1] {
+                let position = pos2!(x, y);
+                if !self.active_chunks.contains(&position) {
+                    self.activate_chunk(position);
+
+                    if !self.chunks.contains_key(&position) {
+                        self.add_chunk(position);
+                    }
+                }
+            }
+        }
 
         while self.previous_update_ms >= CA_DELAY_MS {
             self.clock = self.clock.wrapping_add(1);    
             self.previous_update_ms -= CA_DELAY_MS;
 
-            self.physics_step();
+            self.physics_step(visible_world);
 
             let (updated_chunk_count, updated_pixels_count) = self.ca_step();
             chunks_count += updated_chunk_count;
@@ -225,11 +293,11 @@ impl World {
 
     pub fn forced_update(&mut self) {
         self.ca_step();
-        self.physics_step();
+        self.physics_step([0.0; 4]);
         self.particle_step();
     }
     
-    fn physics_step(&mut self) {
+    fn physics_step(&mut self, visible_world: [f32; 4]) {
         self.physics_engine.objects.iter_mut()
             .for_each(|object| {
                 let points = &object.cells;
@@ -240,14 +308,14 @@ impl World {
                         chunks
                             .entry(
                                 pos2!(
-                                    point.world_coords.x / CHUNK_SIZE, 
-                                    point.world_coords.y / CHUNK_SIZE
+                                    point.world_coords.x.div_euclid(CHUNK_SIZE), 
+                                    point.world_coords.y.div_euclid(CHUNK_SIZE)
                                 ))
                             .or_insert(vec![])
                             .push(
                                 pos2!(
-                                    point.world_coords.x % CHUNK_SIZE,
-                                    point.world_coords.y % CHUNK_SIZE
+                                    point.world_coords.x.rem_euclid(CHUNK_SIZE),
+                                    point.world_coords.y.rem_euclid(CHUNK_SIZE)
                                 )
                             );
                     });
@@ -274,7 +342,7 @@ impl World {
                     })    
             });
         
-        self.physics_engine.step();
+        self.physics_engine.step(visible_world);
 
         let mut updated_chunks_pos = HashSet::new();
         let mut displaced_cells = HashMap::new();
@@ -289,15 +357,15 @@ impl World {
                         chunks
                             .entry(
                                 pos2!(
-                                    point.world_coords.x / CHUNK_SIZE, 
-                                    point.world_coords.y / CHUNK_SIZE
+                                    point.world_coords.x.div_euclid(CHUNK_SIZE), 
+                                    point.world_coords.y.div_euclid(CHUNK_SIZE)
                                 ))
                             .or_insert(vec![])
                             .push(
                                 (
                                     pos2!(
-                                        point.world_coords.x % CHUNK_SIZE,
-                                        point.world_coords.y % CHUNK_SIZE
+                                        point.world_coords.x.rem_euclid(CHUNK_SIZE),
+                                        point.world_coords.y.rem_euclid(CHUNK_SIZE)
                                     ),
                                     point.cell.clone()
                                 )
@@ -534,14 +602,13 @@ impl World {
         for (x, group) in groups.iter() {   
             for y in group.iter() {
                 let position = &pos2!(*x, *y);
-                
+
                 let result = self.chunks.get(position).unwrap();
                 let mut chunk = result.borrow_mut();
 
                 updated_pixels += chunk.update(self, self.clock);
 
                 if chunk.cell_count == 0 {
-                    self.release_chunk(position);
                     self.physics_engine.remove_collider_from_object(chunk.rb_handle);
                 }
             }
@@ -554,15 +621,16 @@ impl World {
     // Rendering
     //===========
 
-    pub fn update_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, x: i32, y: i32) {
-        let chunk_textures = self.chunks.iter()
-            .map(|entry| {
-                let mut chunk = entry.value().borrow_mut();
+    pub fn update_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, screen_coords: [f32; 4]) {
+        let chunk_textures = self.active_chunks.iter()
+            .map(|position| {
+                let chunk_reference = self.chunks.get(&position).unwrap();
+                let mut chunk = chunk_reference.value().borrow_mut();
                 chunk.create_texture(device, queue);
 
                 (
                     chunk.texture.as_ref().unwrap().create_view(&wgpu::TextureViewDescriptor::default()),
-                    *entry.key(),
+                    *position,
                 )
             })
             .collect::<Vec<(wgpu::TextureView, Pos2)>>();
@@ -592,8 +660,7 @@ impl World {
             .collect::<Vec<(f32, f32, [u8; 4])>>();
 
         self.renderer.update(
-            x,
-            y,
+            screen_coords,
             device, 
             &self.physics_engine.collider_set, 
             chunk_textures, 

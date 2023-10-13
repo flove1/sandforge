@@ -1,6 +1,6 @@
 use rapier2d::{prelude::*, na::{Isometry2, Vector2}};
 
-use crate::{constants::{CHUNK_SIZE, WORLD_WIDTH, WORLD_HEIGHT, PHYSICS_TO_WORLD}, pos2, vector::Pos2};
+use crate::{constants::{CHUNK_SIZE, PHYSICS_TO_WORLD}, pos2, vector::Pos2};
 
 use super::{cell::{Cell, SimulationType}, colliders::create_triangulated_collider, elements::MatterType};
 
@@ -224,7 +224,7 @@ impl Physics {
 
     }
 
-    pub fn step(&mut self) {
+    pub fn step(&mut self, visible_world: [f32; 4]) {
         self.physics_pipeline.step(
             &vector![0.0, -9.8 / PHYSICS_TO_WORLD * 4.0],
             &self.integration_parameters,
@@ -241,25 +241,19 @@ impl Physics {
             self.event_handler.as_ref(),
         );
 
-        self.objects.retain(|object| {
-            let position = self.rigid_body_set[object.rb_handle].position().translation;
-            let x = position.x * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
-            let y = position.y * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
-            if x < 0.0 || y < 0.0 || x > WORLD_WIDTH as f32 || y > WORLD_HEIGHT as f32 {
-                println!("Object left boundaries");
-                self.rigid_body_set.remove(
-                    object.rb_handle, 
-                    &mut self.island_manager, 
-                    &mut self.collider_set, 
-                    &mut self.impulse_joint_set, 
-                    &mut self.multibody_joint_set, 
-                    true
-                );
-                false
-            }
-            else {
-                true
-            }
+        self.objects.iter_mut()
+            .for_each(|object| {
+                let position = self.rigid_body_set[object.rb_handle].position().translation;
+                let x = position.x * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
+                let y = position.y * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
+
+                let rb = &mut self.rigid_body_set[object.rb_handle];
+                let out_of_bounds = x < visible_world[0] || y < visible_world[1] || x > visible_world[2] || y > visible_world[3];
+                
+                if !rb.is_sleeping() && out_of_bounds {
+                    println!("Object left boundaries -> suspending it");
+                    rb.sleep();
+                }
         });
 
         self.objects.iter_mut()

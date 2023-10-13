@@ -145,7 +145,6 @@ impl State {
     }
 }
 
-
 pub async fn run() {
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
@@ -237,10 +236,11 @@ pub async fn run() {
                     }          
                 }
 
-                let (chunks_updated, pixels_updated) = world.update();
+                let (chunks_updated, pixels_updated) = world.update(gui.screen_coords);
                 gui.update_frame_info(chunks_updated, pixels_updated);
 
-                world.update_textures(&state.device, &state.queue, gui.x, gui.y);
+                //TODO fix
+                world.update_textures(&state.device, &state.queue, gui.screen_coords);
             }
         }
 
