@@ -37,5 +37,5 @@ pub fn line_from_pixels<F: FnMut(i32, i32) -> bool>(
         }
     }   
 
-    return false;
+    false
 }

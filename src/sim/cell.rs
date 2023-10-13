@@ -18,6 +18,7 @@ pub enum SimulationType {
     #[default]
     Ca,
     RigidBody(usize, usize),
+    Particle(f32, f32),
 }
 
 impl Cell {
@@ -81,7 +82,7 @@ impl Cell {
         cell
     }
 
-    pub fn update_cell<'a, 'b>(mut self, api: &mut ChunkApi<'a, 'b>, dt: f32, clock: u8) {
+    pub fn update_cell(mut self, api: &mut ChunkApi, dt: f32, clock: u8) {
         self.clock = clock;
 
         match self.simulation {
@@ -95,6 +96,7 @@ impl Cell {
             },
             // SimulationType::Particle { .. } => update_particle(self, api, dt),
             SimulationType::RigidBody ( .. ) => {},
+            SimulationType::Particle( .. ) => update_particle(self, api, dt),
         }
     }
 }

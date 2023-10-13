@@ -55,7 +55,7 @@ impl Pos2 {
         (((other.x - self.x).pow(2) + (other.y - self.y).pow(2)) as f32).sqrt()
     }
 
-    pub fn to_index(&self, size: i32) -> usize {
+    pub fn to_index(self, size: i32) -> usize {
         (self.y * size + self.x) as usize
     }
 

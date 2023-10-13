@@ -1,7 +1,10 @@
 use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
 
-use super::cell::Cell;
+use crate::constants::CHUNK_SIZE;
+use crate::helpers::line_from_pixels;
+
+use super::cell::{Cell, SimulationType};
 use super::chunk::ChunkApi;
 
 
@@ -65,7 +68,51 @@ lazy_static! {
     };
 }
 
-pub fn update_sand<'a, 'b>(cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
+pub fn update_particle(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
+    if let SimulationType::Particle(dx, dy) = &mut cell.simulation {
+        let mut last_x = 0;
+        let mut last_y = 0;
+
+        let mut operation = |current_dx, current_dy| {
+            let current_cell = api.get(current_dx, current_dy);
+
+            if !matches!(current_cell.element.matter, MatterType::Static { .. }) {
+                last_x = current_dx;
+                last_y = current_dy;
+                true
+            }
+            else {
+                false
+            }
+            
+        };
+
+        let return_to_ca = line_from_pixels(
+            0, 
+            0, 
+            (*dx * CHUNK_SIZE as f32).round() as i32, 
+            (*dy * CHUNK_SIZE as f32).round() as i32, 
+            &mut operation
+        );
+
+        if return_to_ca {
+            api.update(Cell::default());
+            api.set(last_x, last_y, 
+                Cell { 
+                     simulation: SimulationType::Ca, 
+                    ..cell
+                }
+            );
+        }
+        else {
+            *dy = *dy - (9.81 / CHUNK_SIZE as f32) / 10.0;
+            api.set(0, 0, Cell::default());
+            api.set(last_x, last_y, cell);
+        }
+    }
+}
+
+pub fn update_sand(cell: Cell, api: &mut ChunkApi, _dt: f32) {
     let dx = api.rand_dir();
     
     if matches!(api.get(0, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
@@ -83,13 +130,13 @@ pub fn update_sand<'a, 'b>(cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
         api.swap(-dx, -1);
     } 
     else if matches!(api.get(0, -1).element.matter, MatterType::Liquid{..}) {
-        api.swap(0, 1);
+        api.swap(0, -1);
     }
 
     api.update(cell);
 }
 
-// pub fn update_fire<'a, 'b>(cell: &mut Cell, mut api: ChunkApi<'a, 'b>, _dt: f32) -> ChunkApi<'a, 'b> {
+// pub fn update_fire(cell: &mut Cell, mut api: ChunkApi, _dt: f32) -> ChunkApi {
 //     let directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)];
 
 //     for (dx, dy) in directions {
@@ -134,7 +181,7 @@ pub fn update_sand<'a, 'b>(cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
 //     api
 // }
 
-pub fn update_liquid<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
+pub fn update_liquid(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
     let mut dx = api.rand_dir();
 
     if matches!(api.get(0, -1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
@@ -150,19 +197,19 @@ pub fn update_liquid<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f3
             api.swap(0, -1);
         }
 
-        api.update(cell.clone());
+        api.update(cell);
         return
     }
     else if matches!(api.get(dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         api.swap(dx, 0);
 
-        api.update(cell.clone());
+        api.update(cell);
         return
     }
     else if matches!(api.get(-dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(-dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
         api.swap(-dx, 0);
 
-        api.update(cell.clone());
+        api.update(cell);
         return
     }
 
@@ -180,15 +227,13 @@ pub fn update_liquid<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f3
         let nbr = api.get(dx, dy);
 
         // spread opinion
-        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
-            if nbr.ra % 2 != cell.ra % 2 {
-                api.set(dx, dy,
-                    Cell {
-                        ra: cell.ra,
-                        ..cell.clone()
-                    },
-                )
-            }
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) && nbr.ra % 2 != cell.ra % 2 {
+            api.set(dx, dy,
+                Cell {
+                    ra: cell.ra,
+                    ..cell.clone()
+                },
+            )
         }
     } else if dx0.element.matter == MatterType::Empty {
         cell.rb = 3;
@@ -197,17 +242,15 @@ pub fn update_liquid<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f3
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
-        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
-            if nbr.ra % 2 != cell.ra % 2 {
-                api.set(
-                    dx,
-                    dy,
-                    Cell {
-                        ra: cell.ra,
-                        ..cell.clone()
-                    },
-                )
-            }
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) && nbr.ra % 2 != cell.ra % 2 {
+            api.set(
+                dx,
+                dy,
+                Cell {
+                    ra: cell.ra,
+                    ..cell.clone()
+                },
+            )
         }
     } else if cell.rb == 0 {
         if matches!(api.get(-dx, 0).element.matter, MatterType::Empty) {
@@ -222,7 +265,7 @@ pub fn update_liquid<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f3
     api.update(cell);
 }
 
-pub fn update_gas<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) {
+pub fn update_gas(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
     let mut dx = api.rand_dir();
 
     if matches!(api.get(dx, 0).element.matter, MatterType::Empty | MatterType::Gas{..}) && matches!(api.get(dx, 1).element.matter, MatterType::Empty | MatterType::Gas{..}) {
@@ -239,7 +282,7 @@ pub fn update_gas<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) 
             cell.ra = api.rand_int(20) as u8;
         }
 
-        api.update(cell.clone());
+        api.update(cell);
         return
     }
 
@@ -257,15 +300,13 @@ pub fn update_gas<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) 
         let nbr = api.get(dx, dy);
 
         // spread opinion
-        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
-            if nbr.ra % 2 != cell.ra % 2 {
-                api.set(dx, dy,
-                    Cell {
-                        ra: cell.ra,
-                        ..cell.clone()
-                    },
-                )
-            }
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) && nbr.ra % 2 != cell.ra % 2 {
+            api.set(dx, dy,
+                Cell {
+                    ra: cell.ra,
+                    ..cell.clone()
+                },
+            )
         }
     } else if dx0.element.matter == MatterType::Empty {
         cell.rb = 3;
@@ -274,17 +315,15 @@ pub fn update_gas<'a, 'b>(mut cell: Cell, api: &mut ChunkApi<'a, 'b>, _dt: f32) 
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
-        if matches!(nbr.element.matter, MatterType::Liquid{..}) {
-            if nbr.ra % 2 != cell.ra % 2 {
-                api.set(
-                    dx,
-                    dy,
-                    Cell {
-                        ra: cell.ra,
-                        ..cell.clone()
-                    },
-                )
-            }
+        if matches!(nbr.element.matter, MatterType::Liquid{..}) && nbr.ra % 2 != cell.ra % 2 {
+            api.set(
+                dx,
+                dy,
+                Cell {
+                    ra: cell.ra,
+                    ..cell.clone()
+                },
+            )
         }
     } else if cell.rb == 0 {
         if matches!(api.get(-dx, 0).element.matter, MatterType::Empty) {

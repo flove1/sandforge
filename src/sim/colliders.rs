@@ -149,13 +149,7 @@ fn create_simplified_outlines(object_count: i32, matrix: &[i32], matrix_size: i3
             )
         })
         .filter_map(|boundary| {
-            match boundary {
-                Some(boundary) => {
-                    Some(douglas_peucker(boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32 / PHYSICS_SCALE))
-                },
-                None => None,
-            }
-
+            boundary.map(|boundary| douglas_peucker(boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32 / PHYSICS_SCALE))
         })
         .filter(|simplified_boundary| {
             simplified_boundary.len() >= 3
@@ -177,7 +171,7 @@ pub fn create_polyline_colliders(object_count: i32, matrix: &[i32], matrix_size:
             ColliderBuilder::polyline(
                 simplified_boundary.iter()
                     .map(|point| {
-                        Point2::new(point.0 as f32, point.1 as f32)
+                        Point2::new(point.0, point.1)
                     }).collect(),
                     Some(indices)
                 // Some((0..simplified_boundary.len()).chain(0..=0).collect::<Vec<usize>>()),

@@ -655,7 +655,7 @@ impl Renderer {
             })
             .collect();
 
-        if self.particles.len() > 0 {
+        if !self.particles.is_empty() {
             self.particle_instance_buffer = Some(
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Renderer index buffer"),
@@ -697,7 +697,7 @@ impl Renderer {
                 let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Renderer render pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Load,
@@ -718,7 +718,7 @@ impl Renderer {
                 let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Renderer render pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Load,
@@ -739,7 +739,7 @@ impl Renderer {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Renderer render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -760,7 +760,7 @@ impl Renderer {
                 let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Renderer render pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Load,
@@ -771,7 +771,7 @@ impl Renderer {
                 });
         
                 rpass.set_pipeline(&self.collider_render_pipeline);
-                rpass.set_vertex_buffer(0 as u32, vertices.slice(..));
+                rpass.set_vertex_buffer(0, vertices.slice(..));
                 rpass.set_index_buffer(indeces.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..*index_count, 0, 0..1);   
             });

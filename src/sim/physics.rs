@@ -97,15 +97,10 @@ impl Physics {
 
         cells.into_iter()
             .filter(|(_, cell)| {
-                if cell.element.matter == MatterType::Empty {
-                    false
-                }
-                else {
-                    true
-                }
+                cell.element.matter != MatterType::Empty
             })
             .for_each(|((x, y), mut cell)| {
-                let index = ((y - y_min) * width as i32 + (x - x_min)) as usize;
+                let index = ((y - y_min) * width + (x - x_min)) as usize;
 
                 cell.simulation = SimulationType::RigidBody(self.objects.len(), object_cells.len());
 
@@ -113,8 +108,8 @@ impl Physics {
 
                 object_cells.push(ObjectPoint {
                     texture_coords: vector![
-                        ((x - x_min) as f32 - width as f32 / 2.0) / PHYSICS_TO_WORLD as f32,
-                        ((y - y_min) as f32 - height as f32 / 2.0) / PHYSICS_TO_WORLD as f32 
+                        ((x - x_min) as f32 - width as f32 / 2.0) / PHYSICS_TO_WORLD,
+                        ((y - y_min) as f32 - height as f32 / 2.0) / PHYSICS_TO_WORLD 
                     ],
                     world_coords: pos2!(x, y),
                     old_world_coords: pos2!(x, y),
@@ -129,7 +124,7 @@ impl Physics {
                 matrix[index] = 1;
             });
 
-        let (collider, _) = create_triangulated_collider(&mut matrix, width, height);
+        let (collider, _) = create_triangulated_collider(&matrix, width, height);
         
         let rb_handle = self.rigid_body_set.insert(
             if static_flag {
@@ -158,7 +153,7 @@ impl Physics {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb, // Adjust format as needed
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -196,16 +191,16 @@ impl Physics {
 
     pub fn new_empty_static_object(&mut self, x: f32, y: f32) -> RigidBodyHandle {
         self.rigid_body_set.insert(
-            RigidBodyBuilder::fixed().position(Isometry2::translation(x as f32, y as f32))
+            RigidBodyBuilder::fixed().position(Isometry2::translation(x, y))
         )
     }
 
     pub fn has_colliders(&mut self, rb_handle: RigidBodyHandle) -> bool {
-        self.rigid_body_set[rb_handle].colliders().len() > 0
+        !self.rigid_body_set[rb_handle].colliders().is_empty()
     }
 
     pub fn remove_collider_from_object(&mut self, rb_handle: RigidBodyHandle) {
-        let colliders = self.rigid_body_set[rb_handle].colliders().iter().map(|handle| *handle).collect::<Vec<ColliderHandle>>();
+        let colliders = self.rigid_body_set[rb_handle].colliders().to_vec();
 
         for collider_handle in colliders {
             self.collider_set.remove(

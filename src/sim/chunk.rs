@@ -50,11 +50,9 @@ impl Chunk {
                 self.cell_count += 1;
             }
         }
-        else if self.cells[index].element.matter != MatterType::Empty && !matches!(self.cells[index].simulation, SimulationType::RigidBody( .. )) {
-            if cell.element.matter == MatterType::Empty {
-                self.cell_count -= 1;
-                self.cells[index] = cell;
-            }
+        else if self.cells[index].element.matter != MatterType::Empty && !matches!(self.cells[index].simulation, SimulationType::RigidBody( .. )) && cell.element.matter == MatterType::Empty {
+            self.cell_count -= 1;
+            self.cells[index] = cell;
         }
 
         self.update_dirty_rect(&pos2!(x, y));
@@ -64,17 +62,13 @@ impl Chunk {
         let index = get_cell_index(x, y);
         cell.clock = clock.wrapping_add(4);
 
-        if self.cells[index].element.matter == MatterType::Empty {
-            if cell.element.matter != MatterType::Empty {
-                self.cells[index] = cell;
-                self.cell_count += 1;
-            }
+        if self.cells[index].element.matter == MatterType::Empty && cell.element.matter != MatterType::Empty {
+            self.cells[index] = cell;
+            self.cell_count += 1;
         }
-        else if self.cells[index].element.matter != MatterType::Empty{
-            if cell.element.matter == MatterType::Empty {
-                self.cell_count -= 1;
-                self.cells[index] = cell;
-            }
+        else if self.cells[index].element.matter != MatterType::Empty && cell.element.matter == MatterType::Empty {
+            self.cell_count -= 1;
+            self.cells[index] = cell;
         }
 
         self.update_dirty_rect(&pos2!(x, y));
@@ -216,7 +210,7 @@ impl Chunk {
         }
 
         self.colliders.clear();
-        self.colliders.append(&mut &mut create_polyline_colliders(label, &matrix, CHUNK_SIZE));
+        self.colliders.append(&mut create_polyline_colliders(label, &matrix, CHUNK_SIZE));
     }
 
     //==========
@@ -224,7 +218,7 @@ impl Chunk {
     //==========
 
     pub fn create_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let mut pixel_data: Vec<u8> = Vec::with_capacity(self.cells.len());
+        let mut pixel_data: Vec<u8> = Vec::with_capacity(self.cells.len() * 4);
         let size = (self.cells.len() as f32).sqrt().trunc() as u32;
 
         self.cells.iter()
@@ -248,16 +242,13 @@ impl Chunk {
         });
 
         queue.write_texture(
-            // Tells wgpu where to copy the pixel data
             wgpu::ImageCopyTexture {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            // The actual pixel data
             &pixel_data,
-            // The layout of the texture
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * size),
@@ -278,11 +269,13 @@ impl Chunk {
         let mut updated_count: u128 = 0;
         let (x_range, y_range) = self.retrieve_dirt_rect(clock);
 
+        let mut cell_clone;
+
         for x in x_range.iter() {
             for y in y_range.iter() {
                 let cell = &self.cells[get_cell_index(*x, *y)];
             
-                if cell.element.matter == MatterType::Empty {
+                if matches!(cell.element.matter, MatterType::Empty | MatterType::Static) {
                     continue;
                 }
 
@@ -291,7 +284,9 @@ impl Chunk {
                     continue;
                 }
 
-                cell.clone().update_cell(
+                cell_clone = cell.clone();
+
+                cell_clone.update_cell(
                     &mut ChunkApi { 
                         cell_position: pos2!(*x, *y),
                         chunk: self,
@@ -306,7 +301,7 @@ impl Chunk {
             }
         }
 
-        return updated_count;
+        updated_count
     }
 }
 
@@ -329,7 +324,15 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
             self.chunk.get_cell(cell_position)
         }
         else {
-            self.world.get_cell(self.chunk.position, cell_position)
+            let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
+            let new_chunk_position = self.chunk.position + chunk_offset;
+
+            let result = self.world.get_chunk(&new_chunk_position);
+
+            match result {
+                Some(chunk_reference) => chunk_reference.borrow().get_cell(cell_position),
+                None => Cell::default(),
+            }
         }
     }
 
@@ -337,10 +340,18 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
         let cell_position = self.cell_position.add(dx, dy);
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) {
-            self.chunk.match_cell(cell_position, &element)
+            self.chunk.match_cell(cell_position, element)
         }
         else {
-            self.world.match_cell(self.chunk.position, cell_position, element)
+            let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
+            let new_chunk_position = self.chunk.position + chunk_offset;
+
+            let result = self.world.get_chunk(&new_chunk_position);
+
+            match result {
+                Some(chunk_reference) => chunk_reference.borrow().match_cell(cell_position, element),
+                None => true,
+            }
         }
     }
 
@@ -352,55 +363,239 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
             self.chunk.update_dirty_rect_with_offset(&cell_position);
         }
         else {
-            self.world.set_cell(self.chunk.position, cell_position, cell);
+            let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
+            let new_chunk_position = self.chunk.position + chunk_offset;
+
+            let result = self.world.get_chunk(&new_chunk_position);
+
+            match result {
+                Some(chunk_reference) => {
+                    let activate_result = self.world.activate_chunk(new_chunk_position);
+
+                    let mut chunk = chunk_reference.borrow_mut();
+                    
+                    match activate_result {
+                        true => chunk.maximize_dirty_rect(),
+                        false => chunk.update_dirty_rect_with_offset(&cell_position),
+                    }
+
+                    chunk.set_cell(cell_position, cell);
+
+                },
+                None => {},
+            };
         }
     }
 
+    //Maybe it is too complex, but idc
     pub fn swap(&mut self, dx:i32, dy: i32) {
-        let cell_position = self.cell_position;
-        let new_cell_position = cell_position.add(dx, dy);
+        let cell_position_1 = self.cell_position;
+        let cell_position_2 = cell_position_1.add(dx, dy);
+        
+        match cell_position_1.is_between(0, CHUNK_SIZE - 1) {
+            true => {
+                match cell_position_2.is_between(0, CHUNK_SIZE - 1) {
+                    true => {
+                        self.chunk.swap_cells(cell_position_1, cell_position_2);
+                        self.chunk.update_dirty_rect_with_offset(&cell_position_1);
+                        self.chunk.update_dirty_rect_with_offset(&cell_position_2);
+            
+                        // Update chunks if cell is updated close to their border
+                        let chunk_offset = pos2!(
+                            if cell_position_1.x == 0 { -1 }
+                            else if cell_position_1.x == CHUNK_SIZE - 1 { 1 }
+                            else { 0 },
+            
+                            if cell_position_1.y == 0 { -1 }
+                            else if cell_position_1.y == CHUNK_SIZE - 1 { 1 }
+                            else { 0 }
+                        );
+            
+                        if !chunk_offset.is_zero() {
+                            let (cell_position, _) = (cell_position_1 + chunk_offset).wrap(0, CHUNK_SIZE);
+                            self.world.refresh_chunk(
+                                &(self.chunk.position + chunk_offset),
+                                &cell_position,
+                            );
+                        }
+                    },
+                    false => {
+                        let (cell_position_2, chunk_offset) = cell_position_2.wrap(0, CHUNK_SIZE);
+                        let chunk_position = self.chunk.position + chunk_offset;
 
-        if cell_position.is_between(0, CHUNK_SIZE - 1) {
-            if new_cell_position.is_between(0, CHUNK_SIZE - 1) {
-                self.chunk.swap_cells(cell_position, new_cell_position);
-                self.chunk.update_dirty_rect_with_offset(&new_cell_position);
-    
-                // Update chunks if cell is updated close to their border
-                let chunk_offset = pos2!(
-                    if cell_position.x == 0 { -1 }
-                    else if cell_position.x == CHUNK_SIZE - 1 { 1 }
-                    else { 0 },
-    
-                    if cell_position.y == 0 { -1 }
-                    else if cell_position.y == CHUNK_SIZE - 1 { 1 }
-                    else { 0 }
-                );
-    
-                if !chunk_offset.is_zero() {
-                    let (cell_position, _) = (cell_position + chunk_offset).wrap(0, CHUNK_SIZE);
-                    self.world.refresh_chunk(
-                        &(self.chunk.position + chunk_offset),
-                        &cell_position,
-                    );
+                        let result = self.world.get_chunk(&chunk_position);
+                        let cell_1 = self.chunk.get_cell(cell_position_1);
+
+                        let cell_2 = match result {
+                            Some(chunk_reference) => {
+                                let mut chunk = chunk_reference.borrow_mut();
+
+                                let activate_result = self.world.activate_chunk(chunk_position);
+
+                                match activate_result {
+                                    true => chunk.maximize_dirty_rect(),
+                                    false => chunk.update_dirty_rect_with_offset(&cell_position_2),
+                                }
+
+                                let cell_2 = chunk.replace_cell(cell_position_2, cell_1.clone());
+
+                                if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                                    chunk.cell_count += 1;
+                                }
+                                else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                                    chunk.cell_count -= 1;
+                                }
+
+                                cell_2
+                            },
+                            None => { Cell::default() },
+                        };
+
+                       if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                            self.chunk.cell_count -= 1;
+                        }
+                        else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                            self.chunk.cell_count += 1;
+                        }
+
+                        self.chunk.set_cell(cell_position_1, cell_2);
+                        self.chunk.update_dirty_rect_with_offset(&cell_position_1);
+                    },
                 }
-            }
-            else {
-                let old_cell = self.chunk.get_cell(cell_position);
-                let new_cell = self.world.replace_cell(self.chunk.position, new_cell_position, old_cell.clone());
+            },
+            false => {
+                match cell_position_2.is_between(0, CHUNK_SIZE - 1) {
+                    true => {
+                        let (cell_position_1, chunk_offset) = cell_position_1.wrap(0, CHUNK_SIZE);
+                        let chunk_position = self.chunk.position + chunk_offset;
 
-                if old_cell.element.matter != MatterType::Empty && new_cell.element.matter == MatterType::Empty {
-                    self.chunk.cell_count -= 1;
+                        let result = self.world.get_chunk(&chunk_position);
+
+                        let cell_2 = self.chunk.get_cell(cell_position_2);
+
+                        let cell_1 = match result {
+                            Some(chunk_reference) => {
+                                let mut chunk = chunk_reference.borrow_mut();
+                                let activate_result = self.world.activate_chunk(chunk_position);
+
+                                match activate_result {
+                                    true => chunk.maximize_dirty_rect(),
+                                    false => chunk.update_dirty_rect_with_offset(&cell_position_1),
+                                }
+
+                                let cell_1 = chunk.replace_cell(cell_position_1, cell_2.clone());
+
+                                if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                                    chunk.cell_count -= 1;
+                                }
+                                else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                                    chunk.cell_count += 1;
+                                }
+
+                                cell_1
+                            },
+                            None => { Cell::default() },
+                        };
+
+                       if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                            self.chunk.cell_count += 1;
+                        }
+                        else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                            self.chunk.cell_count -= 1;
+                        }
+
+                        self.chunk.set_cell(cell_position_2, cell_1);
+                        self.chunk.update_dirty_rect_with_offset(&cell_position_2);
+                        
+                    },
+                    false => {
+                        let (cell_position_1, chunk_offset_1) = cell_position_1.wrap(0, CHUNK_SIZE);
+                        let (cell_position_2, chunk_offset_2) = cell_position_2.wrap(0, CHUNK_SIZE);
+
+                        let chunk_position_1 = self.chunk.position + chunk_offset_1;
+                        let chunk_position_2 = self.chunk.position + chunk_offset_2;
+
+                        if chunk_position_1 == chunk_position_2 {
+                            let result = self.world.get_chunk(&chunk_position_1);
+
+                            match result {
+                                Some(chunk_reference) => {
+                                    let mut chunk = chunk_reference.borrow_mut();
+
+                                    chunk.swap_cells(cell_position_1, cell_position_2);
+                                    chunk.update_dirty_rect_with_offset(&cell_position_1);
+                                    chunk.update_dirty_rect_with_offset(&cell_position_2);
+
+                                },
+                                None => {},
+                            }
+                        }
+                        else {
+                            let result_1 = self.world.get_chunk(&chunk_position_1);
+                            let result_2 = self.world.get_chunk(&chunk_position_2);
+    
+                            if result_1.is_none() && result_2.is_none() {
+                                self.cell_position.change(dx, dy);
+                                return;
+                            }
+    
+                            if result_1.is_some() && result_2.is_some() {
+                                let chunk_reference_1 = result_1.unwrap();
+                                let chunk_reference_2 = result_2.unwrap();
+    
+                                let mut chunk_1 = chunk_reference_1.borrow_mut();
+                                let mut chunk_2 = chunk_reference_2.borrow_mut();
+    
+                                let cell_1 = chunk_1.get_cell(cell_position_1);
+                                let cell_2 = chunk_2.get_cell(cell_position_2);
+    
+                                if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                                    chunk_1.cell_count -= 1;
+                                    chunk_2.cell_count += 1;
+                                }
+                                else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                                    chunk_1.cell_count -= 1;
+                                    chunk_2.cell_count += 1;
+                                }
+    
+                                chunk_1.set_cell(cell_position_1, cell_2);
+                                chunk_1.update_dirty_rect(&cell_position_1);
+                                chunk_2.set_cell(cell_position_2, cell_1);
+                                chunk_2.update_dirty_rect(&cell_position_2);
+                            }
+                            else if result_1.is_none() {
+                                let chunk_reference_2 = result_2.unwrap();
+    
+                                let mut chunk_2 = chunk_reference_2.borrow_mut();
+                                let cell_2 = chunk_2.get_cell(cell_position_2);
+    
+                                if cell_2.element.matter != MatterType::Empty {
+                                    chunk_2.cell_count -= 1;
+                                }
+    
+                                chunk_2.set_cell(cell_position_2, Cell::default());
+                                chunk_2.update_dirty_rect(&cell_position_2);
+                            }
+                            else {
+                                let chunk_reference_1 = result_1.unwrap();
+    
+                                let mut chunk_1 = chunk_reference_1.borrow_mut();
+                                let cell_1 = chunk_1.get_cell(cell_position_1);
+    
+                                if cell_1.element.matter != MatterType::Empty {
+                                    chunk_1.cell_count -= 1;
+                                }
+    
+                                chunk_1.set_cell(cell_position_1, Cell::default());
+                                chunk_1.update_dirty_rect(&cell_position_1);
+                            }
+                        }
+                    },
                 }
-                else if old_cell.element.matter == MatterType::Empty && new_cell.element.matter != MatterType::Empty {
-                    self.chunk.cell_count += 1;
-                }
+            },
+        }
 
-                self.chunk.set_cell(cell_position, new_cell);
-            }
-
-            self.chunk.update_dirty_rect_with_offset(&cell_position);
-            self.cell_position.change(dx, dy);
-        } 
+        self.cell_position.change(dx, dy);
 
     }
 
@@ -413,7 +608,15 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
             self.chunk.set_cell(self.cell_position, cell);
         }
         else {
-            self.world.update_cell(self.chunk.position, self.cell_position, cell);
+            let (cell_position, chunk_offset) = self.cell_position.wrap(0, CHUNK_SIZE);
+            let new_chunk_position = self.chunk.position + chunk_offset;
+
+            let result = self.world.get_chunk(&new_chunk_position);
+
+            match result {
+                Some(chunk_reference) => chunk_reference.borrow_mut().set_cell(cell_position, cell),
+                None => {},
+            };
         }
     }
     

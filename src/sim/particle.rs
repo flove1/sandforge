@@ -16,6 +16,10 @@ pub enum ParticleType {
     Light
 }
 
+pub enum ParticleState {
+    Free,
+}
+
 impl Particle {
     pub fn new(
         cell: Cell,
@@ -35,7 +39,11 @@ impl Particle {
         }
     }
 
-    pub fn update<'a, 'b>(&mut self, api: &mut ChunkApi<'a, 'b>) {        
+    pub fn update(&mut self, api: &mut ChunkApi) {
+        if self.collided {
+            return;
+        }
+
         let mut last_x = 0;
         let mut last_y = 0;
 
@@ -62,9 +70,6 @@ impl Particle {
         );
 
         if return_to_ca {
-            if api.get(last_x, last_y).element.matter == MatterType::Empty {
-                api.set(last_x, last_y, self.cell.clone());
-            }
             self.collided = true;
         }
         else {
@@ -72,8 +77,5 @@ impl Particle {
             self.y += self.dy;
             self.dy = f32::min(self.dy - (1.0 / CHUNK_SIZE as f32) / 10.0, self.dy.signum() * 9.1 * (1.0 / CHUNK_SIZE as f32) / 10.0);
         }
-
-        // api.update(cell.clone());
-        // api.keep_alive(last_x, last_y);
     }
 }

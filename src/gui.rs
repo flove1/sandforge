@@ -127,7 +127,7 @@ impl Brush {
             true
         };
 
-        line_from_pixels(x1, y1, x2 + x2.signum() * 1, y2 + y2.signum() * 1, &mut function);
+        line_from_pixels(x1, y1, x2 + x2.signum(), y2 + y2.signum(), &mut function);
     }
 }
 
@@ -247,24 +247,32 @@ impl Gui {
             return response;
         }
 
-        self.brush.last_mouse_position = input.mouse().map(|(x, y)| (x / scale_factor as f32, y / scale_factor as f32));
+        let new_mouse_position = input.mouse().map(|(x, y)| (x / scale_factor as f32, y / scale_factor as f32));
 
         if input.mouse_pressed(0) {
-            if let Some((x, y)) = self.brush.last_mouse_position {
+            if let Some((x, y)) = new_mouse_position {
                 let (x, y) = Self::get_world_position_from_pixel(x, y);
                 self.brush.draw_point(x - self.x, y - self.y);
             }
         }
 
         if input.mouse_held(0) {
-            if let Some((x, y)) = self.brush.last_mouse_position {
-                let (x1, y1) = Self::get_world_position_from_pixel(x, y);
-                let (dx, dy) = input.mouse_diff();
+            if let Some((new_x, new_y)) = new_mouse_position {
+                let (x1, y1) = match self.brush.last_mouse_position {
+                    Some((x, y)) => {
+                        Self::get_world_position_from_pixel(x, y)
+                    },
+                    None => {
+                        Self::get_world_position_from_pixel(new_x, new_y)
+                    },
+                };
 
-                let (x2, y2) = Self::get_world_position_from_pixel(x + dx, y + dy);
+                let (x2, y2) = Self::get_world_position_from_pixel(new_x, new_y);
                 self.brush.draw_line(x1 - self.x, y1 - self.y, x2 - self.x, y2 - self.y);
             }
         }
+
+        self.brush.last_mouse_position = new_mouse_position;
 
         if input.key_pressed(winit::event::VirtualKeyCode::Grave) {
             self.interface.menu_bar_open = !self.interface.menu_bar_open;
@@ -558,7 +566,8 @@ impl Interface {
                     {
                         match self.selected_cell.simulation {
                             crate::sim::cell::SimulationType::Ca => format!("simulation: ca"),
-                            crate::sim::cell::SimulationType::RigidBody(object_id, cell_id) => format!("simulation: rb({}), id({})", object_id, cell_id),
+                            crate::sim::cell::SimulationType::RigidBody(object_id, cell_id) => format!("simulation: rb({}, {})", object_id, cell_id),
+                            crate::sim::cell::SimulationType::Particle(dx, dy) => format!("simulation: particle({}, {})", dx, dy),
                         }
                     }
                 );

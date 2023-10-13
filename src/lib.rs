@@ -68,7 +68,7 @@ impl State {
                         wgpu::Limits::default()
                     },
                 },
-                None, // Trace path
+                None,
             )
             .await
             .unwrap();
@@ -153,8 +153,6 @@ pub async fn run() {
     let window = {
         let size = LogicalSize::new(SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
 
-        // #[cfg(target_os = "unix")]
-
         if cfg!(windows) {
             WindowBuilder::new()
                 .with_title("Rust-physics")
@@ -199,52 +197,50 @@ pub async fn run() {
     event_loop.run(move |event, _, control_flow| {        
         control_flow.set_poll();
 
-        if input.update(&event) {
-            if gui.is_update_required() {
-                window.request_redraw();
+        if input.update(&event) && gui.is_update_required() {
+            window.request_redraw();
 
-                if world.needs_update(gui.ms_from_previous_update()) {
-                    if gui.get_brush().element.matter == MatterType::Empty {
-                        world.place_batch(gui.drain_placing_queue());
-                    }
-                    else {
-                        match gui.get_brush().brush_type {
-                            gui::BrushType::Cell => {
-                                world.place_batch(gui.drain_placing_queue());
-                            },
-                            gui::BrushType::Object => {
-                                if gui.is_cells_queued() && !input.mouse_held(0) {
-                                    world.place_object(
-                                        gui.drain_placing_queue(),
-                                        false,
-                                        &state.device,
-                                        &state.queue
-                                    );
-                                }
-                            },
-                            gui::BrushType::StaticObject => {
-                                if gui.is_cells_queued() && !input.mouse_held(0) {
-                                    world.place_object(
-                                        gui.drain_placing_queue(),
-                                        true,
-                                        &state.device,
-                                        &state.queue
-                                    );
-                                }
-                            },
-                            gui::BrushType::Particle(_) => {
-                                if gui.is_cells_queued() {
-                                    world.place_particles(gui.drain_placing_queue());
-                                }
-                            },
-                        }          
-                    }
-
-                    let (chunks_updated, pixels_updated) = world.update();
-                    gui.update_frame_info(chunks_updated, pixels_updated);
-
-                    world.update_textures(&state.device, &state.queue, gui.x, gui.y);
+            if world.needs_update(gui.ms_from_previous_update()) {
+                if gui.get_brush().element.matter == MatterType::Empty {
+                    world.place_batch(gui.drain_placing_queue());
                 }
+                else {
+                    match gui.get_brush().brush_type {
+                        gui::BrushType::Cell => {
+                            world.place_batch(gui.drain_placing_queue());
+                        },
+                        gui::BrushType::Object => {
+                            if gui.is_cells_queued() && !input.mouse_held(0) {
+                                world.place_object(
+                                    gui.drain_placing_queue(),
+                                    false,
+                                    &state.device,
+                                    &state.queue
+                                );
+                            }
+                        },
+                        gui::BrushType::StaticObject => {
+                            if gui.is_cells_queued() && !input.mouse_held(0) {
+                                world.place_object(
+                                    gui.drain_placing_queue(),
+                                    true,
+                                    &state.device,
+                                    &state.queue
+                                );
+                            }
+                        },
+                        gui::BrushType::Particle(_) => {
+                            if gui.is_cells_queued() {
+                                world.place_particles(gui.drain_placing_queue());
+                            }
+                        },
+                    }          
+                }
+
+                let (chunks_updated, pixels_updated) = world.update();
+                gui.update_frame_info(chunks_updated, pixels_updated);
+
+                world.update_textures(&state.device, &state.queue, gui.x, gui.y);
             }
         }
 
@@ -256,18 +252,21 @@ pub async fn run() {
             },
 
             Event::RedrawRequested(_) => {
-                gui.next_frame();
-
                 if let Some((x, y)) = gui.get_last_position() {
                     gui.update_selected_cell(world.get_cell_by_pixel(x, y));
                 }
 
-                if let Err(_) = state.render_with(|encoder, view, device, queue| {
+                let rendering_result = state.render_with(|encoder, view, device, queue| {
                     world.render(encoder, view);
 
                     gui.prepare(&window);
                     gui.render(encoder, view, device, queue);
-                }) {
+                });
+
+
+                gui.next_frame();
+
+                if rendering_result.is_err() {
                     println!("error while rendering");
                     control_flow.set_exit();
                 }
