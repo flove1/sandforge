@@ -1,5 +1,5 @@
 use rapier2d::{prelude::{vector, nalgebra}, na::{Matrix2, Vector2}};
-use wgpu::util::DeviceExt;
+use wgpu::{util::DeviceExt, Color};
 
 use crate::{constants::{PHYSICS_SCALE, WORLD_WIDTH, WORLD_HEIGHT, CHUNK_SIZE}, vector::Pos2};
 
@@ -677,6 +677,20 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView
     ) {
+        {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Renderer render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(Color { r: 0.52, g: 0.8, b: 0.92, a: 1.0 }),
+                        store: true,
+                    },
+                })],
+                depth_stencil_attachment: None,
+            });
+        }
 
         self.chunks.iter()
             .for_each(|(bind_group, bind_buffer)| {

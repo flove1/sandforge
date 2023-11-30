@@ -16,8 +16,9 @@ pub struct Cell {
     pub ra: u8,
     pub rb: u8,
     pub clock: u8,
+    pub simulation: SimulationType,
+    
     pub flags: u16,
-    pub simulation: SimulationType
 }
 
 #[derive(Default, Clone)]

@@ -1,7 +1,8 @@
-use std::{collections::{BTreeMap, BTreeSet}, cell::RefCell};
+use std::{collections::{BTreeMap, BTreeSet}, cell::RefCell, time::{SystemTime, UNIX_EPOCH}};
 
 use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use dashmap::{DashMap, DashSet};
+use noise::{Perlin, NoiseFn};
 use rapier2d::{na::Point2, prelude::{vector, nalgebra}};
 
 use crate::{constants::*, pos2, vector::Pos2, helpers::line_from_pixels};
@@ -34,6 +35,7 @@ pub struct World {
     physics_engine: Physics,
     previous_update_ms: u128,
     clock: u8,
+    perlin: Perlin,
 
     particles: Vec<Particle>,
 }
@@ -51,6 +53,7 @@ impl World {
             renderer: Renderer::new(device, format),
             previous_update_ms: 0,
             clock: 0,
+            perlin: Perlin::new(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_millis()),
 
             particles: vec![],
         };
@@ -75,22 +78,36 @@ impl World {
 
         let underground_element = ELEMENTS.get("dirt").unwrap().value().clone();
         let surface_element = ELEMENTS.get("grass").unwrap().value().clone();
-
+        let depth_element = ELEMENTS.get("stone").unwrap().value().clone();
+        
         for x in 0..CHUNK_SIZE {
-            let max_y = terrain_fx(x as f64 / CHUNK_SIZE as f64 + position.x as f64);
+            for y in 0..CHUNK_SIZE {
+                let mut value = self.perlin.get([x as f64 / CHUNK_SIZE as f64 + position.x as f64, y as f64 / CHUNK_SIZE as f64 + position.y as f64]);
 
-            let surface_level = ((max_y - position.y as f64) * CHUNK_SIZE as f64).floor() as i32;
+                value *= 10.0;
 
-            let surface_offset_1 = surface_offset_fx();
-            let surface_offset_2 = surface_offset_fx();
-
-            for y in 0..(surface_level - surface_offset_1) {
-                chunk.place(x, y, Cell::new(&underground_element, 1), self.clock);
+                match value as i64 {
+                    0..=1 => chunk.place(x, y, Cell::new(&surface_element, 1), self.clock),
+                    2..=4 => chunk.place(x, y, Cell::new(&underground_element, 1), self.clock),
+                    5..=10 => chunk.place(x, y, Cell::new(&depth_element, 1), self.clock),
+                    _ => {}
+                }
             }
 
-            for y in (surface_level - surface_offset_1)..(surface_level + surface_offset_2) {
-                chunk.place(x, y, Cell::new(&surface_element, 1), self.clock);
-            }
+            // let max_y = terrain_fx(x as f64 / CHUNK_SIZE as f64 + position.x as f64);
+
+            // let surface_level = ((max_y - position.y as f64) * CHUNK_SIZE as f64).floor() as i32;
+
+            // let surface_offset_1 = surface_offset_fx();
+            // let surface_offset_2 = surface_offset_fx();
+
+            // for y in 0..(surface_level - surface_offset_1) {
+            //     chunk.place(x, y, Cell::new(&underground_element, 1), self.clock);
+            // }
+
+            // for y in (surface_level - surface_offset_1)..(surface_level + surface_offset_2) {
+            //     chunk.place(x, y, Cell::new(&surface_element, 1), self.clock);
+            // }
         };
 
         self.chunks.insert(

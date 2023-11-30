@@ -9,7 +9,6 @@ use crate::helpers::line_from_pixels;
 use super::cell::{Cell, SimulationType};
 use super::chunk::ChunkApi;
 
-
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct Element {
     pub id: CompactString,
@@ -71,26 +70,33 @@ pub fn process_elements_config() {
 lazy_static! {
     pub static ref ELEMENTS: DashMap<String, Element, ahash::RandomState> = {
         let elements = DashMap::with_hasher(ahash::RandomState::new());
-        elements.insert(Element::default().id.to_string(), Element::default());
 
-        let underground_element = Element { 
-            id: format_compact!("dirt"),
-            ui_label: format_compact!("Dirt"),
-            matter_type: MatterType::Static,
-            color: [0x6d, 0x5f, 0x3d, 0xff], 
-            color_offset: 10, 
-        };
-
-        let surface_element = Element { 
-            id: format_compact!("grass"),
-            ui_label: format_compact!("Grass"),
-            matter_type: MatterType::Static,
-            color: [0x7d, 0xaa, 0x4d, 0xff], 
-            color_offset: 10, 
-        };
-
-        elements.insert(underground_element.id.to_string(), underground_element);
-        elements.insert(surface_element.id.to_string(), surface_element);
+        [
+            Element::default(),
+            Element { 
+                id: format_compact!("dirt"),
+                ui_label: format_compact!("Dirt"),
+                matter_type: MatterType::Static,
+                color: [0x6d, 0x5f, 0x3d, 0xff], 
+                color_offset: 10, 
+            },
+            Element { 
+                id: format_compact!("grass"),
+                ui_label: format_compact!("Grass"),
+                matter_type: MatterType::Static,
+                color: [0x7d, 0xaa, 0x4d, 0xff], 
+                color_offset: 10, 
+            },
+            Element { 
+                id: format_compact!("stone"),
+                ui_label: format_compact!("Stone"),
+                matter_type: MatterType::Static,
+                color: [0x71, 0x77, 0x77, 0xff],
+                color_offset: 25, 
+            }
+        ].into_iter().for_each(|element| {
+            elements.insert(element.id.to_string(), element);
+        });
 
         elements
     };

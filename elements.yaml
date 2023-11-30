@@ -23,14 +23,6 @@
   }
 
 - !Element {
-    id: stone,
-    ui_label: Stone,
-    color: [0x71, 0x77, 0x77, 0xff],
-    color_offset: 25,
-    matter_type: Static
-  }
-
-- !Element {
     id: wood,
     ui_label: Wood,
     color: [0x6a, 0x4b, 0x35, 0xff],
