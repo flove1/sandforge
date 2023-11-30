@@ -548,7 +548,7 @@ impl Interface {
 
                 ui.colored_label(
                     egui::Color32::WHITE,
-                    format!("Element name: {}", self.selected_cell.element.name)
+                    format!("Element name: {}", ELEMENTS.get(&self.selected_cell.element_id.to_string()).unwrap().value().ui_label.to_string())
                 );
 
                 ui.separator();
@@ -622,7 +622,7 @@ impl Interface {
                                 egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
                             );
 
-                            if &brush.element == element {
+                            if &brush.element == element.value() {
                                 ui.painter().rect_stroke(
                                     rect,
                                     egui::Rounding::default().at_most(0.5), 
@@ -638,7 +638,7 @@ impl Interface {
                                     
                                     ui.colored_label(
                                         {
-                                            if &brush.element == element {
+                                            if &brush.element == element.value() {
                                                 egui::Color32::GOLD
                                             }
                                             else {
@@ -646,8 +646,7 @@ impl Interface {
                                             } 
                                         },
 
-
-                                        element.name.clone()
+                                        element.value().ui_label.to_string()
                                     );
                                 });
                             });

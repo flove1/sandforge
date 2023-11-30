@@ -2,7 +2,7 @@ use rapier2d::{prelude::*, na::{Isometry2, Vector2}};
 
 use crate::{constants::{CHUNK_SIZE, PHYSICS_TO_WORLD}, pos2, vector::Pos2};
 
-use super::{cell::{Cell, SimulationType}, colliders::create_triangulated_collider, elements::MatterType};
+use super::{cell::{Cell, SimulationType}, colliders::create_triangulated_colliders, elements::MatterType};
 
 pub struct PhysicsObject {
     pub rb_handle: RigidBodyHandle,
@@ -97,7 +97,7 @@ impl Physics {
 
         cells.into_iter()
             .filter(|(_, cell)| {
-                cell.element.matter != MatterType::Empty
+                cell.matter_type != MatterType::Empty
             })
             .for_each(|((x, y), mut cell)| {
                 let index = ((y - y_min) * width + (x - x_min)) as usize;
@@ -124,7 +124,7 @@ impl Physics {
                 matrix[index] = 1;
             });
 
-        let (collider, _) = create_triangulated_collider(&matrix, width, height);
+        let collider = create_triangulated_colliders(&matrix, width, height);
         
         let rb_handle = self.rigid_body_set.insert(
             if static_flag {
@@ -212,16 +212,15 @@ impl Physics {
         };
     }
 
-    pub fn add_colliders_to_static_body(&mut self, rb_handle: RigidBodyHandle, colliders: &[(Collider, (f32, f32))]) {
+    pub fn add_colliders_to_static_body(&mut self, rb_handle: RigidBodyHandle, colliders: &[Collider]) {
         colliders.iter()
-            .for_each(|(collider, _)| {
+            .for_each(|collider| {
                 self.collider_set.insert_with_parent(
                     collider.clone(),
                     rb_handle,
                     &mut self.rigid_body_set
                 );
             })
-
     }
 
     pub fn step(&mut self, visible_world: [f32; 4]) {

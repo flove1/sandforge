@@ -5,7 +5,7 @@ use dashmap::{DashMap, DashSet};
 use rapier2d::{na::Point2, prelude::{vector, nalgebra}};
 
 use crate::{constants::*, pos2, vector::Pos2, helpers::line_from_pixels};
-use super::{chunk::{Chunk, ChunkApi}, cell::{Cell, SimulationType}, elements::{MatterType, Element}, physics::Physics, renderer::Renderer, particle::Particle};
+use super::{chunk::{Chunk, ChunkApi}, cell::{Cell, SimulationType}, elements::{MatterType, Element, ELEMENTS}, physics::Physics, renderer::Renderer, particle::Particle};
 
 fn terrain_fx(x: f64) -> f64 {
     let term1 = (x / 1.5).sin() * (x / 1.5).cos() * x.sin();
@@ -44,7 +44,7 @@ impl World {
         format: &wgpu::TextureFormat
     ) -> World {
         let mut world = Self {
-            chunks: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 8),
+            chunks: DashMap::with_hasher(ahash::RandomState::new()),
             active_chunks: DashSet::with_hasher(ahash::RandomState::new()),
 
             physics_engine: Physics::new(),
@@ -73,19 +73,8 @@ impl World {
 
         let mut chunk = Chunk::new(position, handler);
 
-        let underground_element = Element { 
-            name: "Hard ground".to_string(), 
-            color: [0x6d, 0x5f, 0x3d, 0xff], 
-            color_offset: 10, 
-            matter: MatterType::Static
-        };
-
-        let surface_element = Element { 
-            name: "Soft ground".to_string(), 
-            color: [0x7d, 0xaa, 0x4d, 0xff], 
-            color_offset: 10, 
-            matter: MatterType::Static
-        };
+        let underground_element = ELEMENTS.get("dirt").unwrap().value().clone();
+        let surface_element = ELEMENTS.get("grass").unwrap().value().clone();
 
         for x in 0..CHUNK_SIZE {
             let max_y = terrain_fx(x as f64 / CHUNK_SIZE as f64 + position.x as f64);
@@ -388,7 +377,7 @@ impl World {
                             .for_each(|(pos, cell)| {
                                 let mut old_cell = chunk.get_cell(pos.clone());
     
-                                match old_cell.element.matter {
+                                match old_cell.matter_type {
                                     MatterType::Empty => {
                                         chunk.set_cell(pos.clone(), cell.clone());
                                         chunk.update_dirty_rect_with_offset(&pos);
@@ -454,12 +443,12 @@ impl World {
                                 let mut operation = |current_dx, current_dy| {
                                     let current_cell = api.get(last_x, last_y);
                         
-                                    if !matches!(current_cell.element.matter, MatterType::Empty) {
+                                    if !matches!(current_cell.matter_type, MatterType::Empty) {
                                         last_x = current_dx;
                                         last_y = current_dy;
                                     }
 
-                                    !matches!(current_cell.element.matter, MatterType::Empty)
+                                    !matches!(current_cell.matter_type, MatterType::Empty)
                                 };
 
                                 let return_to_ca = line_from_pixels(
@@ -483,7 +472,7 @@ impl World {
                                             break;
                                         }
                                         for dy in -1..=1 {
-                                            if api.get(last_x + dx, last_y + dy).element.matter == MatterType::Empty {
+                                            if api.get(last_x + dx, last_y + dy).matter_type == MatterType::Empty {
                                                 api.set(last_x + dx, last_y + dy, Cell { 
                                                     simulation: SimulationType::Ca,
                                                     ..cell.clone()
@@ -562,7 +551,7 @@ impl World {
                                     let mut placed = false;
                                     for dx in -1..=1 {
                                         for dy in -1..=1 {
-                                            if !placed && api.get(dx, dy).element.matter == MatterType::Empty {
+                                            if !placed && api.get(dx, dy).matter_type == MatterType::Empty {
                                                 placed = true;
                                                 api.set(dx, dy, particle.cell.clone());
                                             }
@@ -654,7 +643,7 @@ impl World {
                 (
                     particle.x,
                     particle.y,
-                    particle.cell.element.color
+                    particle.cell.color
                 )
             })
             .collect::<Vec<(f32, f32, [u8; 4])>>();

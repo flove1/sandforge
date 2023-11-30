@@ -3,7 +3,7 @@ use rapier2d::prelude::{Collider, RigidBodyHandle};
 use super::cell::*;
 use super::elements::{MatterType, Element};
 use super::helpers::get_cell_index;
-use super::colliders::{label_matrix, create_polyline_colliders};
+use super::colliders::{label_matrix, create_polyline_collider};
 use super::world::World;
 
 use crate::vector::Pos2;
@@ -18,7 +18,7 @@ pub struct Chunk {
     pub(super) cell_count: u64,
     
     pub(super) rb_handle: RigidBodyHandle,
-    pub(super) colliders: Vec<(Collider, (f32, f32))>,
+    pub(super) colliders: Vec<Collider>,
     pub(super) texture: Option<wgpu::Texture>,
 }
 
@@ -48,13 +48,13 @@ impl Chunk {
         let index = get_cell_index(x, y);
         cell.clock = clock.wrapping_add(4);
 
-        if self.cells[index].element.matter == MatterType::Empty {
-            if cell.element.matter != MatterType::Empty {
+        if self.cells[index].matter_type == MatterType::Empty {
+            if cell.matter_type != MatterType::Empty {
                 self.cells[index] = cell;
                 self.cell_count += 1;
             }
         }
-        else if self.cells[index].element.matter != MatterType::Empty && !matches!(self.cells[index].simulation, SimulationType::RigidBody( .. )) && cell.element.matter == MatterType::Empty {
+        else if self.cells[index].matter_type != MatterType::Empty && !matches!(self.cells[index].simulation, SimulationType::RigidBody( .. )) && cell.matter_type == MatterType::Empty {
             self.cell_count -= 1;
             self.cells[index] = cell;
         }
@@ -66,11 +66,11 @@ impl Chunk {
         let index = get_cell_index(x, y);
         cell.clock = clock.wrapping_add(4);
 
-        if self.cells[index].element.matter == MatterType::Empty && cell.element.matter != MatterType::Empty {
+        if self.cells[index].matter_type == MatterType::Empty && cell.matter_type != MatterType::Empty {
             self.cells[index] = cell;
             self.cell_count += 1;
         }
-        else if self.cells[index].element.matter != MatterType::Empty && cell.element.matter == MatterType::Empty {
+        else if self.cells[index].matter_type != MatterType::Empty && cell.matter_type == MatterType::Empty {
             self.cell_count -= 1;
             self.cells[index] = cell;
         }
@@ -128,7 +128,7 @@ impl Chunk {
     }
 
     pub fn match_cell(&self, cell_position: Pos2, element: &Element) -> bool {
-        self.cells[cell_position.to_index(CHUNK_SIZE)].element == *element
+        self.cells[cell_position.to_index(CHUNK_SIZE)].element_id == element.id
     }
 
     pub fn set_cell(&mut self, cell_position: Pos2, cell: Cell) {
@@ -200,7 +200,7 @@ impl Chunk {
         let mut label = 0;
 
         let condition = |index: usize| {
-            matches!(self.cells[index].element.matter, MatterType::Static { .. }) && !matches!(self.cells[index].simulation, SimulationType::RigidBody(..))
+            matches!(self.cells[index].matter_type, MatterType::Static { .. }) && !matches!(self.cells[index].simulation, SimulationType::RigidBody(..))
         };
         
         for x in 0..CHUNK_SIZE {
@@ -213,8 +213,7 @@ impl Chunk {
             }
         }
 
-        self.colliders.clear();
-        self.colliders.append(&mut create_polyline_colliders(label, &matrix, CHUNK_SIZE));
+        self.colliders = create_polyline_collider(label, &matrix, CHUNK_SIZE);
     }
 
     //==========
@@ -279,7 +278,7 @@ impl Chunk {
             for y in y_range.iter() {
                 let cell = &self.cells[get_cell_index(*x, *y)];
             
-                if matches!(cell.element.matter, MatterType::Empty | MatterType::Static) {
+                if matches!(cell.matter_type, MatterType::Empty | MatterType::Static) {
                     continue;
                 }
 
@@ -443,10 +442,10 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
 
                                 let cell_2 = chunk.replace_cell(cell_position_2, cell_1.clone());
 
-                                if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                                if cell_1.matter_type != MatterType::Empty && cell_2.matter_type == MatterType::Empty {
                                     chunk.cell_count += 1;
                                 }
-                                else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                                else if cell_1.matter_type == MatterType::Empty && cell_2.matter_type != MatterType::Empty {
                                     chunk.cell_count -= 1;
                                 }
 
@@ -455,10 +454,10 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                             None => { Cell::default() },
                         };
 
-                       if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                       if cell_1.matter_type != MatterType::Empty && cell_2.matter_type == MatterType::Empty {
                             self.chunk.cell_count -= 1;
                         }
-                        else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                        else if cell_1.matter_type == MatterType::Empty && cell_2.matter_type != MatterType::Empty {
                             self.chunk.cell_count += 1;
                         }
 
@@ -489,10 +488,10 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
 
                                 let cell_1 = chunk.replace_cell(cell_position_1, cell_2.clone());
 
-                                if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                                if cell_1.matter_type != MatterType::Empty && cell_2.matter_type == MatterType::Empty {
                                     chunk.cell_count -= 1;
                                 }
-                                else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                                else if cell_1.matter_type == MatterType::Empty && cell_2.matter_type != MatterType::Empty {
                                     chunk.cell_count += 1;
                                 }
 
@@ -501,10 +500,10 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                             None => { Cell::default() },
                         };
 
-                       if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                       if cell_1.matter_type != MatterType::Empty && cell_2.matter_type == MatterType::Empty {
                             self.chunk.cell_count += 1;
                         }
-                        else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                        else if cell_1.matter_type == MatterType::Empty && cell_2.matter_type != MatterType::Empty {
                             self.chunk.cell_count -= 1;
                         }
 
@@ -553,11 +552,11 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                                 let cell_1 = chunk_1.get_cell(cell_position_1);
                                 let cell_2 = chunk_2.get_cell(cell_position_2);
     
-                                if cell_1.element.matter != MatterType::Empty && cell_2.element.matter == MatterType::Empty {
+                                if cell_1.matter_type != MatterType::Empty && cell_2.matter_type == MatterType::Empty {
                                     chunk_1.cell_count -= 1;
                                     chunk_2.cell_count += 1;
                                 }
-                                else if cell_1.element.matter == MatterType::Empty && cell_2.element.matter != MatterType::Empty {
+                                else if cell_1.matter_type == MatterType::Empty && cell_2.matter_type != MatterType::Empty {
                                     chunk_1.cell_count -= 1;
                                     chunk_2.cell_count += 1;
                                 }

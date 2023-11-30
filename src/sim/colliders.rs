@@ -132,93 +132,50 @@ pub fn marching_squares(object_count: i32, matrix: &[i32], width: i32, height: i
     objects
 }
 
-fn create_simplified_outlines(object_count: i32, matrix: &[i32], matrix_size: i32, size_modifier: f32) -> Vec<Vec<(f32, f32)>> {
-    marching_squares(object_count, matrix, matrix_size, matrix_size, size_modifier)
-        .iter()
-        .map(|object| {
-            object.iter()
-                .filter(|boundary| boundary.len() >= 3)
-                .max_by(|boundary_1, boundary_2| {
-                    if boundary_1.len() > boundary_2.len() {
-                        Ordering::Greater
-                    }
-                    else {
-                        Ordering::Less
-                    }
-                }
-            )
-        })
-        .filter_map(|boundary| {
-            boundary.map(|boundary| douglas_peucker(boundary, COLLIDER_PRECISION / (matrix_size.pow(2)) as f32 / PHYSICS_SCALE))
-        })
-        .filter(|simplified_boundary| {
-            simplified_boundary.len() >= 3
-        })
-        .collect::<Vec<Vec<(f32, f32)>>>()
-}
-
-pub fn create_polyline_colliders(object_count: i32, matrix: &[i32], matrix_size: i32) -> Vec<(Collider, (f32, f32))> {
-    create_simplified_outlines(object_count, matrix, matrix_size, 0.0).iter()
-        .map(|simplified_boundary| {
-            let indices = 
-                (0..simplified_boundary.len() as u32)
-                .zip((1..simplified_boundary.len() as u32 - 1).chain(0..=9))
-                .map(|(i1, i2)| {
-                    [i1, i2]
-                })
-                .collect::<Vec<[u32; 2]>>();
-
-            ColliderBuilder::polyline(
-                simplified_boundary.iter()
-                    .map(|point| {
-                        Point2::new(point.0, point.1)
-                    }).collect(),
-                    Some(indices)
-                // Some((0..simplified_boundary.len()).chain(0..=0).collect::<Vec<usize>>()),
-            ).build()
-        })
-        .map(|mut collider| {
-            let vertices = collider.shape().as_polyline().unwrap().vertices();
-            let count = vertices.len();
-
-            let center = vertices.iter() 
-                .map(|center| {
-                    (center.x / count as f32, center.y / count as f32)
-                })
-                .fold((0.0, 0.0), |sum, value| {
-                    ((sum.0 + value.0), (sum.1 + value.1))
-                });
-            collider.set_restitution(0.1);
-            collider.set_friction(0.0);
-
-            (collider, center)
-        })
-        .collect::<Vec<(Collider, (f32, f32))>>()
-}
-
-pub fn create_triangulated_collider(matrix: &[i32], width: i32, height: i32) -> (Collider, (f32, f32)) {
-    let mut object = marching_squares(1, matrix, width, height, 0.02).pop().unwrap();
-
-    object.sort_by(|boundary_1, boundary_2| {
-        if boundary_1.len() > boundary_2.len() {
-            Ordering::Less
-        }
-        else {
-            Ordering::Greater
-        }
-    });
-
-    let mut boundaries = object
+pub fn create_polyline_collider(object_count: i32, matrix: &[i32], matrix_size: i32) -> Vec<Collider> {
+    let simplified_boundaries = marching_squares(object_count, matrix, matrix_size, matrix_size, 0.0)
         .into_iter()
-        .filter(|simplified_boundary| {
-            simplified_boundary.len() >= 3
+        .map(|boundaries| {
+            boundaries.into_iter()
+                .filter(|boundary| boundary.len() >= 3)
+                .map(|boundary| douglas_peucker(boundary.as_slice(), COLLIDER_PRECISION / (matrix_size.pow(2)) as f32 / PHYSICS_SCALE))
+                .filter(|boundary| boundary.len() >= 3)
+                .collect::<Vec<Vec<(f32, f32)>>>()
         })
-        .map(|boundary| {
-            douglas_peucker(&boundary, COLLIDER_PRECISION / CHUNK_SIZE.pow(2) as f32 / PHYSICS_SCALE)
+        .collect::<Vec<Vec<Vec<(f32, f32)>>>>();
+    // object -> boundary -> points
+
+    simplified_boundaries.iter()
+        .map(|boundaries| {
+            boundaries.iter()
+                .map(|boundary| {
+                    let boundary_vertices = boundary.iter()
+                        .map(|point| {
+                            Point2::new(point.0, point.1)
+                        }).collect();
+
+                    let boundary_indices = 
+                        (0..boundary.len() as u32)
+                        .zip((1..boundary.len() as u32 - 1).chain(0..=9))
+                        .map(|(i1, i2)| {
+                            [i1, i2]
+                        })
+                        .collect::<Vec<[u32; 2]>>();
+                    
+                    ColliderBuilder::polyline(boundary_vertices, Some(boundary_indices)).build()
+                })
+                .collect::<Vec<Collider>>()
         })
-        .filter(|simplified_boundary| {
-            simplified_boundary.len() >= 3
-        })
+        .flatten()
+        .collect::<Vec<Collider>>()
+}
+
+pub fn create_triangulated_colliders(matrix: &[i32], width: i32, height: i32) -> Collider {
+    let mut boundaries = marching_squares(1, matrix, width, height, 0.02).pop().unwrap()
+        .into_iter()
+        .filter(|boundary| boundary.len() >= 3)
+        .map(|boundary| douglas_peucker(&boundary, COLLIDER_PRECISION / CHUNK_SIZE.pow(2) as f32 / PHYSICS_SCALE))
+        .filter(|simplified_boundary| simplified_boundary.len() >= 3)
         .map(|simplified_boundary| {
             simplified_boundary.iter()
                 .map(|point| {
@@ -231,6 +188,15 @@ pub fn create_triangulated_collider(matrix: &[i32], width: i32, height: i32) -> 
         })
         .collect::<Vec<Vec<Point>>>();
 
+    boundaries.sort_by(|boundary_1, boundary_2| {
+        if boundary_1.len() > boundary_2.len() {
+            Ordering::Less
+        }
+        else {
+            Ordering::Greater
+        }
+    });  
+
     let builder = SweeperBuilder::new(
         boundaries.remove(0)
         )
@@ -238,7 +204,7 @@ pub fn create_triangulated_collider(matrix: &[i32], width: i32, height: i32) -> 
     
     let triangles = builder.build().triangulate();
 
-    let mut collider = ColliderBuilder::compound(
+    ColliderBuilder::compound(
         triangles
             .map(|triangle| {
                 (
@@ -251,26 +217,7 @@ pub fn create_triangulated_collider(matrix: &[i32], width: i32, height: i32) -> 
                 )
             })
             .collect::<Vec<(Isometry2<Real>, SharedShape)>>()
-    ).build();
-
-    let shapes = collider.shape().as_compound().unwrap().shapes();
-    let count = shapes.len();
-
-    let center = shapes.iter() 
-        .map(|shape| {
-            shape.1.as_triangle().unwrap().center()
-        })
-        .map(|center| {
-            (center.x / count as f32, center.y / count as f32)
-        })
-        .fold((0.0, 0.0), |sum, value| {
-            ((sum.0 + value.0), (sum.1 + value.1))
-        });
-
-    collider.set_density(10.0);
-    collider.set_restitution(0.1);
-
-    (collider, center)
+    ).build()
 }
 
 fn perpendicular_squared_distance(point: (f32, f32), line: ((f32, f32), (f32, f32))) -> f32 {

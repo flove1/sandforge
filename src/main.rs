@@ -1,9 +1,8 @@
 #[cfg(feature = "bench")] 
 fn main() {
     let mut world = sandforge::bench_init();
-
+    
     sandforge::bench_fill(&mut world);
-
     sandforge::bench_until_empty(&mut world);
 }
 
@@ -14,7 +13,6 @@ fn main() {
         .format_target(false)
         .format_timestamp(None)
         .init();
-
 
     std::thread::spawn(|| { sandforge::deadlock_checker() });
 

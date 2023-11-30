@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use compact_str::format_compact;
+use notify::{Watcher, RecursiveMode};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use wgpu::SurfaceError;
@@ -9,6 +11,7 @@ use winit_input_helper::WinitInputHelper;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
@@ -18,7 +21,7 @@ mod constants;
 mod gui;
 mod helpers;
 
-use crate::sim::elements::MatterType;
+use crate::sim::elements::{MatterType, process_elements_config};
 
 use parking_lot::deadlock;
 use sim::elements::Element;
@@ -149,6 +152,21 @@ pub async fn run() {
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
 
+    process_elements_config();
+    let mut watcher = notify::recommended_watcher(|res| {
+        match res {
+            Ok(_) => {
+                println!("elements config updated detected");
+                process_elements_config();
+            },
+            Err(e) => println!("watch error: {:?}", e),
+        }
+    }).unwrap();
+
+    if let Err(e) = watcher.watch(Path::new("./elements.yaml"), RecursiveMode::NonRecursive) {
+        panic!("error while loading elements file: {e}");
+    }
+
     let window = {
         let size = LogicalSize::new(SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
 
@@ -200,7 +218,7 @@ pub async fn run() {
             window.request_redraw();
 
             if world.needs_update(gui.ms_from_previous_update()) {
-                if gui.get_brush().element.matter == MatterType::Empty {
+                if gui.get_brush().element.matter_type == MatterType::Empty {
                     world.place_batch(gui.drain_placing_queue());
                 }
                 else {
@@ -302,10 +320,11 @@ pub fn deadlock_checker() {
 
 pub fn bench_fill(world: &mut World) {
     let element = Element {
-        name: "Bench".to_string(), 
         color: [0, 0, 0, 0], 
         color_offset: 0,
-        matter: MatterType::Powder,
+        id: format_compact!("bench_powder"),
+        ui_label: format_compact!("BENCH POWDER"),
+        matter_type: MatterType::Powder,
     };
 
     for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {

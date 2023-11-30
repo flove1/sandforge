@@ -55,6 +55,9 @@ egui-winit = "0.23.0"
 epaint = "0.23.0"
 pollster = "0.3.0"
 winit_input_helper = "0.14.1"
+notify = "6.1.1"
+noise = "0.8.2"
+compact_str = { version = "0.7.1", features = ["serde"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.5"

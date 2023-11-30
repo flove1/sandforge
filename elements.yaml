@@ -1,48 +1,47 @@
 - !Element {
-    name: Sand, 
+    id: sand,
+    ui_label: Sand,
     color: [0xf2, 0xf1, 0xa3, 0xff], 
     color_offset: 40, 
-    matter: Powder
+    matter_type: Powder
   }
 
 - !Element {
-    name: Coal,
+    id: water,
+    ui_label: Water,
+    color: [0x47, 0x7C, 0xB8, 0xff],
+    color_offset: 0, 
+    matter_type: Liquid
+  }
+
+- !Element {
+    id: coal,
+    ui_label: Coal,
     color: [0x09, 0x09, 0x09, 0xff],
     color_offset: 25,
-    matter: Powder
-    }
+    matter_type: Powder
+  }
 
 - !Element {
-    name: Stone,
+    id: stone,
+    ui_label: Stone,
     color: [0x71, 0x77, 0x77, 0xff],
     color_offset: 25,
-    matter: Static
-    }
+    matter_type: Static
+  }
 
 - !Element {
-    name: Wood,
+    id: wood,
+    ui_label: Wood,
     color: [0x6a, 0x4b, 0x35, 0xff],
     color_offset: 50,
-    matter: Static
-    }
+    matter_type: Static
+  }
 
 - !Element {
-    name: Dirt,
-    color: [0x6d, 0x5f, 0x3d, 0xff],
-    color_offset: 50,
-    matter: Static
-    }
-
-- !Element {
-    name: Water,
-    color: [0x47, 0x7C, 0xB8, 0xff],
-    color_offset: 0,
-    matter: Liquid
-    }
-    
-- !Element {
-    name: Gas,
+    id: gas,
+    ui_label: Gas,
     color: [0x55, 0x74, 0x56, 0x99],
     color_offset: 0,
-    matter: Gas
-    }
+    matter_type: Gas
+  }

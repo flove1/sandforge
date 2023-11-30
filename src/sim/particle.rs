@@ -50,7 +50,7 @@ impl Particle {
         let mut operation = |current_dx, current_dy| {
             let current_cell = api.get(current_dx, current_dy);
 
-            if !matches!(current_cell.element.matter, MatterType::Static { .. }) || (matches!(current_cell.simulation, SimulationType::RigidBody(..))) {
+            if !matches!(current_cell.matter_type, MatterType::Static { .. }) || (matches!(current_cell.simulation, SimulationType::RigidBody(..))) {
                 last_x = current_dx;
                 last_y = current_dy;
                 true

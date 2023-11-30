@@ -1,12 +1,18 @@
+use compact_str::{CompactString, format_compact};
 use rand::Rng;
 use lazy_static::lazy_static;
 
 use super::chunk::ChunkApi;
 use super::elements::*;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Cell {
-    pub element: Element,
+    // Read from element:
+    pub element_id: CompactString,
+    pub color: [u8; 4],
+    pub matter_type: MatterType,
+
+    // Created automatically
     pub ra: u8,
     pub rb: u8,
     pub clock: u8,
@@ -22,9 +28,27 @@ pub enum SimulationType {
     Particle(f32, f32),
 }
 
+impl Default for Cell {
+    fn default() -> Self {
+        Self {    // Read from element:
+            element_id: format_compact!("air"),
+            color: [0; 4],
+            matter_type: MatterType::Empty,
+
+            ra: 0,
+            rb: 0,
+            clock: 0,
+            flags: 0,
+            simulation: SimulationType::Ca,
+        }
+    }
+}
+
 lazy_static! {
     pub static ref WALL: Cell = Cell {
-        element: Element { name: "WALL".to_string(), color: [0; 4], color_offset: 0, matter: MatterType::Static },
+        element_id: format_compact!("wall"),
+        color: [0, 0, 0, 255],
+        matter_type: MatterType::Static,
         ra: 0,
         rb: 0,
         clock: 0,
@@ -36,33 +60,35 @@ lazy_static! {
 impl Cell {
     pub fn new(element: &Element, clock: u8) -> Self {
         Self {
+            element_id: element.id.clone(),
+            color: element.color,
+            matter_type: element.matter_type,
             ra: rand::thread_rng().gen_range(0..=element.color_offset),
-            element: element.clone(),
             clock,
             ..Default::default()
         }
     }
 
     pub fn get_color(&self) -> [u8; 4] {
-        match self.element.matter {
+        match self.matter_type {
             MatterType::Empty => [0; 4],
             MatterType::Static | MatterType::Powder => [
-                self.element.color[0].saturating_add(self.ra),
-                self.element.color[1].saturating_add(self.ra),
-                self.element.color[2].saturating_add(self.ra),
-                self.element.color[3].saturating_add(self.ra),
+                self.color[0].saturating_add(self.ra),
+                self.color[1].saturating_add(self.ra),
+                self.color[2].saturating_add(self.ra),
+                self.color[3].saturating_add(self.ra),
             ],
             MatterType::Liquid => [
-                self.element.color[0].saturating_add(fastrand::u8(0..10)),
-                self.element.color[1].saturating_add(fastrand::u8(0..10)),
-                self.element.color[2].saturating_add(fastrand::u8(0..10)),
-                self.element.color[3].saturating_add(fastrand::u8(0..10)),
+                self.color[0].saturating_add(fastrand::u8(0..10)),
+                self.color[1].saturating_add(fastrand::u8(0..10)),
+                self.color[2].saturating_add(fastrand::u8(0..10)),
+                self.color[3].saturating_add(fastrand::u8(0..10)),
             ],
             MatterType::Gas => [
-                self.element.color[0].saturating_add(fastrand::u8(0..50)),
-                self.element.color[1].saturating_add(fastrand::u8(0..50)),
-                self.element.color[2].saturating_add(fastrand::u8(0..50)),
-                self.element.color[3].saturating_add(fastrand::u8(0..50)),
+                self.color[0].saturating_add(fastrand::u8(0..50)),
+                self.color[1].saturating_add(fastrand::u8(0..50)),
+                self.color[2].saturating_add(fastrand::u8(0..50)),
+                self.color[3].saturating_add(fastrand::u8(0..50)),
             ],
         }
     }
@@ -99,7 +125,7 @@ impl Cell {
 
         match self.simulation {
             SimulationType::Ca => {
-                match self.element.matter {
+                match self.matter_type {
                     MatterType::Powder{ .. } => update_sand(self, api, dt),
                     MatterType::Liquid{ .. } => update_liquid(self, api, dt),
                     MatterType::Gas{ .. } => update_gas(self, api, dt),
