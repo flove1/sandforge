@@ -171,7 +171,7 @@ pub fn create_polyline_collider(object_count: i32, matrix: &[i32], matrix_size: 
 }
 
 pub fn create_triangulated_colliders(matrix: &[i32], width: i32, height: i32) -> Collider {
-    let mut boundaries = marching_squares(1, matrix, width, height, 0.02).pop().unwrap()
+    let mut boundaries = marching_squares(1, matrix, width, height, 0.0).pop().unwrap()
         .into_iter()
         .filter(|boundary| boundary.len() >= 3)
         .map(|boundary| douglas_peucker(&boundary, COLLIDER_PRECISION / CHUNK_SIZE.pow(2) as f32 / PHYSICS_SCALE))

@@ -9,7 +9,7 @@ use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 use winit_input_helper::WinitInputHelper;
 
-use crate::constants::{SCREEN_HEIGHT, SCALE, TARGET_FPS, WORLD_WIDTH, WORLD_HEIGHT, CHUNK_SIZE};
+use crate::constants::{SCREEN_HEIGHT, SCALE, TARGET_FPS, CHUNK_SIZE, WORLD_WIDTH, WORLD_HEIGHT};
 use crate::helpers::line_from_pixels;
 use crate::sim::cell::Cell;
 use crate::sim::elements::{ELEMENTS, Element};
@@ -21,6 +21,7 @@ pub struct Brush {
     pub shape: BrushShape,
     pub size: i32, 
     pub last_mouse_position: Option<(f32, f32)>,
+    pub drawing: bool,
 
     pub placing_queue: HashMap<(i32, i32), Cell>,
 }
@@ -85,6 +86,7 @@ impl Brush {
             brush_type: BrushType::Cell, 
             shape: BrushShape::Circle, 
             size: 10,
+            drawing: false,
 
             placing_queue: HashMap::default(),
             last_mouse_position: None,
@@ -237,41 +239,55 @@ impl Gui {
         input: &WinitInputHelper,
         event: &winit::event::WindowEvent, 
         control_flow: &mut winit::event_loop::ControlFlow, 
-        scale_factor: f64
+        _scale_factor: f64
     ) -> EventResponse {
+        if input.mouse_released(0) {
+            self.brush.drawing = false;
+        }
+
         let response = self.egui_state.on_event(&self.egui_ctx, event);
 
         if response.consumed {
             return response;
         }
 
-        let new_mouse_position = input.mouse().map(|(x, y)| (x / scale_factor as f32, y / scale_factor as f32));
-
-        let x_offset = (self.screen_coords[0] * CHUNK_SIZE as f32) as i32;
-        let y_offset = (self.screen_coords[1] * CHUNK_SIZE as f32) as i32;
+        let new_mouse_position = input.mouse();
 
         if input.mouse_pressed(0) {
+            self.brush.drawing = true;
+
             if let Some((x, y)) = new_mouse_position {
-                let (x, y) = Self::get_world_position_from_pixel(x, y);
-                self.brush.draw_point(x + x_offset, y + y_offset);
+                let (x, y) = self.get_world_position_from_pixel(x, y);
+                self.brush.draw_point(x, y);
             }
         }
 
-        if input.mouse_held(0) {
+        if input.mouse_held(0) && self.brush.drawing {
             if let Some((new_x, new_y)) = new_mouse_position {
                 let (x1, y1) = match self.brush.last_mouse_position {
                     Some((x, y)) => {
-                        Self::get_world_position_from_pixel(x, y)
+                        self.get_world_position_from_pixel(x, y)
                     },
                     None => {
-                        Self::get_world_position_from_pixel(new_x, new_y)
+                        self.get_world_position_from_pixel(new_x, new_y)
                     },
                 };
 
-                let (x2, y2) = Self::get_world_position_from_pixel(new_x, new_y);
+                let (x2, y2) = self.get_world_position_from_pixel(new_x, new_y);
                 // dbg!(x1 + x_offset);
-                self.brush.draw_line(x1 + x_offset, y1 + y_offset, x2 + x_offset, y2 + y_offset);
+                self.brush.draw_line(x1, y1, x2, y2);
             }
+        }
+
+        if input.mouse_held(1) {
+            let dx = - input.mouse_diff().0 / (WORLD_WIDTH * CHUNK_SIZE) as f32 / 10.0;
+            let dy = input.mouse_diff().1 / (WORLD_HEIGHT * CHUNK_SIZE) as f32 / 10.0;
+
+            self.screen_coords[0] += dx;
+            self.screen_coords[2] += dx;
+
+            self.screen_coords[1] += dy;
+            self.screen_coords[3] += dy;
         }
 
         self.brush.last_mouse_position = new_mouse_position;
@@ -293,23 +309,23 @@ impl Gui {
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Left) {
-            self.screen_coords[0] -= 1.0;
-            self.screen_coords[2] -= 1.0;
+            self.screen_coords[0] -= 0.1;
+            self.screen_coords[2] -= 0.1;
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Right) {
-            self.screen_coords[0] += 1.0;
-            self.screen_coords[2] += 1.0;
+            self.screen_coords[0] += 0.1;
+            self.screen_coords[2] += 0.1;
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Up) {
-            self.screen_coords[1] += 1.0;
-            self.screen_coords[3] += 1.0;
+            self.screen_coords[1] += 0.1;
+            self.screen_coords[3] += 0.1;
         }
         
         if input.key_pressed_os(winit::event::VirtualKeyCode::Down) {
-            self.screen_coords[1] -= 1.0;
-            self.screen_coords[3] -= 1.0;
+            self.screen_coords[1] -= 0.1;
+            self.screen_coords[3] -= 0.1;
         }
 
         if input.key_pressed(winit::event::VirtualKeyCode::Escape) || input.key_pressed(winit::event::VirtualKeyCode::Q) {
@@ -319,8 +335,11 @@ impl Gui {
         response
     }
 
-    pub fn get_world_position_from_pixel(x: f32, y: f32) -> (i32, i32) {
-        ((x / SCALE).round() as i32, ((SCREEN_HEIGHT - y) / SCALE).round() as i32)
+    pub fn get_world_position_from_pixel(&self, x: f32, y: f32) -> (i32, i32) {
+        (
+            (x / SCALE / self.screen_descriptor.pixels_per_point + (self.screen_coords[0] * CHUNK_SIZE as f32)).round() as i32, 
+            ((SCREEN_HEIGHT - (y / self.screen_descriptor.pixels_per_point)) / SCALE + (self.screen_coords[1] * CHUNK_SIZE as f32)).round() as i32
+        )
     }
 
     pub fn update_selected_cell(&mut self, cell: Cell) {
@@ -333,14 +352,17 @@ impl Gui {
         }
     }
 
-    pub fn scale_factor(&mut self, scale_factor: f64) {
-        self.screen_descriptor.pixels_per_point = scale_factor as f32;
-    }
-
     pub fn prepare(&mut self, window: &Window) {
         let raw_input = self.egui_state.take_egui_input(window);
+        let coordinates = self.brush.last_mouse_position.map(|(x, y)| self.get_world_position_from_pixel(x, y));
+
         let output = self.egui_ctx.run(raw_input, |egui_ctx| {
-            self.interface.ui(egui_ctx, &self.frame_info, &mut self.brush);
+            self.interface.ui(
+                egui_ctx, 
+                &self.frame_info, 
+                &mut self.brush, 
+                coordinates
+            );
         });
 
         self.textures.append(output.textures_delta);
@@ -396,7 +418,7 @@ impl Gui {
 
     pub fn get_last_position(&self) -> Option<(i32, i32)> {
         if let Some((x, y)) = self.brush.last_mouse_position {
-            Some(Self::get_world_position_from_pixel(x, y))
+            Some(self.get_world_position_from_pixel(x, y))
         }
         else {
             None
@@ -451,7 +473,7 @@ impl Interface {
             selected_cell: Cell::default()
         }
     }
-    fn ui(&mut self, ctx: &Context, frame_info: &Frame, brush: &mut Brush) {
+    fn ui(&mut self, ctx: &Context, frame_info: &Frame, brush: &mut Brush, coordinates: Option<(i32, i32)>) {
         egui::TopBottomPanel::top("menubar_container")
             .show_animated(ctx, self.menu_bar_open, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -528,19 +550,16 @@ impl Interface {
             .show(ctx, |ui| {
                 ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
-                if brush.last_mouse_position.is_none() {
+                if coordinates.is_none() {
                     ui.colored_label(
                         egui::Color32::WHITE,
                         format!("Position: NaN")
                     );
                 }
                 else {
-                    let (screen_x, screen_y) = brush.last_mouse_position.unwrap();
-                    let (x, y) = Gui::get_world_position_from_pixel(screen_x, screen_y);
-
                     ui.colored_label(
                         egui::Color32::WHITE,
-                        format!("Position: {}, {}", x, y)
+                        format!("Position: {}, {}", coordinates.unwrap().0, coordinates.unwrap().1)
                     );
                 }
 
@@ -577,6 +596,59 @@ impl Interface {
                         }
                     }
                 );
+
+                ui.separator();
+
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("Matter type: {}", &self.selected_cell.matter_type.to_string())
+                );
+
+                match self.selected_cell.matter_type {
+                    crate::sim::elements::MatterType::Liquid(parameters) => {
+                        ui.separator();
+                        
+                        ui.colored_label(
+                            egui::Color32::WHITE,
+                            format!("Volume: {}", parameters.volume)
+                        );
+
+                        ui.colored_label(
+                            egui::Color32::WHITE,
+                            format!("Density: {}", parameters.density)
+                        );
+                    },
+                    _ => {},
+                }
+
+                if let Some(fire_parameters) = &self.selected_cell.fire_parameters {
+                    ui.separator();
+
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("burning: {}", self.selected_cell.on_fire)
+                    );
+
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("temperature: {}", self.selected_cell.temperature)
+                    );
+
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("fire_hp: {}", fire_parameters.fire_hp)
+                    );
+
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("fire temperature: {}", fire_parameters.fire_temperature)
+                    );
+
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("ignition temperature: {}", fire_parameters.ignition_temperature)
+                    );
+                }
             });
 
         egui::Window::new("Elements")
@@ -596,8 +668,16 @@ impl Interface {
         .show(ctx, |ui| {
             ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
+            let mut elements = ELEMENTS.iter()
+                .map(|entry| entry.value().clone())
+                .collect::<Vec<Element>>();
+
+            elements.sort_by(|a, b| {
+                a.id.to_lowercase().cmp(&b.id.to_lowercase())
+            });
+
             let mut empty = true;
-            for element in ELEMENTS.iter() {
+            for element in elements.into_iter() {
                 if !empty {
                     ui.separator();
                 }
@@ -622,7 +702,7 @@ impl Interface {
                                 egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
                             );
 
-                            if &brush.element == element.value() {
+                            if brush.element == element {
                                 ui.painter().rect_stroke(
                                     rect,
                                     egui::Rounding::default().at_most(0.5), 
@@ -638,7 +718,7 @@ impl Interface {
                                     
                                     ui.colored_label(
                                         {
-                                            if &brush.element == element.value() {
+                                            if brush.element == element {
                                                 egui::Color32::GOLD
                                             }
                                             else {
@@ -646,7 +726,7 @@ impl Interface {
                                             } 
                                         },
 
-                                        element.value().ui_label.to_string()
+                                        element.ui_label.to_string()
                                     );
                                 });
                             });

@@ -18,6 +18,7 @@ harness = false
 
 [profile.release-debugged]
 inherits = "release"
+incremental = true
 debug = true
 
 [profile.optimized]

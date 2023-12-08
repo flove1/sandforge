@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use compact_str::format_compact;
 use notify::{Watcher, RecursiveMode};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
@@ -24,7 +23,6 @@ mod helpers;
 use crate::sim::elements::{MatterType, process_elements_config};
 
 use parking_lot::deadlock;
-use sim::elements::Element;
 use sim::world::World;
 use gui::Gui;
 use winit::dpi::LogicalSize;
@@ -109,12 +107,15 @@ impl State {
         F: FnOnce(
             &mut wgpu::CommandEncoder,
             &wgpu::TextureView,
+            &wgpu::Extent3d,
             &wgpu::Device,
             &wgpu::Queue,
         ),
     {
-        let output = self.surface.get_current_texture()?;
-        let view = output
+        let output = self.surface.get_current_texture()?;   
+        let output_size = output.texture.size();
+
+        let output_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -128,7 +129,7 @@ impl State {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Renderer render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -139,7 +140,7 @@ impl State {
             });
         }
         
-        (render_function)(&mut encoder, &view, &self.device, &self.queue);
+        (render_function)(&mut encoder, &output_view, &output_size, &self.device, &self.queue);
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -227,7 +228,10 @@ pub async fn run() {
                             world.place_batch(gui.drain_placing_queue());
                         },
                         gui::BrushType::Object => {
-                            if gui.is_cells_queued() && !input.mouse_held(0) {
+                            if !matches!(gui.get_brush().element.matter_type, MatterType::Static) {
+                                gui.drain_placing_queue();
+                            }
+                            else if gui.is_cells_queued() && !input.mouse_held(0) {
                                 world.place_object(
                                     gui.drain_placing_queue(),
                                     false,
@@ -274,8 +278,8 @@ pub async fn run() {
                     gui.update_selected_cell(world.get_cell_by_pixel(x, y));
                 }
 
-                let rendering_result = state.render_with(|encoder, view, device, queue| {
-                    world.render(encoder, view);
+                let rendering_result = state.render_with(|encoder, view, output_size, device, queue| {
+                    world.render(device, encoder, view, output_size);
 
                     gui.prepare(&window);
                     gui.render(encoder, view, device, queue);
@@ -319,25 +323,25 @@ pub fn deadlock_checker() {
 // }
 
 pub fn bench_fill(world: &mut World) {
-    let element = Element {
-        color: [0, 0, 0, 0], 
-        color_offset: 0,
-        id: format_compact!("bench_powder"),
-        ui_label: format_compact!("BENCH POWDER"),
-        matter_type: MatterType::Powder,
-    };
+    // let element = Element {
+    //     color: [0, 0, 0, 0], 
+    //     color_offset: 0,
+    //     id: format_compact!("bench_powder"),
+    //     ui_label: format_compact!("BENCH POWDER"),
+    //     matter_type: MatterType::Powder,
+    // };
 
-    for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
-        for y in 0..CHUNK_SIZE {
-            world.set_cell_by_pixel(x, y, &element);
-        }
-    }
+    // for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
+    //     for y in 0..CHUNK_SIZE {
+    //         world.set_cell_by_pixel(x, y, &element);
+    //     }
+    // }
 
-    for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
-        for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
-            world.set_cell_by_pixel(x, y, &element);
-        }
-    }
+    // for x in 0..(WORLD_WIDTH * CHUNK_SIZE) {
+    //     for y in (WORLD_HEIGHT / 2 * CHUNK_SIZE)..((WORLD_HEIGHT / 2 + 1) * CHUNK_SIZE) {
+    //         world.set_cell_by_pixel(x, y, &element);
+    //     }
+    // }
 }
 
 pub fn bench_until_empty(world: &mut World) {

@@ -8,7 +8,10 @@ pub struct Particle {
     pub y: f32,
     pub dx: f32,
     pub dy: f32,
+
     pub collided: bool,
+
+    pub airborne_frames: u8,
 }
 
 pub enum ParticleType {
@@ -36,6 +39,7 @@ impl Particle {
             dx,
             dy,
             collided,
+            airborne_frames: 0
         }
     }
 
@@ -50,15 +54,24 @@ impl Particle {
         let mut operation = |current_dx, current_dy| {
             let current_cell = api.get(current_dx, current_dy);
 
-            if !matches!(current_cell.matter_type, MatterType::Static { .. }) || (matches!(current_cell.simulation, SimulationType::RigidBody(..))) {
-                last_x = current_dx;
-                last_y = current_dy;
-                true
-            }
-            else {
-                false
-            }
-            
+            match current_cell.matter_type {
+                MatterType::Empty => {
+                    self.airborne_frames = self.airborne_frames.saturating_add(1);
+                    last_x = current_dx;
+                    last_y = current_dy;
+                    true
+                },
+                _ => {
+                    if self.airborne_frames > 2 {
+                        false
+                    }
+                    else {
+                        last_x = current_dx;
+                        last_y = current_dy;
+                        true
+                    }
+                }
+            }            
         };
 
         let return_to_ca = line_from_pixels(
@@ -70,6 +83,8 @@ impl Particle {
         );
 
         if return_to_ca {
+            self.x += last_x as f32 / CHUNK_SIZE as f32;
+            self.y += last_y as f32 / CHUNK_SIZE as f32;
             self.collided = true;
         }
         else {

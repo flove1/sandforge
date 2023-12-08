@@ -16,6 +16,7 @@ pub struct Chunk {
     pub(super) cells: Vec<Cell>,
     pub(super) dirty_rect: Option<[i32; 4]>,
     pub(super) cell_count: u64,
+    pub(super) updated: bool,
     
     pub(super) rb_handle: RigidBodyHandle,
     pub(super) colliders: Vec<Collider>,
@@ -29,6 +30,7 @@ impl Chunk {
             cells: vec![Cell::default(); CHUNK_SIZE.pow(2) as usize],
             dirty_rect: None,
             cell_count: 0,
+            updated: false,
     
             rb_handle,
             colliders: vec![], 
@@ -41,6 +43,8 @@ impl Chunk {
     //================
 
     pub fn place(&mut self, x: i32, y: i32, mut cell: Cell, clock: u8) {
+        self.updated = true;
+
         if x < 0 || y < 0 || x >= CHUNK_SIZE || y >= CHUNK_SIZE {
             return;
         }
@@ -63,6 +67,8 @@ impl Chunk {
     }
 
     pub fn place_object(&mut self, x: i32, y: i32, mut cell: Cell, clock: u8) {
+        self.updated = true;
+
         let index = get_cell_index(x, y);
         cell.clock = clock.wrapping_add(4);
 
@@ -79,6 +85,8 @@ impl Chunk {
     }
 
     pub fn place_batch(&mut self, positions: Vec<((i32, i32), Cell)>, clock: u8) {
+        self.updated = true;
+
         positions.into_iter()
             .for_each(|(pos, cell)| {
                 self.place(pos.0, pos.1, cell, clock);
@@ -132,10 +140,14 @@ impl Chunk {
     }
 
     pub fn set_cell(&mut self, cell_position: Pos2, cell: Cell) {
+        self.updated = true;
+
         self.cells[cell_position.to_index(CHUNK_SIZE)] = cell;
     }
 
     pub fn replace_cell(&mut self, cell_position: Pos2, cell: Cell) -> Cell {
+        self.updated = true;
+
         let index = cell_position.to_index(CHUNK_SIZE);
         let replaced_cell = self.cells[index].clone();
         self.cells[index] = cell;
@@ -143,6 +155,8 @@ impl Chunk {
     }
 
     pub fn swap_cells(&mut self, cell_position_1: Pos2, cell_position_2: Pos2) {
+        self.updated = true;
+
         let index_1 = cell_position_1.to_index(CHUNK_SIZE);
         let index_2 = cell_position_2.to_index(CHUNK_SIZE);
 
@@ -196,6 +210,8 @@ impl Chunk {
     //===========
 
     pub fn create_colliders(&mut self) {
+        self.updated = true;
+
         let mut matrix = vec![0; CHUNK_SIZE.pow(2) as usize];
         let mut label = 0;
 
@@ -221,11 +237,38 @@ impl Chunk {
     //==========
 
     pub fn create_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if !self.updated {
+            return;
+        }
+
         let mut pixel_data: Vec<u8> = Vec::with_capacity(self.cells.len() * 4);
+        // let mut lighting_data: Vec<(Pos2, [u8; 4])> = Vec::with_capacity(self.cells.len());
+
         let size = (self.cells.len() as f32).sqrt().trunc() as u32;
 
+        let fire_colors: [[u8; 4]; 5] = [
+            [0xA9, 0x43, 0x1E, 0xFF],
+            [0xD7, 0x88, 0x25, 0xFF],
+            [0xEA, 0xAA, 0x00, 0xFF],
+            [0xE1, 0xCD, 0x00, 0xFF],
+            [0xEE, 0xDC, 0x00, 0xFF],
+        ];
+
         self.cells.iter()
-            .for_each(|cell| pixel_data.extend(&cell.get_color()));
+            .for_each(|cell| {
+                if cell.on_fire {
+                    pixel_data.extend(&fire_colors[fastrand::i32(0..fire_colors.len() as i32) as usize]);
+                }
+                else {
+                    let mut color = cell.get_color();
+
+                    if let MatterType::Liquid(parameters) = cell.matter_type {
+                        color[3] = (f32::clamp(parameters.volume * 5.0, 0.1, 0.7) * 255.0) as u8;
+                    }
+
+                    pixel_data.extend(&color);
+                }
+            });
 
         let extent = wgpu::Extent3d {
             width: size,
@@ -239,7 +282,7 @@ impl Chunk {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb, // Adjust format as needed
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -261,6 +304,7 @@ impl Chunk {
         );
 
         self.texture = Some(texture);
+        self.updated = false;
     }
 
     // TODO Rewrite so chunks takes ownership of neighboring chunks' cells up to half chunks size from edge and later returns and combines them
@@ -278,7 +322,7 @@ impl Chunk {
             for y in y_range.iter() {
                 let cell = &self.cells[get_cell_index(*x, *y)];
             
-                if matches!(cell.matter_type, MatterType::Empty | MatterType::Static) {
+                if matches!(cell.matter_type, MatterType::Empty) {
                     continue;
                 }
 
@@ -363,7 +407,7 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
 
         if cell_position.is_between(0, CHUNK_SIZE - 1) {
             self.chunk.set_cell(cell_position, cell);
-            self.chunk.update_dirty_rect_with_offset(&cell_position);
+            self.keep_alive(dx, dy);
         }
         else {
             let (cell_position, chunk_offset) = cell_position.wrap(0, CHUNK_SIZE);
@@ -400,27 +444,7 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                 match cell_position_2.is_between(0, CHUNK_SIZE - 1) {
                     true => {
                         self.chunk.swap_cells(cell_position_1, cell_position_2);
-                        self.chunk.update_dirty_rect_with_offset(&cell_position_1);
-                        self.chunk.update_dirty_rect_with_offset(&cell_position_2);
-            
-                        // Update chunks if cell is updated close to their border
-                        let chunk_offset = pos2!(
-                            if cell_position_1.x == 0 { -1 }
-                            else if cell_position_1.x == CHUNK_SIZE - 1 { 1 }
-                            else { 0 },
-            
-                            if cell_position_1.y == 0 { -1 }
-                            else if cell_position_1.y == CHUNK_SIZE - 1 { 1 }
-                            else { 0 }
-                        );
-            
-                        if !chunk_offset.is_zero() {
-                            let (cell_position, _) = (cell_position_1 + chunk_offset).wrap(0, CHUNK_SIZE);
-                            self.world.refresh_chunk(
-                                &(self.chunk.position + chunk_offset),
-                                &cell_position,
-                            );
-                        }
+                        self.keep_alive(dx, dy);
                     },
                     false => {
                         let (cell_position_2, chunk_offset) = cell_position_2.wrap(0, CHUNK_SIZE);
@@ -528,7 +552,6 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                                     chunk.swap_cells(cell_position_1, cell_position_2);
                                     chunk.update_dirty_rect_with_offset(&cell_position_1);
                                     chunk.update_dirty_rect_with_offset(&cell_position_2);
-
                                 },
                                 None => {},
                             }
@@ -577,7 +600,26 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
     }
 
     pub fn keep_alive(&mut self, dx: i32, dy: i32) {
-        self.chunk.update_dirty_rect_with_offset(&self.cell_position.add(dx, dy));
+        let cell_position = self.cell_position.add(dx, dy);
+        self.chunk.update_dirty_rect_with_offset(&cell_position);
+
+        let chunk_offset = pos2!(
+            if cell_position.x == 0 { -1 }
+            else if cell_position.x == CHUNK_SIZE - 1 { 1 }
+            else { 0 },
+
+            if cell_position.y == 0 { -1 }
+            else if cell_position.y == CHUNK_SIZE - 1 { 1 }
+            else { 0 }
+        );
+        
+        if !chunk_offset.is_zero() {
+            let (cell_position, _) = (cell_position + chunk_offset).wrap(0, CHUNK_SIZE);
+            self.world.refresh_chunk(
+                &(self.chunk.position + chunk_offset),
+                &cell_position,
+            );
+        }
     }
 
     pub fn update(&mut self, cell: Cell) {

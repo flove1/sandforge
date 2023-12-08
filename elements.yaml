@@ -9,31 +9,103 @@
 - !Element {
     id: water,
     ui_label: Water,
-    color: [0x47, 0x7C, 0xB8, 0xff],
+    color: [0x47, 0x7C, 0xB8, 0xBB],
     color_offset: 0, 
-    matter_type: Liquid
+    matter_type: !Liquid {
+      density: 10,
+      viscosity: 6,
+      dry_threshold: 0.0001,
+      max_compression: 2.0,
+    }
   }
 
 - !Element {
-    id: coal,
-    ui_label: Coal,
-    color: [0x09, 0x09, 0x09, 0xff],
-    color_offset: 25,
-    matter_type: Powder
+    id: oil,
+    ui_label: Oil,
+    color: [0x3B, 0x31, 0x31, 0xDD],
+    color_offset: 0, 
+    matter_type: !Liquid {
+      density: 5,
+      viscosity: 6,
+      dry_threshold: 0.0001,
+      max_compression: 2.0,
+    },
+    fire_parameters: !FireParameters {
+      fire_temperature: 150,
+      ignition_temperature: 45,
+      fire_hp: 15,
+    }
   }
 
 - !Element {
-    id: wood,
-    ui_label: Wood,
-    color: [0x6a, 0x4b, 0x35, 0xff],
-    color_offset: 50,
-    matter_type: Static
+    id: lava,
+    ui_label: Lava,
+    color: [0xEA, 0x5C, 0x0F, 0xDD],
+    color_offset: 0, 
+    matter_type: !Liquid {
+      density: 15,
+      viscosity: 9,
+      dry_threshold: 0.01,
+      max_compression: 2.0,
+    },
+    # fire_parameters: !FireParameters {
+    #   fire_temperature: 150,
+    #   ignition_temperature: 45,
+    #   fire_hp: 15,
+    # }
   }
 
+# - !Element {
+#     id: coal,
+#     ui_label: Coal,
+#     color: [0x09, 0x09, 0x09, 0xff],
+#     color_offset: 25,
+#     matter_type: Powder,
+#     fire_parameters: !FireParameters {
+#       fire_temperature: 200,
+#       ignition_temperature: 150,
+#       fire_hp: 300,
+#     }
+#   }
+
+# - !Element {
+#     id: wood,
+#     ui_label: Wood,
+#     color: [0x6a, 0x4b, 0x35, 0xff],
+#     color_offset: 50,
+#     matter_type: Static,
+#     fire_parameters: !FireParameters {
+#       fire_temperature: 125,
+#       ignition_temperature: 75,
+#       fire_hp: 100,
+#     }
+#   }
+
 - !Element {
-    id: gas,
-    ui_label: Gas,
-    color: [0x55, 0x74, 0x56, 0x99],
+    id: steam,
+    ui_label: Steam,
+    color: [0x80, 0x80, 0x80, 0x99],
     color_offset: 0,
     matter_type: Gas
   }
+
+- !Element {
+    id: burning_gas,
+    ui_label: Burning Gas,
+    color: [0xff, 0x5a, 0x00, 0x99],
+    color_offset: 0,
+    matter_type: Gas,
+    fire_parameters: !FireParameters {
+      fire_temperature: 150,
+      ignition_temperature: 30,
+      fire_hp: 25,
+    }
+}
+
+- !Reaction {
+    probability: 0.5,
+    input_element_1: lava,
+    input_element_2: water,
+    out_element_1: stone,
+    out_element_2: steam,
+}

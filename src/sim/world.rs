@@ -93,21 +93,6 @@ impl World {
                     _ => {}
                 }
             }
-
-            // let max_y = terrain_fx(x as f64 / CHUNK_SIZE as f64 + position.x as f64);
-
-            // let surface_level = ((max_y - position.y as f64) * CHUNK_SIZE as f64).floor() as i32;
-
-            // let surface_offset_1 = surface_offset_fx();
-            // let surface_offset_2 = surface_offset_fx();
-
-            // for y in 0..(surface_level - surface_offset_1) {
-            //     chunk.place(x, y, Cell::new(&underground_element, 1), self.clock);
-            // }
-
-            // for y in (surface_level - surface_offset_1)..(surface_level + surface_offset_2) {
-            //     chunk.place(x, y, Cell::new(&surface_element, 1), self.clock);
-            // }
         };
 
         self.chunks.insert(
@@ -349,9 +334,7 @@ impl World {
             });
         
         self.physics_engine.step(visible_world);
-
         let mut updated_chunks_pos = HashSet::new();
-        let mut displaced_cells = HashMap::new();
 
         self.physics_engine.objects.iter_mut()
             .for_each(|object| {
@@ -392,44 +375,51 @@ impl World {
                         points.into_iter()
                             .filter(|(pos, _)| pos.is_between(0, CHUNK_SIZE - 1))
                             .for_each(|(pos, cell)| {
-                                let mut old_cell = chunk.get_cell(pos.clone());
+                                let old_cell = chunk.get_cell(pos.clone());
     
                                 match old_cell.matter_type {
                                     MatterType::Empty => {
                                         chunk.set_cell(pos.clone(), cell.clone());
                                         chunk.update_dirty_rect_with_offset(&pos);
                                     },
-                                    MatterType::Static => {},
-                                    MatterType::Powder | MatterType::Liquid | MatterType::Gas => {
-                                        chunk.set_cell(pos.clone(), cell.clone());
-                                        chunk.update_dirty_rect_with_offset(&pos);
-    
+                                    MatterType::Powder | MatterType::Liquid{..} | MatterType::Gas => {
                                         let x = (pos.x + chunk_position.x * CHUNK_SIZE) as f32 / CHUNK_SIZE as f32;
                                         let y = (pos.y + chunk_position.y * CHUNK_SIZE) as f32 / CHUNK_SIZE as f32;
     
                                         let rb = &mut self.physics_engine.rigid_body_set[rb_handle];
                                         let rb_position = rb.position().translation.vector;
-    
-                                        let impulse = (rb_position - vector![x, y]) * 0.02 / rb.mass().sqrt();
-    
-                                        rb.apply_impulse_at_point(impulse, Point2::new(rb_position.x, rb_position.y), true);
 
-                                        old_cell.simulation = SimulationType::Particle(fastrand::f32() - 0.5, 1.0);
-    
-                                        displaced_cells
-                                            .entry(
-                                                chunk_position.clone())
-                                            .or_insert(vec![])
-                                            .push(
-                                                (pos.clone(), old_cell)
-                                            );
+                                        if y < rb_position.y && matches!(old_cell.matter_type, MatterType::Powder | MatterType::Liquid{..}) {
+                                            let impulse = (rb_position - vector![x, y]) / 100.0;
+                                            rb.apply_impulse(impulse, true);
+                                            rb.apply_torque_impulse( - rb.angvel() / 100.0, true);
+                                        }
+
+                                        let particle_vector = rb_position - vector![x, y];
+
+                                        // if x < rb_position.x {
+                                        //     particle_vector.x *= -1.0;
+                                        // }
+
+                                        chunk.set_cell(pos.clone(), cell.clone());
+                                        chunk.update_dirty_rect_with_offset(&pos);
+
+                                        self.particles.push(Particle { 
+                                            cell: old_cell, 
+                                            x, 
+                                            y, 
+                                            dx: -rb.linvel().x / 5.0, 
+                                            dy: -rb.linvel().y / 1.5, 
+                                            collided: false,
+                                            airborne_frames: 0, 
+                                        });
                                     },
-                                }
+                                    MatterType::Static => {},
+                                };
                             });
                     });
     
                 updated_chunks_pos.extend(chunks.into_keys());
-    
             });
 
         /*
@@ -438,74 +428,74 @@ impl World {
             Ideally should be similart to this:
             https://user-images.githubusercontent.com/13819558/205466863-e7aabf18-e122-4302-afb2-71b2953c236f.gif
         */
-        displaced_cells.into_iter()
-            .for_each(|(chunk_pos, particles)| {
-                let chunk_ref = self.chunks.get(&chunk_pos).unwrap();
-                let mut chunk = chunk_ref.borrow_mut();
+        // displaced_cells.into_iter()
+        //     .for_each(|(chunk_pos, particles)| {
+        //         let chunk_ref = self.chunks.get(&chunk_pos).unwrap();
+        //         let mut chunk = chunk_ref.borrow_mut();
                 
-                let mut api = ChunkApi {
-                    cell_position: pos2!(0, 0),
-                    chunk: &mut chunk,
-                    world: self,
-                    clock: self.clock,
-                };
+        //         let mut api = ChunkApi {
+        //             cell_position: pos2!(0, 0),
+        //             chunk: &mut chunk,
+        //             world: self,
+        //             clock: self.clock,
+        //         };
 
-                particles.into_iter()
-                    .for_each(|(pos, mut cell)| {
-                        if let SimulationType::Particle(dx, dy) = &mut cell.simulation {
-                                api.cell_position = pos;
-                                let mut last_x = 0;
-                                let mut last_y = 0;
-                        
-                                let mut operation = |current_dx, current_dy| {
-                                    let current_cell = api.get(last_x, last_y);
-                        
-                                    if !matches!(current_cell.matter_type, MatterType::Empty) {
-                                        last_x = current_dx;
-                                        last_y = current_dy;
-                                    }
+        //         particles.into_iter()
+        //             .for_each(|(pos, mut cell)| {
+        //                 if let SimulationType::Particle(dx, dy) = &mut cell.simulation {
+        //                     api.cell_position = pos;
+        //                     let mut last_x = 0;
+        //                     let mut last_y = 0;
+                    
+        //                     let mut operation = |current_dx, current_dy| {
+        //                         let current_cell = api.get(last_x, last_y);
+                    
+        //                         if !matches!(current_cell.matter_type, MatterType::Empty) {
+        //                             last_x = current_dx;
+        //                             last_y = current_dy;
+        //                         }
 
-                                    !matches!(current_cell.matter_type, MatterType::Empty)
-                                };
+        //                         !matches!(current_cell.matter_type, MatterType::Empty)
+        //                     };
 
-                                let return_to_ca = line_from_pixels(
-                                    0, 
-                                    0, 
-                                    (*dx * CHUNK_SIZE as f32).round() as i32, 
-                                    (*dy * CHUNK_SIZE as f32).round() as i32, 
-                                    &mut operation
-                                );
-                        
-                                if return_to_ca {
-                                    api.set(last_x, last_y, Cell { 
-                                        simulation: SimulationType::Ca,
-                                        ..cell.clone()
-                                    });
-                                }
-                                else {
-                                    let mut break_loop = false;
-                                    for dx in -1..=1 {
-                                        if break_loop {
-                                            break;
-                                        }
-                                        for dy in -1..=1 {
-                                            if api.get(last_x + dx, last_y + dy).matter_type == MatterType::Empty {
-                                                api.set(last_x + dx, last_y + dy, Cell { 
-                                                    simulation: SimulationType::Ca,
-                                                    ..cell.clone()
-                                                });
-                                                break_loop = true;
-                                            }
-                                        }
-                                    }
-                                }
+        //                     let return_to_ca = line_from_pixels(
+        //                         0, 
+        //                         0, 
+        //                         (*dx * CHUNK_SIZE as f32).round() as i32, 
+        //                         (*dy * CHUNK_SIZE as f32).round() as i32, 
+        //                         &mut operation
+        //                     );
+                    
+        //                     if return_to_ca {
+        //                         api.set(last_x, last_y, Cell { 
+        //                             simulation: SimulationType::Ca,
+        //                             ..cell.clone()
+        //                         });
+        //                     }
+        //                     else {
+        //                         let mut break_loop = false;
+        //                         for dx in -1..=1 {
+        //                             if break_loop {
+        //                                 break;
+        //                             }
+        //                             for dy in -1..=1 {
+        //                                 if api.get(last_x + dx, last_y + dy).matter_type == MatterType::Empty {
+        //                                     api.set(last_x + dx, last_y + dy, Cell { 
+        //                                         simulation: SimulationType::Ca,
+        //                                         ..cell.clone()
+        //                                     });
+        //                                     break_loop = true;
+        //                                 }
+        //                             }
+        //                         }
+        //                     }
 
-                            }
-                        else {
-                            panic!()
-                        }
-                    })
-            });
+        //                 }
+        //             else {
+        //                 panic!()
+        //             }
+        //         })
+        //     });
 
         updated_chunks_pos.into_iter()
             .for_each(|chunk_position| {
@@ -515,6 +505,14 @@ impl World {
                     if !self.physics_engine.has_colliders(chunk.rb_handle) && chunk.cell_count != 0 {
                         chunk.create_colliders();
                         self.physics_engine.add_colliders_to_static_body(chunk.rb_handle, &chunk.colliders);
+                    }
+                    else if self.physics_engine.has_colliders(chunk.rb_handle) {
+                        self.physics_engine.remove_collider_from_object(chunk.rb_handle);
+
+                        if chunk.cell_count != 0 {
+                            chunk.create_colliders();
+                            self.physics_engine.add_colliders_to_static_body(chunk.rb_handle, &chunk.colliders);
+                        }
                     }
     
                     self.active_chunks.insert(chunk_position);
@@ -533,7 +531,7 @@ impl World {
                     (particle.y * CHUNK_SIZE as f32) as i32 / CHUNK_SIZE
                 );
 
-                if chunk_position.x >= 0 && chunk_position.x < WORLD_WIDTH && chunk_position.y >= 0 && chunk_position.y < WORLD_HEIGHT {
+                if self.chunks.contains_key(&chunk_position) {
                     chunks
                         .entry(chunk_position)
                         .or_insert(vec![])
@@ -675,7 +673,8 @@ impl World {
         );
     }
 
-    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
-        self.renderer.render(encoder, view);
+    pub fn render(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, output_size: &wgpu::Extent3d) {
+        self.renderer.render(device, encoder, view);
+        self.renderer.post_process(device, encoder, view, output_size);
     }
 }

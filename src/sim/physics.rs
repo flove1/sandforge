@@ -124,14 +124,25 @@ impl Physics {
                 matrix[index] = 1;
             });
 
-        let collider = create_triangulated_colliders(&matrix, width, height);
+        let mut collider = create_triangulated_colliders(&matrix, width, height);
+
+        collider.set_density(10.0);
         
         let rb_handle = self.rigid_body_set.insert(
             if static_flag {
-                RigidBodyBuilder::fixed().position(Isometry2::translation((x_min + x_max) as f32 / 2.0 / PHYSICS_TO_WORLD, (y_max + y_min) as f32 / 2.0 / PHYSICS_TO_WORLD))
+                RigidBodyBuilder::fixed()
+                    .position(Isometry2::translation(
+                        (x_min + x_max) as f32 / 2.0 / PHYSICS_TO_WORLD, 
+                        (y_max + y_min) as f32 / 2.0 / PHYSICS_TO_WORLD)
+                    )
             }
             else {
-                RigidBodyBuilder::dynamic().position(Isometry2::translation((x_min + x_max) as f32 / 2.0 / PHYSICS_TO_WORLD, (y_max + y_min) as f32 / 2.0 / PHYSICS_TO_WORLD))
+                RigidBodyBuilder::dynamic()
+                    .position(Isometry2::translation(
+                        (x_min + x_max) as f32 / 2.0 / PHYSICS_TO_WORLD, 
+                        (y_max + y_min) as f32 / 2.0 / PHYSICS_TO_WORLD)
+                    )
+                    .can_sleep(false)
             }
         );
 
