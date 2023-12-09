@@ -1,9 +1,13 @@
 #![allow(dead_code)]
 
+use fps_counter::FPSCounter;
+use gui::Gui;
 use notify::{Watcher, RecursiveMode};
+use painter::Painter;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
-use wgpu::SurfaceError;
+use window::WindowContext;
+use winit::event_loop::EventLoop;
 use winit_input_helper::WinitInputHelper;
 
 #[cfg(not(target_env = "msvc"))]
@@ -12,146 +16,150 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod sim;
 mod vector;
 mod constants;
-mod gui;
 mod helpers;
+mod painter;
+mod gui;
+mod window;
 
 use crate::sim::elements::{MatterType, process_elements_config};
 
 use parking_lot::deadlock;
 use sim::world::World;
-use gui::Gui;
-use winit::dpi::LogicalSize;
 use winit::event::Event;
-use winit::event_loop::EventLoop;
-use winit::window::{WindowBuilder, Window};
 use crate::constants::*;
 
-pub struct State {
-    pub surface: wgpu::Surface,
-    pub config: wgpu::SurfaceConfiguration,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+struct Camera {
+    position: [f32; 2],
 }
 
-impl State {
-    pub async fn new(window: &Window) -> Self {
-        let size = window.inner_size();
+struct MainState {
+    gui: Gui,
+    painter: Painter,
+    camera: Camera,
+    scale_factor: f32,
+    fps: Fps,
+}
+
+struct Fps {
+    instant: Instant,
+    value: usize,
+    fps_counter: FPSCounter,
+}
+
+impl Fps {
+    fn ms_from_previous_update(&self) -> u128 {
+        let now = Instant::now();
+        now.duration_since(self.instant).as_millis()
+    }
+
+    fn is_update_required(&self) -> bool {
+        self.ms_from_previous_update() > (1000 / TARGET_FPS)
+    }
     
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            dx12_shader_compiler: Default::default(),
-        });
-    
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
-    
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    features: wgpu::Features::empty(),
-                    
-                    limits: if cfg!(target_arch = "wasm32") {
-                        wgpu::Limits::downlevel_webgl2_defaults()
-                    } else {
-                        wgpu::Limits::default()
-                    },
-                },
-                None,
+    pub fn next_frame(&mut self) {
+        self.value = self.fps_counter.tick();
+        self.instant = Instant::now();
+    }
+}
+
+impl MainState {
+    fn new<T>(ctx: &WindowContext, event_loop: &EventLoop<T>) -> MainState {
+        let gui = {
+            let window_size = ctx.window.inner_size();
+            let scale_factor = ctx.window.scale_factor() as f32;
+            
+            Gui::new(
+                &event_loop,
+                window_size.width,
+                window_size.height,
+                scale_factor,
+                &ctx.device,
+                &ctx.config.format
             )
-            .await
-            .unwrap();
-    
-        let surface_caps = surface.get_capabilities(&adapter);
+};
 
-        let surface_format = surface_caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(surface_caps.formats[0]);
-        
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: surface_caps.present_modes[0],
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-        };
-        surface.configure(&device, &config);
-    
-        Self {
-            surface,
-            config,
-            device,
-            queue,
+        MainState {
+            gui,
+            painter: Painter::new(),
+
+            camera: Camera {
+                position: [0.0, 0.0],
+            },
+
+            fps: Fps {
+                instant: Instant::now(),
+                fps_counter: FPSCounter::new(),
+                value: 0,
+            },
+            
+            scale_factor: ctx.window.scale_factor() as f32,
         }
     }
 
-    pub fn render_with<F>(&self, render_function: F) -> Result<(), SurfaceError>
-    where
-        F: FnOnce(
-            &mut wgpu::CommandEncoder,
-            &wgpu::TextureView,
-            &wgpu::Extent3d,
-            &wgpu::Device,
-            &wgpu::Queue,
-        ),
-    {
-        let output = self.surface.get_current_texture()?;   
-        let output_size = output.texture.size();
+    pub fn get_world_position_from_pixel(&self, x: f32, y: f32) -> (i32, i32) {
+        (
+            (x / SCALE / self.scale_factor + ((self.camera.position[0] - WORLD_WIDTH as f32 / 2.0) * CHUNK_SIZE as f32)).round() as i32, 
+            ((SCREEN_HEIGHT - (y / self.scale_factor)) / SCALE + ((self.camera.position[1] - WORLD_HEIGHT as f32 / 2.0) * CHUNK_SIZE as f32)).round() as i32
+        )
+    }
+}
 
-        let output_view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
-        {
-            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Renderer render pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &output_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: true,
+impl MainState {
+    fn handle_painter(&mut self, ctx: &WindowContext, world: &mut World, input: &WinitInputHelper) {
+        if self.painter.is_cells_queued() {
+            if self.painter.brush.element.matter_type == MatterType::Empty {
+                world.place_batch(self.painter.drain_placing_queue());
+            }
+            else {
+                match self.painter.brush.brush_type {
+                    painter::BrushType::Cell => {
+                        world.place_batch(self.painter.drain_placing_queue());
                     },
-                })],
-                depth_stencil_attachment: None,
-            });
+                    painter::BrushType::Object => {
+                        if !matches!(self.painter.brush.element.matter_type, MatterType::Static) {
+                            self.painter.drain_placing_queue();
+                        }
+                        else if !input.mouse_held(0) {
+                            world.place_object(
+                                self.painter.drain_placing_queue(),
+                                false,
+                                &ctx.device,
+                                &ctx.queue
+                            );
+                        }
+                    },
+                    painter::BrushType::StaticObject => {
+                        if !input.mouse_held(0) {
+                            world.place_object(
+                                self.painter.drain_placing_queue(),
+                                true,
+                                &ctx.device,
+                                &ctx.queue
+                            );
+                        }
+                    },
+                    painter::BrushType::Particle(_) => {
+                        world.place_particles(self.painter.drain_placing_queue());
+                    },
+                }          
+            }
+
         }
-        
-        (render_function)(&mut encoder, &output_view, &output_size, &self.device, &self.queue);
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        Ok(())
     }
+    
 }
 
 pub async fn run() {
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
+
+    let window_ctx = WindowContext::new(&event_loop).await;
+    let mut main_state = MainState::new(&window_ctx, &event_loop);
 
     process_elements_config();
     let mut watcher = notify::recommended_watcher(|res| {
@@ -168,125 +176,111 @@ pub async fn run() {
         panic!("error while loading elements file: {e}");
     }
 
-    let window = {
-        let size = LogicalSize::new(SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
+    let mut world = World::new(&window_ctx.device, &window_ctx.config.format);
 
-        if cfg!(windows) {
-            WindowBuilder::new()
-                .with_title("Rust-physics")
-                .with_inner_size(size)
-                .with_min_inner_size(size)
-                .with_max_inner_size(size)
-                .build(&event_loop)
-                .unwrap()
-        }
-        else {
-            use winit::platform::x11::{WindowBuilderExtX11, XWindowType};
-
-            WindowBuilder::new()
-                .with_title("Rust-physics")
-                .with_inner_size(size)
-                .with_x11_window_type(vec![XWindowType::Dialog])
-                .with_min_inner_size(size)
-                .with_max_inner_size(size)
-                .build(&event_loop)
-                .unwrap()   
-        }
-    };
-
-    let state = State::new(&window).await;
-
-    let mut world = World::new(&state.device, &state.config.format);
-
-    let mut gui = {
-        let window_size = window.inner_size();
-        let scale_factor = window.scale_factor() as f32;
-        
-        Gui::new(
-            &event_loop,
-            window_size.width,
-            window_size.height,
-            scale_factor,
-            &state.device,
-            &state.config.format
-        )
-    };
-
-    event_loop.run(move |event, _, control_flow| {        
+    event_loop.run(move |event, _, control_flow| {
         control_flow.set_poll();
 
-        if input.update(&event) && gui.is_update_required() {
-            window.request_redraw();
+        let mut event_consumed = false;
 
-            if world.needs_update(gui.ms_from_previous_update()) {
-                if gui.get_brush().element.matter_type == MatterType::Empty {
-                    world.place_batch(gui.drain_placing_queue());
+        if let Event::WindowEvent { event, .. } = &event {
+            event_consumed = main_state.gui.handle_event(&input, event).consumed;
+        }
+
+        if !event_consumed && input.update(&event){
+            if input.mouse_pressed(0) {
+                main_state.painter.activate();
+                if let Some((x, y)) = input.mouse() {
+                    let (x, y) = main_state.get_world_position_from_pixel(x, y);
+                    main_state.painter.draw_point(x, y);
                 }
-                else {
-                    match gui.get_brush().brush_type {
-                        gui::BrushType::Cell => {
-                            world.place_batch(gui.drain_placing_queue());
-                        },
-                        gui::BrushType::Object => {
-                            if !matches!(gui.get_brush().element.matter_type, MatterType::Static) {
-                                gui.drain_placing_queue();
-                            }
-                            else if gui.is_cells_queued() && !input.mouse_held(0) {
-                                world.place_object(
-                                    gui.drain_placing_queue(),
-                                    false,
-                                    &state.device,
-                                    &state.queue
-                                );
-                            }
-                        },
-                        gui::BrushType::StaticObject => {
-                            if gui.is_cells_queued() && !input.mouse_held(0) {
-                                world.place_object(
-                                    gui.drain_placing_queue(),
-                                    true,
-                                    &state.device,
-                                    &state.queue
-                                );
-                            }
-                        },
-                        gui::BrushType::Particle(_) => {
-                            if gui.is_cells_queued() {
-                                world.place_particles(gui.drain_placing_queue());
-                            }
-                        },
-                    }          
+            }
+
+            if input.mouse_held(0) {
+                if let Some((x, y)) = input.mouse() {
+                    let (dx, dy) = input.mouse_diff();
+                            
+                    let (x1, y1) = main_state.get_world_position_from_pixel(x - dx, y - dy);
+                    let (x2, y2) = main_state.get_world_position_from_pixel(x, y);
+
+                    main_state.painter.draw_line(x1, y1, x2, y2);
                 }
+            }
 
-                let (chunks_updated, pixels_updated) = world.update(gui.screen_coords);
-                gui.update_frame_info(chunks_updated, pixels_updated);
+            if input.mouse_released(0) {
+                main_state.painter.deactivate();
+            }
 
-                //TODO fix
-                world.update_textures(&state.device, &state.queue, gui.screen_coords);
+            if input.mouse_held(1) {
+                let (dx, dy) = input.mouse_diff();
+
+                main_state.camera.position[0] -= dx / (WORLD_WIDTH * CHUNK_SIZE) as f32 / 5.0;
+                main_state.camera.position[1] += dy / (WORLD_HEIGHT * CHUNK_SIZE) as f32 / 5.0;
+            }
+        
+            if input.key_pressed_os(winit::event::VirtualKeyCode::Left) {
+                main_state.camera.position[0] -= 0.1;
+            }
+            
+            if input.key_pressed_os(winit::event::VirtualKeyCode::Right) {
+                main_state.camera.position[0] += 0.1;
+            }
+            
+            if input.key_pressed_os(winit::event::VirtualKeyCode::Up) {
+                main_state.camera.position[1] += 0.1;
+            }
+            
+            if input.key_pressed_os(winit::event::VirtualKeyCode::Down) {
+                main_state.camera.position[1] -= 0.1;
+            }
+
+            if input.key_pressed(winit::event::VirtualKeyCode::Q) {
+                control_flow.set_exit();
             }
         }
 
         match &event {
-            Event::WindowEvent { event, .. } => {
-                if !gui.handle_event(&input, event, control_flow, window.scale_factor()).consumed {
-
+            Event::MainEventsCleared => {
+                if main_state.fps.is_update_required() {
+                    window_ctx.window.request_redraw();
+    
+                    if world.needs_update(main_state.fps.ms_from_previous_update()) {
+                        main_state.handle_painter(&window_ctx, &mut world, &input);
+        
+                        let (chunks_updated, pixels_updated) = world.update(main_state.camera.position);
+                        main_state.gui.widget_data.chunks_updated += chunks_updated;
+                        main_state.gui.widget_data.pixels_updated += pixels_updated;
+        
+                        world.update_textures(
+                            &window_ctx,
+                            main_state.camera.position
+                        );
+                    }
                 }
-            },
-
+            }
             Event::RedrawRequested(_) => {
-                if let Some((x, y)) = gui.get_last_position() {
-                    gui.update_selected_cell(world.get_cell_by_pixel(x, y));
-                }
-
-                let rendering_result = state.render_with(|encoder, view, output_size, device, queue| {
-                    world.render(device, encoder, view, output_size);
-
-                    gui.prepare(&window);
-                    gui.render(encoder, view, device, queue);
+                let posititon = input.mouse().map(|(x, y)| {
+                    main_state.get_world_position_from_pixel(x, y)
                 });
 
+                main_state.gui.widget_data.mouse_posititon = posititon;
+                if let Some((x, y)) = posititon {
+                    main_state.gui.widget_data.selected_cell = world.get_cell_by_pixel(x, y);
+                }
 
-                gui.next_frame();
+                main_state.gui.widget_data.fps = main_state.fps.value;
+
+                let rendering_result = window_ctx.render_with(|encoder, view, output_size, device, queue| {
+                    world.render(device, encoder, view, output_size);
+
+                    main_state.gui.prepare(&window_ctx.window, &mut main_state.painter.brush);
+                    main_state.gui.render(encoder, view, device, queue);
+                });
+
+                main_state.gui.widget_data.chunks_updated = 0;
+                main_state.gui.widget_data.pixels_updated = 0;
+
+                main_state.fps.next_frame();
 
                 if rendering_result.is_err() {
                     println!("error while rendering");

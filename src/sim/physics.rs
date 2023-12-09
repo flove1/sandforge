@@ -1,6 +1,6 @@
 use rapier2d::{prelude::*, na::{Isometry2, Vector2}};
 
-use crate::{constants::{CHUNK_SIZE, PHYSICS_TO_WORLD}, pos2, vector::Pos2};
+use crate::{constants::{CHUNK_SIZE, PHYSICS_TO_WORLD, WORLD_HEIGHT, WORLD_WIDTH}, pos2, vector::Pos2};
 
 use super::{cell::{Cell, SimulationType}, colliders::create_triangulated_colliders, elements::MatterType};
 
@@ -234,7 +234,7 @@ impl Physics {
             })
     }
 
-    pub fn step(&mut self, visible_world: [f32; 4]) {
+    pub fn step(&mut self, camera_position: [f32; 2]) {
         self.physics_pipeline.step(
             &vector![0.0, -9.8 / PHYSICS_TO_WORLD * 4.0],
             &self.integration_parameters,
@@ -258,7 +258,11 @@ impl Physics {
                 let y = position.y * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
 
                 let rb = &mut self.rigid_body_set[object.rb_handle];
-                let out_of_bounds = x < visible_world[0] || y < visible_world[1] || x > visible_world[2] || y > visible_world[3];
+                let out_of_bounds = 
+                    x < (camera_position[0] - WORLD_WIDTH as f32 / 2.0) || 
+                    y < (camera_position[1] - WORLD_HEIGHT as f32 / 2.0) || 
+                    x > (camera_position[0] + WORLD_WIDTH as f32 / 2.0) || 
+                    y > (camera_position[1] + WORLD_HEIGHT as f32 / 2.0);
                 
                 if !rb.is_sleeping() && out_of_bounds {
                     println!("Object left boundaries -> suspending it");

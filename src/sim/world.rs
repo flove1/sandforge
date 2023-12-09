@@ -5,7 +5,7 @@ use dashmap::{DashMap, DashSet};
 use noise::{Perlin, NoiseFn};
 use rapier2d::{na::Point2, prelude::{vector, nalgebra}};
 
-use crate::{constants::*, pos2, vector::Pos2, helpers::line_from_pixels};
+use crate::{constants::*, pos2, vector::Pos2, helpers::line_from_pixels, window::WindowContext};
 use super::{chunk::{Chunk, ChunkApi}, cell::{Cell, SimulationType}, elements::{MatterType, Element, ELEMENTS}, physics::Physics, renderer::Renderer, particle::Particle};
 
 fn terrain_fx(x: f64) -> f64 {
@@ -240,12 +240,19 @@ impl World {
         self.previous_update_ms >= CA_DELAY_MS
     }
 
-    pub fn update(&mut self, visible_world: [f32; 4]) -> (u128, u128) {
+    pub fn update(&mut self, camera_position: [f32; 2]) -> (u128, u128) {
         let mut chunks_count = 0;
         let mut pixels_count = 0;
 
-        let bl_corner = [visible_world[0].floor() as i32, visible_world[1].floor() as i32];
-        let tr_corner = [visible_world[2].ceil() as i32, visible_world[3].ceil() as i32];
+        let bl_corner = [
+            (camera_position[0] - WORLD_WIDTH as f32 / 2.0).floor() as i32,
+            (camera_position[1] - WORLD_HEIGHT as f32 / 2.0).floor() as i32
+        ];
+        
+        let tr_corner = [
+            (camera_position[0] + WORLD_WIDTH as f32 / 2.0).ceil() as i32,
+            (camera_position[1] + WORLD_HEIGHT as f32 / 2.0).ceil() as i32
+        ];
 
         self.active_chunks.retain(|position| {
             position.x >= bl_corner[0] && position.x < tr_corner[0] && position.y >= bl_corner[1] && position.y < bl_corner[1]
@@ -268,7 +275,7 @@ impl World {
             self.clock = self.clock.wrapping_add(1);    
             self.previous_update_ms -= CA_DELAY_MS;
 
-            self.physics_step(visible_world);
+            self.physics_step(camera_position);
 
             let (updated_chunk_count, updated_pixels_count) = self.ca_step();
             chunks_count += updated_chunk_count;
@@ -284,11 +291,11 @@ impl World {
 
     pub fn forced_update(&mut self) {
         self.ca_step();
-        self.physics_step([0.0; 4]);
+        self.physics_step([0.0; 2]);
         self.particle_step();
     }
     
-    fn physics_step(&mut self, visible_world: [f32; 4]) {
+    fn physics_step(&mut self, camera_position: [f32; 2]) {
         self.physics_engine.objects.iter_mut()
             .for_each(|object| {
                 let points = &object.cells;
@@ -333,7 +340,7 @@ impl World {
                     })    
             });
         
-        self.physics_engine.step(visible_world);
+        self.physics_engine.step(camera_position);
         let mut updated_chunks_pos = HashSet::new();
 
         self.physics_engine.objects.iter_mut()
@@ -395,7 +402,7 @@ impl World {
                                             rb.apply_torque_impulse( - rb.angvel() / 100.0, true);
                                         }
 
-                                        let particle_vector = rb_position - vector![x, y];
+                                        // let particle_vector = rb_position - vector![x, y];
 
                                         // if x < rb_position.x {
                                         //     particle_vector.x *= -1.0;
@@ -625,12 +632,12 @@ impl World {
     // Rendering
     //===========
 
-    pub fn update_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, screen_coords: [f32; 4]) {
+    pub fn update_textures(&mut self, ctx: &WindowContext, camera_position: [f32; 2]) {
         let chunk_textures = self.active_chunks.iter()
             .map(|position| {
                 let chunk_reference = self.chunks.get(&position).unwrap();
                 let mut chunk = chunk_reference.value().borrow_mut();
-                chunk.create_texture(device, queue);
+                chunk.create_texture(ctx);
 
                 (
                     chunk.texture.as_ref().unwrap().create_view(&wgpu::TextureViewDescriptor::default()),
@@ -664,8 +671,8 @@ impl World {
             .collect::<Vec<(f32, f32, [u8; 4])>>();
 
         self.renderer.update(
-            screen_coords,
-            device, 
+            camera_position,
+            &ctx.device,
             &self.physics_engine.collider_set, 
             chunk_textures, 
             objects_textures, 

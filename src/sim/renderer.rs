@@ -455,7 +455,7 @@ impl Renderer {
         &mut self, 
         device: &wgpu::Device,
         colliders: &rapier2d::prelude::ColliderSet, 
-        screen_coords: [f32;4 ]
+        camera_position: [f32; 2]
     ) {
         self.colliders = colliders.iter()
             .map(|(_, collider)| {
@@ -464,8 +464,8 @@ impl Renderer {
                         .map(|vertex| {
                             PrimitiveShapeVertex {
                                 position: [
-                                    ((vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[0],
-                                    ((vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[1],
+                                    ((vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE - camera_position[0],
+                                    ((vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE - camera_position[1],
                                     0.0,
                                 ],
                                 color: [0.0, 0.5, 1.0, 0.5],
@@ -507,8 +507,8 @@ impl Renderer {
                                     vertices.push(
                                         PrimitiveShapeVertex {
                                             position: [
-                                                ((rotated_vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[0],
-                                                ((rotated_vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE - screen_coords[1],
+                                                ((rotated_vertex.x + collider.position().translation.x) / WORLD_WIDTH as f32 - 0.5) * 2.0 * PHYSICS_SCALE - camera_position[0],
+                                                ((rotated_vertex.y + collider.position().translation.y) / WORLD_HEIGHT as f32 - 0.5) * 2.0 * PHYSICS_SCALE - camera_position[1],
                                                 0.0,
                                             ],
                                             color: [0.0, 1.0, 0.0, 0.5],
@@ -560,7 +560,7 @@ impl Renderer {
         &mut self, 
         device: &wgpu::Device,
         chunk_textures: Vec<(wgpu::TextureView, Pos2)>,
-        screen_coords: [f32;4 ]
+        camera_position: [f32; 2]
     ) {
         self.fire_bind_groups = vec![];
 
@@ -599,8 +599,8 @@ impl Renderer {
                 //                 label: Some("Renderer index buffer"),
                 //                 contents: bytemuck::bytes_of(&[FireUniform { 
                 //                     center: [
-                //                         ((pos.x as f32 + (position.x as f32 / CHUNK_SIZE as f32)) / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
-                //                         ((pos.y as f32 + (position.y as f32 / CHUNK_SIZE as f32)) / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
+                //                         ((pos.x as f32 + (position.x as f32 / CHUNK_SIZE as f32)) / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0],
+                //                         ((pos.y as f32 + (position.y as f32 / CHUNK_SIZE as f32)) / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1],
                 //                         0.0,
                 //                     ], 
                 //                     color,
@@ -628,32 +628,32 @@ impl Renderer {
                     contents: bytemuck::cast_slice(&[
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0],
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1],
                                 0.0,
                             ], 
                             tex_coords: [0.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
-                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0],
+                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1],
                                 0.0,
                             ], 
                             tex_coords: [0.0, 1.0] 
                         },
                         TextureVertex { 
                             position: [
-                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0  - screen_coords[0],
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0  - screen_coords[1],
+                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0  - camera_position[0],
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0  - camera_position[1],
                                 0.0,
                             ], 
                             tex_coords: [1.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
-                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
+                                ((pos.x + 1) as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0],
+                                ((pos.y + 1) as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1],
                                 0.0,
                             ], 
                             tex_coords: [1.0, 1.0] 
@@ -671,7 +671,7 @@ impl Renderer {
         &mut self, 
         device: &wgpu::Device,
         object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>, 
-        screen_coords: [f32;4 ]
+        camera_position: [f32; 2]
     ) {
         self.objects = object_textures.into_iter()
             .map(|(texture, pos, angle, width, height)| {
@@ -733,32 +733,32 @@ impl Renderer {
                     contents: bytemuck::cast_slice(&[
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0] + points[0].x,
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1] + points[0].y,
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0] + points[0].x,
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1] + points[0].y,
                                 0.0,
                             ], 
                             tex_coords: [0.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0] + points[1].x,
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1] + points[1].y,
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0] + points[1].x,
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1] + points[1].y,
                                 0.0,
                             ], 
                             tex_coords: [0.0, 1.0] 
                         },
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0] + points[2].x,
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1] + points[2].y,
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0] + points[2].x,
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1] + points[2].y,
                                 0.0,
                             ], 
                             tex_coords: [1.0, 0.0] 
                         },
                         TextureVertex { 
                             position: [
-                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0] + points[3].x,
-                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1] + points[3].y,
+                                (pos.x as f32 / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0] + points[3].x,
+                                (pos.y as f32 / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1] + points[3].y,
                                 0.0,
                             ], 
                             tex_coords: [1.0, 1.0] 
@@ -777,7 +777,7 @@ impl Renderer {
         &mut self, 
         device: &wgpu::Device,
         particles: Vec<(f32, f32, [u8; 4])>, 
-        screen_coords: [f32;4 ]
+        camera_position: [f32; 2]
     ) {
         self.particles = particles.into_iter()
             .map(|(x, y, color)| {
@@ -790,8 +790,8 @@ impl Renderer {
 
                 ParticleInstance { 
                     position: [
-                        (x / WORLD_WIDTH as f32 - 0.5) * 2.0 - screen_coords[0],
-                        (y / WORLD_HEIGHT as f32 - 0.5) * 2.0 - screen_coords[1],
+                        (x / WORLD_WIDTH as f32 - 0.5) * 2.0 - camera_position[0],
+                        (y / WORLD_HEIGHT as f32 - 0.5) * 2.0 - camera_position[1],
                         0.0,
                     ], 
                     color,
@@ -816,22 +816,20 @@ impl Renderer {
 
     pub(crate) fn update(
         &mut self,
-        mut screen_coords: [f32; 4],
+        mut camera_position: [f32; 2],
         device: &wgpu::Device,
         colliders: &rapier2d::prelude::ColliderSet,
         chunk_textures: Vec<(wgpu::TextureView, Pos2)>,
         object_textures: Vec<(wgpu::TextureView, Vector2<f32>, f32, i32, i32)>,
         particles: Vec<(f32, f32, [u8; 4])>
     ) {
-        screen_coords[0] = screen_coords[0] / WORLD_WIDTH as f32 * 2.0;
-        screen_coords[2] = screen_coords[2] / WORLD_WIDTH as f32 * 2.0;
-        screen_coords[1] = screen_coords[1] / WORLD_HEIGHT as f32 * 2.0;
-        screen_coords[3] = screen_coords[3] / WORLD_HEIGHT as f32 * 2.0;
+        camera_position[0] = (camera_position[0] - (WORLD_WIDTH as f32 / 2.0)) / WORLD_WIDTH as f32 * 2.0;
+        camera_position[1] = (camera_position[1] - (WORLD_HEIGHT as f32 / 2.0)) / WORLD_HEIGHT as f32 * 2.0;
 
-        self.create_chunk_buffers(device, chunk_textures, screen_coords);
-        self.create_objects_buffers(device, object_textures, screen_coords);
-        self.create_particle_buffers(device, particles, screen_coords);
-        self.create_collider_buffers(device, colliders, screen_coords);
+        self.create_chunk_buffers(device, chunk_textures, camera_position);
+        self.create_objects_buffers(device, object_textures, camera_position);
+        self.create_particle_buffers(device, particles, camera_position);
+        self.create_collider_buffers(device, colliders, camera_position);
     }
 
     pub(crate) fn render(

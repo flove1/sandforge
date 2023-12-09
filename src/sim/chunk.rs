@@ -7,6 +7,7 @@ use super::colliders::{label_matrix, create_polyline_collider};
 use super::world::World;
 
 use crate::vector::Pos2;
+use crate::window::WindowContext;
 use crate::{constants::*, pos2};
 
 #[derive(Default)]
@@ -236,7 +237,7 @@ impl Chunk {
     // Updating
     //==========
 
-    pub fn create_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    pub fn create_texture(&mut self, ctx: &WindowContext) {
         if !self.updated {
             return;
         }
@@ -276,7 +277,7 @@ impl Chunk {
             depth_or_array_layers: 1,
         };
         
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Chunk Texture"),
             size: extent,
             mip_level_count: 1,
@@ -287,7 +288,7 @@ impl Chunk {
             view_formats: &[],
         });
 
-        queue.write_texture(
+        ctx.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,
                 mip_level: 0,
