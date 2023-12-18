@@ -445,6 +445,7 @@ impl<'a, 'b> ChunkApi<'a, 'b> {
                 match cell_position_2.is_between(0, CHUNK_SIZE - 1) {
                     true => {
                         self.chunk.swap_cells(cell_position_1, cell_position_2);
+                        self.keep_alive(0, 0);
                         self.keep_alive(dx, dy);
                     },
                     false => {

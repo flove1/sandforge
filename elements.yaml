@@ -29,6 +29,7 @@
       viscosity: 6,
       dry_threshold: 0.0001,
       max_compression: 2.0,
+      volume: 4.0,
     },
     fire_parameters: !FireParameters {
       fire_temperature: 150,
@@ -107,5 +108,5 @@
     input_element_1: lava,
     input_element_2: water,
     out_element_1: stone,
-    out_element_2: steam,
+    out_element_2: stone,
 }

@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, BTreeSet}, cell::RefCell, time::{SystemTime, U
 
 use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use dashmap::{DashMap, DashSet};
-use noise::{Perlin, NoiseFn};
+use noise::{Perlin, NoiseFn, PerlinSurflet, SuperSimplex};
 use rapier2d::{na::Point2, prelude::{vector, nalgebra}};
 
 use crate::{constants::*, pos2, vector::Pos2, helpers::line_from_pixels, window::WindowContext};
@@ -35,7 +35,7 @@ pub struct World {
     physics_engine: Physics,
     previous_update_ms: u128,
     clock: u8,
-    perlin: Perlin,
+    noise: SuperSimplex,
 
     particles: Vec<Particle>,
 }
@@ -53,7 +53,11 @@ impl World {
             renderer: Renderer::new(device, format),
             previous_update_ms: 0,
             clock: 0,
-            perlin: Perlin::new(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_millis()),
+            noise: SuperSimplex::new(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH).unwrap()
+                    .subsec_millis()
+                ),
 
             particles: vec![],
         };
@@ -82,7 +86,7 @@ impl World {
         
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
-                let mut value = self.perlin.get([x as f64 / CHUNK_SIZE as f64 + position.x as f64, y as f64 / CHUNK_SIZE as f64 + position.y as f64]);
+                let mut value = self.noise.get([x as f64 / CHUNK_SIZE as f64 + position.x as f64, y as f64 / CHUNK_SIZE as f64 + position.y as f64]);
 
                 value *= 10.0;
 

@@ -243,7 +243,12 @@ pub fn update_sand(cell: Cell, api: &mut ChunkApi, _dt: f32) {
         api.swap(-dx, -1);
     } 
     else if matches!(api.get(0, -1).matter_type, MatterType::Liquid{..}) {
-        api.swap(0, -1);
+        if api.once_in(30) && matches!(api.get(dx, -1).matter_type, MatterType::Empty | MatterType::Gas{..} | MatterType::Liquid{..}) {
+            api.swap(dx, -1);
+        }
+        else {
+            api.swap(0, -1);
+        }
     }
 
     api.update(cell);
@@ -365,14 +370,14 @@ pub fn update_liquid(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
                 api.update(cell.clone());
             }
 
-            let dx = ((cell.ra % 2) as i32) * 2 - 1;
+            // let dx = ((cell.ra % 2) as i32) * 2 - 1;
             
-            if api.once_in(10) && matches!(api.get(dx, -1).matter_type, MatterType::Empty | MatterType::Gas{..}) {
-                api.swap(dx, -1);
-            }
-            else {
+            // if api.once_in(10) && matches!(api.get(dx, -1).matter_type, MatterType::Empty | MatterType::Gas{..}) {
+            //     api.swap(dx, -1);
+            // }
+            // else {
                 api.swap(0, -1);
-            }
+            // }
 
             return;
         },
@@ -425,7 +430,7 @@ pub fn update_liquid(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
 
         match top_cell.matter_type {
             MatterType::Empty => {        
-                let flow = parameters.volume - 1.0 - parameters.dry_threshold;  
+                let flow = parameters.volume / 2.0 - parameters.dry_threshold;
                 parameters.volume -= flow;
 
                 api.set(0, 1, Cell {
@@ -438,7 +443,7 @@ pub fn update_liquid(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
             },
             MatterType::Liquid(top_parameters) => {
                 if cell.element_id == top_cell.element_id && top_parameters.volume < parameters.volume {
-                    let flow = (top_parameters.volume + parameters.volume) / 2.0 - top_parameters.volume;
+                    let flow = ((top_parameters.volume + parameters.volume) / 2.0 - top_parameters.volume) / 2.0;
                     parameters.volume -= flow;
                     
                     api.set(0, 1, Cell{
@@ -489,7 +494,7 @@ pub fn update_liquid(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
             return;
         }
 
-        let max_flow = f32::min(parameters.volume / 2.0, 1.0);
+        let max_flow = f32::min(parameters.volume / 3.0, 1.0);
         let mut exit_flag = false;
 
         for (dx, dy) in vec![dx, -dx].into_iter().zip(dy_s.iter_mut()) {
@@ -544,7 +549,7 @@ pub fn update_liquid(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
                         }
                     }
                     else if parameters.density > dx_parameters.density {
-                        let offset_directions = [(dx * offset, *dy + 1), (dx * (offset + 1), *dy)];
+                        let offset_directions = [(dx * (offset + 1), *dy), (dx * offset, *dy + 1)];
                         let mut succesfully_moved = false;
 
                         for (dx_next, dy_next) in offset_directions {
@@ -572,11 +577,13 @@ pub fn update_liquid(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
                                     })
                                 }
                                 else {
-                                    dx_parameters.volume -= maximum_receive_flow;
+                                    let flow_to_avg = (dx_parameters.volume + offset_parameters.volume) / 2.0 - offset_parameters.volume;
+
+                                    dx_parameters.volume -= flow_to_avg;
 
                                     api.set(dx_next, dy_next, Cell{
                                         matter_type: MatterType::Liquid(Liquid{
-                                            volume: offset_parameters.volume + maximum_receive_flow,
+                                            volume: offset_parameters.volume + flow_to_avg,
                                             ..offset_parameters.clone()
                                         }),
                                         ..offset_cell.clone()
