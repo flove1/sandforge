@@ -43,7 +43,7 @@ impl Chunk {
     // Global methods
     //================
 
-    pub fn place(&mut self, x: i32, y: i32, mut cell: Cell, clock: u8) {
+    pub fn place(&mut self, x: i32, y: i32, mut cell: Cell, clock: u8, replace: bool) {
         self.updated = true;
 
         if x < 0 || y < 0 || x >= CHUNK_SIZE || y >= CHUNK_SIZE {
@@ -59,9 +59,22 @@ impl Chunk {
                 self.cell_count += 1;
             }
         }
-        else if self.cells[index].matter_type != MatterType::Empty && !matches!(self.cells[index].simulation, SimulationType::RigidBody( .. )) && cell.matter_type == MatterType::Empty {
-            self.cell_count -= 1;
-            self.cells[index] = cell;
+        else if self.cells[index].matter_type != MatterType::Empty {
+            if replace {
+                if cell.matter_type == MatterType::Empty {
+                    self.cell_count -= 1;
+                }
+                self.cells[index] = cell
+            }
+            else {
+                if !matches!(self.cells[index].simulation, SimulationType::RigidBody( .. )) && cell.matter_type == MatterType::Empty {
+                    self.cell_count -= 1;
+                    self.cells[index] = cell;
+                } 
+            }
+        }
+        else if replace {
+
         }
 
         self.update_dirty_rect(&pos2!(x, y));
@@ -90,7 +103,7 @@ impl Chunk {
 
         positions.into_iter()
             .for_each(|(pos, cell)| {
-                self.place(pos.0, pos.1, cell, clock);
+                self.place(pos.0, pos.1, cell, clock, false);
             });
     }
 
@@ -265,6 +278,12 @@ impl Chunk {
 
                     if let MatterType::Liquid(parameters) = cell.matter_type {
                         color[3] = (f32::clamp(parameters.volume * 5.0, 0.1, 0.7) * 255.0) as u8;
+                    }
+
+                    if let SimulationType::Displaced(dx, dy) = cell.simulation {
+                        color[0] = f32::sqrt(dx.powi(2) + dy.powi(2)) as u8 * 16;
+                        color[1] = 0;
+                        color[2] = 0;
                     }
 
                     pixel_data.extend(&color);

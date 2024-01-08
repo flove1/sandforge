@@ -1,10 +1,11 @@
+use ahash::HashSet;
 use compact_str::{CompactString, format_compact};
 use dashmap::DashMap;
+use rapier2d::na::ComplexField;
 use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
 use serde_yaml::Value;
 
-use crate::constants::CHUNK_SIZE;
 use crate::helpers::line_from_pixels;
 
 use super::cell::{Cell, SimulationType};
@@ -181,48 +182,117 @@ lazy_static! {
     };
 }
 
-pub fn update_particle(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
-    if let SimulationType::Particle(dx, dy) = &mut cell.simulation {
-        let mut last_x = 0;
-        let mut last_y = 0;
+pub fn update_displaced(mut cell: Cell, api: &mut ChunkApi, _dt: f32) {
+    let SimulationType::Displaced(dx, dy) = &mut cell.simulation else {
+        panic!();
+    };
 
-        let mut operation = |current_dx, current_dy| {
-            let current_cell = api.get(current_dx, current_dy);
+    if (dx.abs() + dy.abs()) < 0.1 {
+        cell.simulation = SimulationType::Ca;
+        api.update(cell);
+        api.keep_alive(0, 0);
+        return;
+    }
+    
+    let rounded_dx = (dx.round() as i32).clamp(-1, 1);
+    let rounded_dy = (dy.round() as i32).clamp(-1, 1);
 
-            if !matches!(current_cell.matter_type, MatterType::Static { .. }) {
-                last_x = current_dx;
-                last_y = current_dy;
-                true
-            }
-            else {
-                false
-            }
-            
-        };
+    match api.get(rounded_dx, rounded_dy).matter_type {
+        MatterType::Empty => {
+            api.swap(rounded_dx, rounded_dy);
+            *dx *= 0.1;
+            *dy *= 0.1;
+            api.update(cell);
+            api.keep_alive(0, 0);
+            return;
+        },
+        MatterType::Static => {
+            let angle = dy.atan2(*dx) - (rounded_dy as f32).atan2(rounded_dx as f32);
 
-        let return_to_ca = line_from_pixels(
-            0, 
-            0, 
-            (*dx * CHUNK_SIZE as f32).round() as i32, 
-            (*dy * CHUNK_SIZE as f32).round() as i32, 
-            &mut operation
-        );
+            *dx = *dx * angle.sin();
+            *dy = *dy * angle.cos();
+        },
+        _ => {}
+    }
 
-        if return_to_ca {
-            api.update(Cell::default());
-            api.set(last_x, last_y, 
-                Cell { 
-                     simulation: SimulationType::Ca, 
-                    ..cell
-                }
-            );
+    let affected_horizontal: HashSet<i32> = if *dx > 0.5 {
+        [0, 1].into_iter().collect()
+    }
+    else if *dx < -0.5 {
+        [-1, 0].into_iter().collect()
+    }
+    else {
+        [-1, 0, 1].into_iter().collect()
+    };
+
+    let affected_vertical: HashSet<i32> = if *dy > 0.5 {
+        [0, 1].into_iter().collect()
+    }
+    else if *dy < -0.5 {
+        [-1, 0].into_iter().collect()
+    }
+    else {
+        [-1, 0, 1].into_iter().collect()
+    };
+
+    let affected_total_count = affected_horizontal.len() * affected_vertical.len();
+
+    let mut dx_sum_changes = 0.0;
+    let mut dy_sum_changes = 0.0;
+
+    for (collision_dx, collision_dy) in affected_horizontal.into_iter().zip(affected_vertical.into_iter()) {
+        if collision_dx == 0 && collision_dy == 0 {
+            continue;
         }
-        else {
-            *dy = *dy - (9.81 / CHUNK_SIZE as f32) / 10.0;
-            api.set(0, 0, Cell::default());
-            api.set(last_x, last_y, cell);
+
+        let mut affected_cell = api.get(collision_dx, collision_dy);
+
+        match affected_cell.matter_type {
+            MatterType::Powder | MatterType::Liquid(_) | MatterType::Gas => {
+                match &mut affected_cell.simulation {
+                    SimulationType::Ca => {
+                        let angle = dy.atan2(*dx) - (collision_dy as f32).atan2(collision_dx as f32);
+                        let distance = f32::sqrt(collision_dx.pow(2) as f32 + collision_dy.pow(2) as f32);
+
+                        let dx_change = *dx * angle.sin() / distance / affected_total_count as f32;
+                        let dy_change = *dy * angle.cos() / distance / affected_total_count as f32;
+
+                        affected_cell.simulation = SimulationType::Displaced(
+                            dx_change, 
+                            dy_change,
+                        );
+                        dx_sum_changes += dx_change.abs();
+                        dy_sum_changes += dy_change.abs();
+
+                        api.set(collision_dx, collision_dy, affected_cell);
+                    },
+                    SimulationType::Displaced(dx1, dy1) => {
+                        let angle = dy.atan2(*dx) - (collision_dy as f32).atan2(collision_dx as f32);
+                        let distance = f32::sqrt(collision_dx.pow(2) as f32 + collision_dy.pow(2) as f32);
+
+                        let dx_change = *dx * angle.sin() / distance / affected_total_count as f32;
+                        let dy_change = *dy * angle.cos() / distance / affected_total_count as f32;
+
+                        *dx1 += dx_change;
+                        *dy1 += dy_change;
+
+                        dx_sum_changes += dx_change.abs();
+                        dy_sum_changes += dy_change.abs();
+
+                        api.set(collision_dx, collision_dy, affected_cell);
+                    },
+                    _ => {}
+                }
+            },
+            _ => {},
         }
     }
+
+    *dx = f32::clamp(dx.abs() - dx_sum_changes.abs(), 0.0, dx.abs()) * dx.signum() * 0.99;
+    *dy = f32::clamp(dy.abs() - dy_sum_changes.abs(), 0.0, dy.abs()) * dy.signum() * 0.99;
+
+    api.update(cell);
+    api.keep_alive(0, 0);
 }
 
 pub fn update_sand(cell: Cell, api: &mut ChunkApi, _dt: f32) {

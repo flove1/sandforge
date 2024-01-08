@@ -1,3 +1,4 @@
+use ahash::HashMap;
 use rapier2d::{prelude::*, na::{Isometry2, Vector2}};
 
 use crate::{constants::{CHUNK_SIZE, PHYSICS_TO_WORLD, WORLD_HEIGHT, WORLD_WIDTH}, pos2, vector::Pos2};
@@ -34,7 +35,7 @@ pub struct Physics {
     physics_hooks: Box<dyn PhysicsHooks>,
     event_handler: Box<dyn EventHandler>,
 
-    pub objects: Vec<PhysicsObject>,
+    pub objects: HashMap<usize, PhysicsObject>,
 }
 
 impl Physics {
@@ -53,7 +54,7 @@ impl Physics {
             physics_hooks: Box::new(()),
             event_handler: Box::new(()),
 
-            objects: vec![],
+            objects: HashMap::default(),
         }
     }
 
@@ -95,6 +96,8 @@ impl Physics {
         let mut object_cells = vec![];
         let mut pixel_data: Vec<u8> = vec![0; (width * height) as usize * 4];
 
+        let object_id = fastrand::usize(0..32678);
+
         cells.into_iter()
             .filter(|(_, cell)| {
                 cell.matter_type != MatterType::Empty
@@ -102,7 +105,7 @@ impl Physics {
             .for_each(|((x, y), mut cell)| {
                 let index = ((y - y_min) * width + (x - x_min)) as usize;
 
-                cell.simulation = SimulationType::RigidBody(self.objects.len(), object_cells.len());
+                cell.simulation = SimulationType::RigidBody(object_id, object_cells.len());
 
                 let color = cell.get_color();
 
@@ -188,7 +191,8 @@ impl Physics {
             extent,
         );  
 
-        self.objects.push(
+        self.objects.insert(
+            object_id,
             PhysicsObject { 
                 rb_handle, 
                 collider_handle,
@@ -197,6 +201,20 @@ impl Physics {
                 width,
                 height
             }
+        );
+    }
+
+    pub fn delete_object(
+        &mut self,
+        rb_handle: RigidBodyHandle,
+    ) {
+        self.rigid_body_set.remove(
+            rb_handle, 
+            &mut self.island_manager, 
+            &mut self.collider_set, 
+            &mut self.impulse_joint_set, 
+            &mut self.multibody_joint_set, 
+            true
         );
     }
 
@@ -252,7 +270,7 @@ impl Physics {
         );
 
         self.objects.iter_mut()
-            .for_each(|object| {
+            .for_each(|(id, object)| {
                 let position = self.rigid_body_set[object.rb_handle].position().translation;
                 let x = position.x * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
                 let y = position.y * PHYSICS_TO_WORLD / CHUNK_SIZE as f32;
@@ -271,7 +289,7 @@ impl Physics {
         });
 
         self.objects.iter_mut()
-            .map(|object| {
+            .map(|(id, object)| {
                 let rb = &self.rigid_body_set[object.rb_handle];
                 (object, rb.position().translation.vector, rb.rotation().angle())
             })
@@ -295,7 +313,7 @@ impl Physics {
 
     pub fn rb_to_ca(&self) -> Vec<(&PhysicsObject, &Vec<ObjectPoint>)> {
         self.objects.iter()
-            .map(|object| {
+            .map(|(id, object)| {
                 (
                     object, 
                     &object.cells

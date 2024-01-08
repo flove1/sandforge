@@ -10,7 +10,6 @@ pub struct Particle {
     pub dy: f32,
 
     pub collided: bool,
-
     pub airborne_frames: u8,
 }
 

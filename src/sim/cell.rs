@@ -30,7 +30,7 @@ pub enum SimulationType {
     #[default]
     Ca,
     RigidBody(usize, usize),
-    Particle(f32, f32),
+    Displaced(f32, f32),
 }
 
 impl Default for Cell {
@@ -139,6 +139,10 @@ impl Cell {
         cell
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.matter_type == MatterType::Empty
+    }
+
     pub fn update_cell(mut self, api: &mut ChunkApi, dt: f32, clock: u8) {
         self.clock = clock;
 
@@ -216,7 +220,7 @@ impl Cell {
             },
             // SimulationType::Particle { .. } => update_particle(self, api, dt),
             SimulationType::RigidBody ( .. ) => {},
-            SimulationType::Particle( .. ) => update_particle(self, api, dt),
+            SimulationType::Displaced( .. ) => update_displaced(self, api, dt),
         }
     }
 }

@@ -874,27 +874,26 @@ impl Renderer {
                 rpass.draw(0..4, 0..1);
             });
 
-        self.objects.iter()
-            .for_each(|(bind_group, bind_buffer)| {
-                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Renderer render pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: true,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                });
+        // self.objects.iter()
+        //     .for_each(|(bind_group, bind_buffer)| {
+        //         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        //             label: Some("Renderer render pass"),
+        //             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+        //                 view,
+        //                 resolve_target: None,
+        //                 ops: wgpu::Operations {
+        //                     load: wgpu::LoadOp::Load,
+        //                     store: true,
+        //                 },
+        //             })],
+        //             depth_stencil_attachment: None,
+        //         });
         
-                rpass.set_pipeline(&self.texture_render_pipeline);
-                rpass.set_bind_group(0, bind_group, &[]);
-                rpass.set_vertex_buffer(0, bind_buffer.slice(..));
-                rpass.draw(0..4, 0..1);
-            });
-
+        //         rpass.set_pipeline(&self.texture_render_pipeline);
+        //         rpass.set_bind_group(0, bind_group, &[]);
+        //         rpass.set_vertex_buffer(0, bind_buffer.slice(..));
+        //         rpass.draw(0..4, 0..1);
+        //     });
 
         if let Some(instance_buffer) = &self.particle_instance_buffer {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -1,10 +1,10 @@
-use ahash::HashMap;
+use ahash::{HashMap, HashSet};
 
 use crate::{sim::{elements::Element, cell::Cell}, helpers::line_from_pixels};
 
 pub struct Painter {
     pub brush: Brush,
-    pub placing_queue: HashMap<(i32, i32), Cell>,
+    pub placing_queue: HashSet<(i32, i32)>,
     active: bool,
 }
 
@@ -12,7 +12,7 @@ impl Painter {
     pub fn new() -> Self {
         Self { 
             brush: Brush::new(), 
-            placing_queue: HashMap::default(),
+            placing_queue: HashSet::default(),
             active: false,
         }
     }
@@ -25,7 +25,7 @@ impl Painter {
         self.active = false;
     }
 
-    pub fn drain_placing_queue(&mut self) -> Vec<((i32, i32), Cell)> {
+    pub fn drain_placing_queue(&mut self) -> Vec<(i32, i32)> {
         self.placing_queue.drain().collect()
     }
 
@@ -39,11 +39,11 @@ impl Painter {
                 match self.brush.brush_type {
                     BrushType::Particle(rate) => {
                         if fastrand::u8(0..255) <= rate {
-                            self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                            self.placing_queue.insert((x, y));
                         }
                     },
                     _ => {
-                        self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                        self.placing_queue.insert((x, y));
                     }
                 }
             };
@@ -58,11 +58,12 @@ impl Painter {
                 match self.brush.brush_type {
                     BrushType::Particle(rate) => {
                         if fastrand::u8(0..255) <= rate {
-                            self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                            self.placing_queue.insert((x, y));
                         }
                     },
+                    BrushType::ObjectEraser => {},
                     _ => {
-                        self.placing_queue.insert((x, y), Cell::new(&self.brush.element, 0));
+                        self.placing_queue.insert((x, y));
                     }
                 }
             };
@@ -91,7 +92,9 @@ pub enum BrushType {
     Cell,
     Object,
     StaticObject,
-    Particle(u8)
+    Particle(u8),
+    Force(f32),
+    ObjectEraser,
 }
 
 #[derive(Clone, PartialEq)]

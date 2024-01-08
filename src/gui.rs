@@ -172,8 +172,6 @@ impl Gui {
     }
 }
 
-
-
 pub struct WidgetData {
     pub menu_bar_open: bool,
     pub info_open: bool,
@@ -335,7 +333,7 @@ impl WidgetData {
                         match self.selected_cell.simulation {
                             crate::sim::cell::SimulationType::Ca => format!("simulation: ca"),
                             crate::sim::cell::SimulationType::RigidBody(object_id, cell_id) => format!("simulation: rb({}, {})", object_id, cell_id),
-                            crate::sim::cell::SimulationType::Particle(dx, dy) => format!("simulation: particle({}, {})", dx, dy),
+                            crate::sim::cell::SimulationType::Displaced(dx, dy) => format!("simulation: displaced({}, {})", dx, dy),
                         }
                     }
                 );
@@ -525,8 +523,10 @@ impl WidgetData {
                         match brush.brush_type {
                             BrushType::Cell => "Cell",
                             BrushType::Object => "Object",
-                            BrushType::StaticObject => "Static Object",
+                            BrushType::StaticObject => "Static object",
                             BrushType::Particle(_) => "Particle",
+                            BrushType::Force(_) => "Force",
+                            BrushType::ObjectEraser => "Object eraser",
                         }
                     )
                     .show_ui(ui, |ui| {
@@ -550,6 +550,16 @@ impl WidgetData {
                             BrushType::StaticObject, 
                             "Static Object",
                         );
+                        ui.selectable_value(
+                            &mut brush.brush_type, 
+                            BrushType::Force(0.25), 
+                            "Force",
+                        );
+                        ui.selectable_value(
+                            &mut brush.brush_type, 
+                            BrushType::ObjectEraser, 
+                            "Object eraser",
+                        );
                     }
                 );
 
@@ -560,6 +570,18 @@ impl WidgetData {
 
                     ui.add(
                         egui::widgets::Slider::new(size, 1..=255)
+                            .show_value(true)
+                            .trailing_fill(true)
+                    );
+                }
+
+                if let BrushType::Force(value) = &mut brush.brush_type {
+                    ui.add_space(ctx.pixels_per_point() * 8.0);
+
+                    ui.label("Velocity change");
+
+                    ui.add(
+                        egui::widgets::Slider::new(value,0.0..=1.0)
                             .show_value(true)
                             .trailing_fill(true)
                     );

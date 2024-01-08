@@ -4,6 +4,7 @@ use fps_counter::FPSCounter;
 use gui::Gui;
 use notify::{Watcher, RecursiveMode};
 use painter::Painter;
+use sim::cell::{Cell, SimulationType};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use window::WindowContext;
@@ -111,44 +112,123 @@ impl MainState {
 
 impl MainState {
     fn handle_painter(&mut self, ctx: &WindowContext, world: &mut World, input: &WinitInputHelper) {
-        if self.painter.is_cells_queued() {
-            if self.painter.brush.element.matter_type == MatterType::Empty {
-                world.place_batch(self.painter.drain_placing_queue());
-            }
-            else {
-                match self.painter.brush.brush_type {
-                    painter::BrushType::Cell => {
-                        world.place_batch(self.painter.drain_placing_queue());
-                    },
-                    painter::BrushType::Object => {
-                        if !matches!(self.painter.brush.element.matter_type, MatterType::Static) {
-                            self.painter.drain_placing_queue();
-                        }
-                        else if !input.mouse_held(0) {
-                            world.place_object(
-                                self.painter.drain_placing_queue(),
-                                false,
-                                &ctx.device,
-                                &ctx.queue
-                            );
-                        }
-                    },
-                    painter::BrushType::StaticObject => {
-                        if !input.mouse_held(0) {
-                            world.place_object(
-                                self.painter.drain_placing_queue(),
-                                true,
-                                &ctx.device,
-                                &ctx.queue
-                            );
-                        }
-                    },
-                    painter::BrushType::Particle(_) => {
-                        world.place_particles(self.painter.drain_placing_queue());
-                    },
-                }          
-            }
+        match self.painter.brush.brush_type {
+            painter::BrushType::ObjectEraser => {
+                if input.mouse_held(0) {
+                    if let Some((x, y)) = input.mouse() {
+                        let (x, y) = self.get_world_position_from_pixel(x, y);
+                        world.delete_object(x, y);
+                    }
+                }
+            },
+            painter::BrushType::Force(strength) => {
+                let (dx, dy) = input.mouse_diff();
 
+                for (x, y) in self.painter.drain_placing_queue() {
+                    let cell = world.get_cell_by_pixel(x, y);
+
+                    match cell.simulation {
+                        SimulationType::Ca => {
+                            world.set_cell_by_pixel(
+                                x, 
+                                y, 
+                                Cell {
+                                    simulation: SimulationType::Displaced(dx * strength, - dy * strength),
+                                    ..cell
+                                },
+                            true
+                            );
+                        },
+                        SimulationType::Displaced(dx0, dy0) => {
+                            world.set_cell_by_pixel(
+                                x, 
+                                y, 
+                                Cell {
+                                    simulation: SimulationType::Displaced(dx0 + dx * strength, dy0 - dy * strength),
+                                    ..cell
+                                },
+                            true
+                            );
+                        },
+                        SimulationType::RigidBody(_, _) => {},
+                    }
+
+                }
+            }
+            _ => {
+                if self.painter.is_cells_queued() {
+                    if self.painter.brush.element.matter_type == MatterType::Empty {
+                        for (x, y) in self.painter.drain_placing_queue() {
+                            world.set_cell_by_pixel(x, y, Cell::default(), false);
+                        }
+                    }
+                    else {
+                        match self.painter.brush.brush_type {
+                            painter::BrushType::Cell => {
+                                for (x, y) in self.painter.drain_placing_queue() {
+                                    world.set_cell_by_pixel(
+                                        x, 
+                                        y, 
+                                        Cell::new(
+                                            &self.painter.brush.element, 
+                                            0
+                                        ), 
+                                    false
+                                    );
+                                }
+                            },
+                            painter::BrushType::Object => {
+                                if !matches!(self.painter.brush.element.matter_type, MatterType::Static) {
+                                    self.painter.drain_placing_queue();
+                                }
+                                else if !input.mouse_held(0) {
+                                    let object = self.painter.drain_placing_queue().into_iter()
+                                        .map(|(x, y)| {
+                                            (
+                                                (x, y),
+                                                Cell::new(&self.painter.brush.element, 0)
+                                            )
+                                        })
+                                        .collect::<Vec<((i32, i32), Cell)>>();
+        
+                                    world.place_object(
+                                        object,
+                                        false,
+                                        &ctx.device,
+                                        &ctx.queue
+                                    );
+                                }
+                            },
+                            painter::BrushType::StaticObject => {
+                                if !input.mouse_held(0) {
+                                    let object = self.painter.drain_placing_queue().into_iter()
+                                        .map(|(x, y)| {
+                                            (
+                                                (x, y),
+                                                Cell::new(&self.painter.brush.element, 0)
+                                            )
+                                        })
+                                        .collect::<Vec<((i32, i32), Cell)>>();
+        
+                                    world.place_object(
+                                        object,
+                                        true,
+                                        &ctx.device,
+                                        &ctx.queue
+                                    );
+                                }
+                            },
+                            painter::BrushType::Particle(_) => {
+                                // let particlse = 
+        
+                                // world.place_particles(self.painter.drain_placing_queue());
+                            },
+                            painter::BrushType::Force(_) => todo!(),
+                            _ => {}
+                        }          
+                    }
+                }
+            }
         }
     }
     
@@ -177,6 +257,11 @@ pub async fn run() {
     }
 
     let mut world = World::new(&window_ctx.device, &window_ctx.config.format);
+  
+    world.update_textures(
+        &window_ctx,
+        main_state.camera.position
+    );
 
     event_loop.run(move |event, _, control_flow| {
         control_flow.set_poll();
@@ -188,7 +273,9 @@ pub async fn run() {
         }
 
         if !event_consumed && input.update(&event){
-            if input.mouse_pressed(0) {
+            main_state.handle_painter(&window_ctx, &mut world, &input);
+            
+            if input.mouse_pressed(0) && !input.key_held(winit::event::VirtualKeyCode::LShift) {
                 main_state.painter.activate();
                 if let Some((x, y)) = input.mouse() {
                     let (x, y) = main_state.get_world_position_from_pixel(x, y);
@@ -196,7 +283,7 @@ pub async fn run() {
                 }
             }
 
-            if input.mouse_held(0) {
+            if input.mouse_held(0) && !input.key_held(winit::event::VirtualKeyCode::LShift) {
                 if let Some((x, y)) = input.mouse() {
                     let (dx, dy) = input.mouse_diff();
                             
@@ -211,11 +298,11 @@ pub async fn run() {
                 main_state.painter.deactivate();
             }
 
-            if input.mouse_held(1) {
+            if input.mouse_held(1) || input.mouse_held(0) && input.key_held(winit::event::VirtualKeyCode::LShift) {
                 let (dx, dy) = input.mouse_diff();
 
-                main_state.camera.position[0] -= dx / (WORLD_WIDTH * CHUNK_SIZE) as f32 / 5.0;
-                main_state.camera.position[1] += dy / (WORLD_HEIGHT * CHUNK_SIZE) as f32 / 5.0;
+                main_state.camera.position[0] -= dx / (WORLD_WIDTH * CHUNK_SIZE) as f32 / SCALE;
+                main_state.camera.position[1] += dy / (WORLD_HEIGHT * CHUNK_SIZE) as f32 / SCALE;
             }
         
             if input.key_pressed_os(winit::event::VirtualKeyCode::Left) {
@@ -237,24 +324,45 @@ pub async fn run() {
             if input.key_pressed(winit::event::VirtualKeyCode::Q) {
                 control_flow.set_exit();
             }
+
+            if input.key_pressed_os(winit::event::VirtualKeyCode::Space) {
+                let (chunks_updated, pixels_updated) = world.update(main_state.camera.position);
+                main_state.gui.widget_data.chunks_updated += chunks_updated;
+                main_state.gui.widget_data.pixels_updated += pixels_updated;
+
+                world.update_textures(
+                    &window_ctx,
+                    main_state.camera.position
+                );
+            }
         }
 
         match &event {
-            Event::MainEventsCleared => {
+            Event::MainEventsCleared => {                
                 if main_state.fps.is_update_required() {
                     window_ctx.window.request_redraw();
-    
-                    if world.needs_update(main_state.fps.ms_from_previous_update()) {
-                        main_state.handle_painter(&window_ctx, &mut world, &input);
-        
-                        let (chunks_updated, pixels_updated) = world.update(main_state.camera.position);
-                        main_state.gui.widget_data.chunks_updated += chunks_updated;
-                        main_state.gui.widget_data.pixels_updated += pixels_updated;
-        
-                        world.update_textures(
-                            &window_ctx,
-                            main_state.camera.position
-                        );
+
+                    match FRAME_BY_FRAME_UPDATE {
+                        true => {
+                            world.update_loaded_chunks(main_state.camera.position);
+
+                            world.update_textures(
+                                &window_ctx,
+                                main_state.camera.position
+                            );
+
+                        },
+                        false => {
+                            if !FRAME_BY_FRAME_UPDATE && world.needs_update(main_state.fps.ms_from_previous_update()) {        
+                                let (chunks_updated, pixels_updated) = world.update(main_state.camera.position);
+                                main_state.gui.widget_data.chunks_updated += chunks_updated;
+                                main_state.gui.widget_data.pixels_updated += pixels_updated;
+                                world.update_textures(
+                                    &window_ctx,
+                                    main_state.camera.position
+                                );
+                            }
+                        },
                     }
                 }
             }
