@@ -16,49 +16,58 @@ criterion = { version = "0.4", features = ["html_reports"] }
 name = "benchmark"
 harness = false
 
-[profile.release-debugged]
-inherits = "release"
-incremental = true
-debug = true
+[profile.dev]
+opt-level = 0
 
-[profile.optimized]
-inherits = "release"
-panic = "abort"
-codegen-units = 1
-lto = true
+[profile.dev.package."*"]
+opt-level = 3
+
+# [profile.release-debugged]
+# inherits = "release"
+# incremental = true
+# debug = true
+
+# [profile.optimized]
+# inherits = "release"
+# panic = "abort"
+# codegen-units = 1
+# lto = true
 
 [dependencies]
-winit = "0.28.6"
-env_logger = "0.10"
-error-iter = "0.4.1"
 log = "0.4"
 rand = { version = "0.8.4", features = ["small_rng"] }
 dashmap = { version = "5.5.1", features = ["inline"] }
-fps_counter = "2.0.0"
-parking_lot = { version = "0.12.1", features = ["deadlock_detection"] }
+# parking_lot = { version = "0.12.1", features = ["deadlock_detection"] }
 bytemuck = "1.13.1"
 earcutr = "0.4.2"
-threadpool = "1.8.1"
 ahash = "0.8.3"
-rapier2d = "0.17.2"
 cdt = "0.1.0"
 lazy_static = "1.4.0"
 serde_yaml = "0.9.25"
 serde = { version = "1.0.188", features = ["derive"] }
-pretty_env_logger = "0.5.0"
 poly2tri-rs = "0.1.2"
 bitflags = "2.4.0"
 rayon = "1.8.0"
 fastrand = "2.0.1"
-wgpu = "0.17.1"
-egui-wgpu = "0.23.0"
-egui-winit = "0.23.0"
-epaint = "0.23.0"
-pollster = "0.3.0"
-winit_input_helper = "0.14.1"
 notify = "6.1.1"
 noise = "0.8.2"
 compact_str = { version = "0.7.1", features = ["serde"] }
+bevy = {version = "0.12.1"}
+bevy_math = "0.12.1"
+bevy_rapier2d = "0.23.0"
+serde-big-array = "0.5.1"
+array-macro = "2.1.8"
+smallvec = "1.12.0"
+itertools = "0.12.0"
+async-channel = "2.1.1"
+bevy_common_assets = "0.9.0"
+scoped_threadpool = "0.1.9"
+bevy_egui = "0.24.0"
+bevy-inspector-egui = "0.22.1"
+concache = "0.2.1"
+flurry = "0.5.0"
+rustc-hash = "1.1.0"
+smooth-bevy-cameras = "0.10.0"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.5"

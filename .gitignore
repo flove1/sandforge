@@ -1,5 +1,6 @@
 /target
 /.vscode
+/obsidian
 
 flamegraph.svg
 perf.*

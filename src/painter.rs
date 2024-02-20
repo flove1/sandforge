@@ -1,87 +1,10 @@
-use ahash::{HashMap, HashSet};
+use bevy::ecs::{system::Resource, world::{FromWorld, World}};
 
-use crate::{sim::{elements::Element, cell::Cell}, helpers::line_from_pixels};
+use crate::materials::{Material, ELEMENTS};
 
-pub struct Painter {
-    pub brush: Brush,
-    pub placing_queue: HashSet<(i32, i32)>,
-    active: bool,
-}
-
-impl Painter {
-    pub fn new() -> Self {
-        Self { 
-            brush: Brush::new(), 
-            placing_queue: HashSet::default(),
-            active: false,
-        }
-    }
-
-    pub fn activate(&mut self) {
-        self.active = true;
-    }
-
-    pub fn deactivate(&mut self) {
-        self.active = false;
-    }
-
-    pub fn drain_placing_queue(&mut self) -> Vec<(i32, i32)> {
-        self.placing_queue.drain().collect()
-    }
-
-    pub fn is_cells_queued(&mut self) -> bool {
-        !self.placing_queue.is_empty()
-    }
-    
-    pub fn draw_point(&mut self, x: i32, y: i32) {
-        if self.active {
-            let mut draw_operation = |x: i32, y: i32| {
-                match self.brush.brush_type {
-                    BrushType::Particle(rate) => {
-                        if fastrand::u8(0..255) <= rate {
-                            self.placing_queue.insert((x, y));
-                        }
-                    },
-                    _ => {
-                        self.placing_queue.insert((x, y));
-                    }
-                }
-            };
-    
-            self.brush.shape.draw(x, y, self.brush.size, &mut draw_operation);
-        }
-    }
-
-    pub fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) {
-        if self.active {
-            let mut draw_operation = |x: i32, y: i32| {
-                match self.brush.brush_type {
-                    BrushType::Particle(rate) => {
-                        if fastrand::u8(0..255) <= rate {
-                            self.placing_queue.insert((x, y));
-                        }
-                    },
-                    BrushType::ObjectEraser => {},
-                    _ => {
-                        self.placing_queue.insert((x, y));
-                    }
-                }
-            };
-    
-            let mut function = |x: i32, y: i32| {
-                self.brush.shape.draw(x, y, self.brush.size, &mut draw_operation);
-                true
-            };
-    
-            line_from_pixels(x1, y1, x2 + x2.signum(), y2 + y2.signum(), &mut function);
-        }
-
-    }
-}
-
-#[derive(Clone)]
-pub struct Brush {
-    pub element: Element,
+#[derive(Resource)]
+pub struct BrushRes{
+    pub material: Material,
     pub brush_type: BrushType,
     pub shape: BrushShape,
     pub size: i32, 
@@ -134,14 +57,13 @@ impl BrushShape {
     }    
 }
 
-impl Brush {
-    pub fn new() -> Self {
+impl FromWorld for BrushRes {
+    fn from_world(_world: &mut World) -> Self {
         Self {
-            element: Element::default(), 
+            material: ELEMENTS.get("sand").unwrap().clone(), 
             brush_type: BrushType::Cell, 
             shape: BrushShape::Circle, 
             size: 10,
         }
     }
 }
-
