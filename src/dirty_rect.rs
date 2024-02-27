@@ -1,8 +1,8 @@
-use bevy::{asset::{Asset, Assets, Handle}, core::Name, ecs::{component::Component, entity::Entity, query::With, system::{Commands, Query, Res, ResMut, Resource}}, gizmos::gizmos::Gizmos, hierarchy::{BuildChildren, DespawnRecursiveExt}, pbr::wireframe::WireframeMaterial, prelude::default, reflect::TypePath, render::{color::Color, mesh::{shape, Mesh}, render_resource::AsBindGroup, texture::Image}, sprite::{ColorMaterial, MaterialMesh2dBundle}, transform::{commands, components::Transform}, utils::HashMap};
-use bevy_math::{ivec2, IVec2, URect, UVec2, Vec2, Vec3};
+use bevy::{ecs::system::{Res, Resource}, gizmos::gizmos::Gizmos, render::color::Color, utils::HashMap};
+use bevy_math::{ivec2, IVec2, URect, UVec2, Vec2};
 use itertools::Itertools;
 
-use crate::{constants::CHUNK_SIZE, helpers::{global_to_local, local_to_global, modify_local_position}};
+use crate::{constants::CHUNK_SIZE, helpers::modify_local_position};
 
 pub fn dirty_rects_gizmos(
     mut gizmos: Gizmos,

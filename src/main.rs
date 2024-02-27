@@ -14,22 +14,18 @@ mod camera;
 mod particle;
 mod registries;
 
-use std::{default, path::Path, time::{Duration, SystemTime}};
 
 use actor::ActorsPlugin;
-use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, input::mouse::MouseMotion, prelude::*, window::{PrimaryWindow}};
-use bevy_egui::{egui::{self, mutex::RwLock}, EguiContexts, EguiPlugin};
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
-use bevy_math::{ivec2, vec2};
+use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, input::mouse::MouseMotion, prelude::*, render::{settings::WgpuSettings, RenderPlugin}, window::{PresentMode, PrimaryWindow}, winit::{UpdateMode, WinitSettings}};
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use bevy_math::ivec2;
+
 use camera::CameraPlugin;
-use pixel::{Pixel, SimulationType};
+use pixel::Pixel;
 use constants::CHUNK_SIZE;
-use dashmap::{DashMap, DashSet};
-use dirty_rect::{extend_rect_if_needed, update_dirty_rects, DirtyRects};
-use materials::{process_elements_config, Material, PhysicsType, ELEMENTS};
+use dirty_rect::{update_dirty_rects, DirtyRects};
 use gui::{egui_has_primary_context, ui_info_system, ui_painter_system, ui_selected_cell_system, UiWidgets};
 use helpers::line_from_pixels;
-use notify::{Watcher, RecursiveMode};
 use painter::{BrushRes, BrushType};
 use player::PlayerPlugin;
 use world::{ChunkManager, ChunkManagerPlugin};
@@ -41,25 +37,46 @@ fn main() {
     //     .format_timestamp(None)
     //     .init();
 
-    process_elements_config();
-    let mut watcher = notify::recommended_watcher(|res| {
-        match res {
-            Ok(_) => {
-                println!("elements config updated detected");
-                process_elements_config();
-            },
-            Err(e) => println!("watch error: {:?}", e),
-        }
-    }).unwrap();
+    // process_elements_config();
+    // let mut watcher = notify::recommended_watcher(|res| {
+    //     match res {
+    //         Ok(_) => {
+    //             println!("elements config updated detected");
+    //             process_elements_config();
+    //         },
+    //         Err(e) => println!("watch error: {:?}", e),
+    //     }
+    // }).unwrap();
 
-    if let Err(e) = watcher.watch(Path::new("elements.yaml"), RecursiveMode::NonRecursive) {
-        panic!("error while loading elements file: {e}");
-    }
+    // if let Err(e) = watcher.watch(Path::new("elements.yaml"), RecursiveMode::NonRecursive) {
+    //     panic!("error while loading elements file: {e}");
+    // }
 
     App::new()
-        .add_plugins(DefaultPlugins.set(
+        .add_plugins(DefaultPlugins
+            .set(
             ImagePlugin::default_nearest(),
-        ))
+            )
+            .set(RenderPlugin {
+                render_creation: bevy::render::settings::RenderCreation::Automatic(WgpuSettings{
+                    power_preference: bevy::render::settings::PowerPreference::LowPower,
+                    ..Default::default()
+                }),
+                synchronous_pipeline_compilation: false,
+            })
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "⚙️ Sandforge ⚙️".into(),
+                    present_mode: PresentMode::AutoNoVsync,
+                    ..default()
+                }),
+                ..default()
+            }),
+        )
+        .insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::Continuous,
+        })
         .add_plugins(ChunkManagerPlugin)
         .add_plugins(EguiPlugin)
         .add_plugins(FrameTimeDiagnosticsPlugin)
@@ -69,23 +86,24 @@ fn main() {
             animation::AnimationPlugin,
         ))
         .add_plugins(CameraPlugin)
-        // .add_plugins(WorldInspectorPlugin::new())
+        // // .add_plugins(WorldInspectorPlugin::new())
         .add_systems(Startup, setup)
-        // .add_systems(
-        //     PreUpdate,
-        //     (absorb_egui_inputs,)
-        //             .after(bevy_egui::systems::process_input_system)
-        //             .before(bevy_egui::EguiSet::BeginFrame),
-        // )
+        // // .add_systems(
+        // //     PreUpdate,
+        // //     (absorb_egui_inputs,)
+        // //             .after(bevy_egui::systems::process_input_system)
+        // //             .before(bevy_egui::EguiSet::BeginFrame),
+        // // )
         .add_systems(Update, mouse_system.run_if(has_window))
         .add_systems(Update, 
             (
-                ui_info_system.run_if(egui_has_primary_context),
-                ui_selected_cell_system.run_if(egui_has_primary_context),
-                ui_painter_system.run_if(egui_has_primary_context),
-            )
+                // update_ui_scale_factor,
+                ui_info_system,
+                ui_selected_cell_system,
+                ui_painter_system,
+            ).run_if(egui_has_primary_context)
         )
-        // .add_systems(Update, animate_sprite)
+        // // .add_systems(Update, animate_sprite)
         .init_resource::<UiWidgets>()
         .init_resource::<BrushRes>()
         .init_resource::<MouseState>()
@@ -121,6 +139,9 @@ fn setup(
         .push("pixel font".to_owned());
 
     contexts.ctx_mut().set_fonts(fonts);
+    contexts.ctx_mut().style_mut(|style| {
+        style.interaction.selectable_labels = false;
+    });
 
     let mut camera = Camera2dBundle::default();
     camera.camera.hdr = true;
@@ -146,7 +167,7 @@ pub fn has_window(
 #[allow(clippy::too_many_arguments)]
 fn mouse_system(
     brush: Res<BrushRes>,
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects: ResMut<DirtyRects>,
@@ -155,17 +176,21 @@ fn mouse_system(
     mut camera: Query<(&Camera, &mut Transform, &GlobalTransform), With<Camera>>,
     mut contexts: EguiContexts,
     mut mouse_state: ResMut<MouseState>,
-    buttons: Res<Input<MouseButton>>,
+    buttons: Res<ButtonInput<MouseButton>>,
 ) {
     let (camera, mut camera_transform, camera_global_transform) = camera.single_mut();
     let window = window.single();
     let ctx = contexts.ctx_mut();
 
     let mut draw_operation = |x: i32, y: i32| {
+        if brush.material.is_none() {
+            return;
+        }
+
         match brush.brush_type {
             BrushType::Particle(rate) => {
                 if fastrand::u8(0..255) <= rate {
-                    chunk_manager.replace_cell_at(ivec2(x, y), Pixel::new(&brush.material, 0));
+                    chunk_manager.replace_cell_at(ivec2(x, y), Pixel::new(brush.material.as_ref().unwrap(), 0));
 
                     let chunk_position = ivec2(x, y).div_euclid(IVec2::ONE * CHUNK_SIZE);
                     let cell_position = ivec2(x, y).rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2();
@@ -176,7 +201,7 @@ fn mouse_system(
             },
             BrushType::ObjectEraser => {},
             _ => {
-                chunk_manager.replace_cell_at(ivec2(x, y), Pixel::new(&brush.material, 0));
+                chunk_manager.replace_cell_at(ivec2(x, y), Pixel::new(brush.material.as_ref().unwrap(), 0));
 
                 let chunk_position = ivec2(x, y).div_euclid(IVec2::ONE * CHUNK_SIZE);
                 let cell_position = ivec2(x, y).rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2();

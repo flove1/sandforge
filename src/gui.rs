@@ -3,7 +3,7 @@ use bevy_math::{ivec2, vec2};
 
 use bevy::{diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}, prelude::*, window::PrimaryWindow};
 
-use crate::{pixel::SimulationType, constants::CHUNK_SIZE, materials::{Material, PhysicsType, ELEMENTS}, painter::{BrushRes, BrushShape, BrushType}, world::ChunkManager};
+use crate::{constants::CHUNK_SIZE, materials::{Material, PhysicsType}, painter::{BrushRes, BrushShape, BrushType}, pixel::SimulationType, registries::Registries, world::ChunkManager};
 
 #[derive(Resource)]
 pub struct UiWidgets {
@@ -14,7 +14,7 @@ pub struct UiWidgets {
 }
 
 impl FromWorld for UiWidgets {
-    fn from_world(world: &mut World) -> Self {
+    fn from_world(_: &mut World) -> Self {
         Self {
             menu_bar_open: true,
             info_open: true,
@@ -25,7 +25,7 @@ impl FromWorld for UiWidgets {
 }
 
 pub fn egui_has_primary_context(
-    query: Query<(With<EguiContext>, With<PrimaryWindow>)>,
+    query: Query<&EguiContext, With<PrimaryWindow>>,
 ) -> bool {
     !query.is_empty()
 }
@@ -57,7 +57,7 @@ pub fn ui_info_system(
             ui.colored_label(
                 egui::Color32::WHITE,
                 format!("Frame count: {}", diagnostics
-                    .get(FrameTimeDiagnosticsPlugin::FPS)
+                    .get(&FrameTimeDiagnosticsPlugin::FPS)
                     .and_then(|fps| fps.smoothed())
                     .map(|fps| fps.to_string())
                     .unwrap_or(String::from("NaN"))
@@ -85,6 +85,7 @@ pub fn ui_selected_cell_system(
     mut widgets: ResMut<UiWidgets>,
     q_window: Query<&Window, With<PrimaryWindow>>,
     mut q_camera: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    registries: Res<Registries>,
     chunk_manager: Res<ChunkManager>,
 ) {
     let ctx = contexts.ctx_mut();
@@ -141,7 +142,7 @@ pub fn ui_selected_cell_system(
 
             ui.colored_label(
                 egui::Color32::WHITE,
-                format!("Material name: {}", ELEMENTS.get(&pixel.material_id.to_string()).unwrap().value().id.to_string())
+                format!("Material name: {}", registries.materials.get(&pixel.material.id.to_string()).unwrap().id)
             );
 
             ui.separator();
@@ -182,10 +183,10 @@ pub fn ui_selected_cell_system(
 
             ui.colored_label(
                 egui::Color32::WHITE,
-                format!("Matter type: {}", pixel.matter_type.to_string())
+                format!("Matter type: {}", pixel.material.matter_type.to_string())
             );
 
-            match pixel.matter_type {
+            match pixel.material.matter_type {
                 PhysicsType::Liquid(parameters) => {
                     ui.separator();
                     
@@ -205,17 +206,12 @@ pub fn ui_selected_cell_system(
                 PhysicsType::Gas => {},
             }
 
-            if let Some(fire_parameters) = &pixel.fire_parameters {
+            if let Some(fire_parameters) = &pixel.material.fire_parameters {
                 ui.separator();
 
                 ui.colored_label(
                     egui::Color32::WHITE,
                     format!("burning: {}", pixel.on_fire)
-                );
-
-                ui.colored_label(
-                    egui::Color32::WHITE,
-                    format!("temperature: {}", pixel.temperature)
                 );
 
                 ui.colored_label(
@@ -240,6 +236,7 @@ pub fn ui_painter_system(
     mut contexts: EguiContexts,
     mut widgets: ResMut<UiWidgets>,
     mut brush: ResMut<BrushRes>,
+    registries: Res<Registries>,
 ) {
     let ctx = contexts.ctx_mut();
     
@@ -260,9 +257,7 @@ pub fn ui_painter_system(
         .show(ctx, |ui| {
             ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
-            let mut elements = ELEMENTS.iter()
-                .map(|entry| entry.value().clone())
-                .collect::<Vec<Material>>();
+            let mut elements = registries.materials.iter().cloned().collect::<Vec<Material>>();
 
             elements.sort_by(|a, b| {
                 a.id.to_lowercase().cmp(&b.id.to_lowercase())
@@ -294,14 +289,13 @@ pub fn ui_painter_system(
                                 egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
                             );
 
-                            if brush.material == material {
+                            if brush.material.as_ref() == Some(&material) {
                                 ui.painter().rect_stroke(
                                     rect,
                                     egui::Rounding::default().at_most(0.5), 
                                     egui::Stroke::new(ctx.pixels_per_point(), egui::Color32::GOLD)
                                 );
                             }
-
                             
                             ui.vertical(|ui| {
                                 ui.add_space(ctx.pixels_per_point() * 4.0);
@@ -310,7 +304,7 @@ pub fn ui_painter_system(
                                     
                                     ui.colored_label(
                                         {
-                                            if brush.material == material {
+                                            if brush.material.as_ref() == Some(&material) {
                                                 egui::Color32::GOLD
                                             }
                                             else {
@@ -328,7 +322,7 @@ pub fn ui_painter_system(
                 });
 
                 if response.clicked() {
-                    brush.material = material.clone();
+                    brush.material = Some(material.clone());
                 }
             }
 

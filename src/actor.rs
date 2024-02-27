@@ -1,10 +1,7 @@
-use std::mem::swap;
-
 use bevy::prelude::*;
 use bevy_math::ivec2;
-use fastrand::choice;
 
-use crate::{pixel::Pixel, constants::CHUNK_SIZE, dirty_rect::{update_dirty_rects_3x3, DirtyRects}, materials::{PhysicsType, ELEMENTS}, world::{chunks_update, ChunkManager}};
+use crate::{constants::CHUNK_SIZE, dirty_rect::{update_dirty_rects_3x3, DirtyRects}, materials::PhysicsType, pixel::Pixel, registries::Registries, world::{chunks_update, ChunkManager}};
 
 pub const UP_WALK_HEIGHT: usize = 3;
 pub const DOWN_WALK_HEIGHT: usize = 4;
@@ -18,20 +15,21 @@ pub struct Actor {
 }
 
 pub fn fill_actors(
-    mut chunk_manager: ResMut<ChunkManager>,
     actors: Query<&Actor>,
+    mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects: ResMut<DirtyRects>,
+    registries: Res<Registries>
 ) {
     for actor in actors.iter() {
         let size = actor.hitbox.size().as_ivec2();
 
         for x in 0..size.x {
-            for y in 0..size.y as i32 {
+            for y in 0..size.y {
                 let position = actor.position.round().as_ivec2() + ivec2(x, y);
 
                 if let Some(pixel) = chunk_manager.get_mut(position) {
                     if pixel.is_empty() {
-                        *pixel = Pixel::new(&ELEMENTS.get("actor").unwrap(), 0);
+                        *pixel = Pixel::new(registries.materials.get("actor").unwrap(), 0);
                     }
                 }
                 update_dirty_rects_3x3(
@@ -58,7 +56,7 @@ pub fn unfill_actors(
                 let position = actor.position.round().as_ivec2() + ivec2(x, y);
 
                 if let Some(pixel) = chunk_manager.get_mut(position) {
-                    if pixel.material_id == "actor" {
+                    if pixel.material.id == "actor" {
                         *pixel = Pixel::default();
                     }
                 }
@@ -90,7 +88,7 @@ pub fn unfill_actors(
 // }
 
 pub fn update_actors(
-    mut chunk_manager: ResMut<ChunkManager>,
+    chunk_manager: Res<ChunkManager>,
     mut actors: Query<&mut Actor>,
     mut gizsmos: Gizmos,
 ) {
@@ -135,7 +133,7 @@ pub fn update_actors(
                             (new_pos_x + h_dx).round() as i32,
                             (actor.position.y + h_dy).round() as i32
                         )
-                    ).unwrap_or(&Pixel::default()).matter_type, PhysicsType::Empty
+                    ).unwrap_or(&Pixel::default()).material.matter_type, PhysicsType::Empty
                 ) {
                     let clip_ceil = (h_dy - actor.hitbox.min.y < 4.0).then(|| {
                         ((actor.position.y + h_dy).round() + 1.0) - (actor.position.y + actor.hitbox.min.y)
@@ -155,7 +153,7 @@ pub fn update_actors(
                                         (new_pos_x + h_dx).round() as i32,
                                         (actor.position.y + clip_y + h_dy).round() as i32,
                                     )
-                                ).unwrap_or(&Pixel::default()).matter_type, PhysicsType::Empty
+                                ).unwrap_or(&Pixel::default()).material.matter_type, PhysicsType::Empty
                             ){
                                 would_clip_collide = true;
                                 break;
@@ -214,7 +212,7 @@ pub fn update_actors(
                             (actor.position.x + h_dx).round() as i32,
                             (new_pos_y + h_dy).round() as i32,
                         )
-                    ).unwrap_or(&Pixel::default()).matter_type, PhysicsType::Empty
+                    ).unwrap_or(&Pixel::default()).material.matter_type, PhysicsType::Empty
                 ) {
                     collided_y = true;
                     break;

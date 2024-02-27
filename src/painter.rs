@@ -1,10 +1,10 @@
 use bevy::ecs::{system::Resource, world::{FromWorld, World}};
 
-use crate::materials::{Material, ELEMENTS};
+use crate::materials::Material;
 
 #[derive(Resource)]
 pub struct BrushRes{
-    pub material: Material,
+    pub material: Option<Material>,
     pub brush_type: BrushType,
     pub shape: BrushShape,
     pub size: i32, 
@@ -60,7 +60,7 @@ impl BrushShape {
 impl FromWorld for BrushRes {
     fn from_world(_world: &mut World) -> Self {
         Self {
-            material: ELEMENTS.get("sand").unwrap().clone(), 
+            material: None, 
             brush_type: BrushType::Cell, 
             shape: BrushShape::Circle, 
             size: 10,

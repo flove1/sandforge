@@ -8,7 +8,7 @@ use dashmap::DashSet;
 use itertools::{Either, Itertools};
 use noise::{NoiseFn, SuperSimplex};
 
-use crate::{chunk::{ChunkApi, ChunkData, ChunkGroup}, constants::*, dirty_rect::{dirty_rects_gizmos, update_dirty_rects, update_dirty_rects_3x3, DirtyRects, RenderMessage, UpdateMessage}, materials::{update_gas, update_liquid, update_sand, ELEMENTS}};
+use crate::{chunk::{ChunkApi, ChunkData, ChunkGroup}, constants::*, dirty_rect::{dirty_rects_gizmos, update_dirty_rects, update_dirty_rects_3x3, DirtyRects, RenderMessage, UpdateMessage}, materials::{update_gas, update_liquid, update_sand}, registries::{self, Registries}};
 use super::{pixel::Pixel, materials::PhysicsType};
 
 #[derive(Resource)]
@@ -18,7 +18,7 @@ pub struct Noise(SuperSimplex);
 pub struct Chunks;
 
 impl FromWorld for Noise {
-    fn from_world(world: &mut bevy::prelude::World) -> Self {
+    fn from_world(_: &mut bevy::prelude::World) -> Self {
         Self(
             SuperSimplex::new(
             SystemTime::now()
@@ -65,15 +65,16 @@ impl ChunkManager {
         &mut self,
         commands: &mut Commands,
         images: &mut ResMut<Assets<Image>>,
+        registries: &Res<Registries>,
         noise: &Res<Noise>,
         chunk_position: IVec2,
         chunks: &Entity,
     ) {
         let mut chunk = ChunkData::new(None);
 
-        let underground_element = ELEMENTS.get("dirt").unwrap().value().clone();
-        let surface_element = ELEMENTS.get("grass").unwrap().value().clone();
-        let depth_element = ELEMENTS.get("stone").unwrap().value().clone();        
+        let underground_element = registries.materials.get("dirt").unwrap();
+        let surface_element = registries.materials.get("grass").unwrap();
+        let depth_element = registries.materials.get("stone").unwrap();
         
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
@@ -87,9 +88,9 @@ impl ChunkManager {
                 value *= 10.0;
 
                 match value as i64 {
-                    0..=1 => chunk[cell_position] = Pixel::new(&surface_element, 1),
-                    2..=4 => chunk[cell_position] = Pixel::new(&underground_element, 1),
-                    5..=10 => chunk[cell_position] = Pixel::new(&depth_element, 1),
+                    0..=1 => chunk[cell_position] = Pixel::new(surface_element, 1),
+                    2..=4 => chunk[cell_position] = Pixel::new(underground_element, 1),
+                    5..=10 => chunk[cell_position] = Pixel::new(depth_element, 1),
                     _ => {}
                 }
             }
@@ -143,9 +144,9 @@ impl ChunkManager {
     pub fn check_collision(&self, pos: IVec2) -> Option<&PhysicsType> {
         self.get(pos)
             .filter(|pixel| {
-                matches!(pixel.matter_type, PhysicsType::Static | PhysicsType::Powder)
+                matches!(pixel.material.matter_type, PhysicsType::Static | PhysicsType::Powder)
             })
-            .map_or(Some(&PhysicsType::Static) , |pixel| Some(&pixel.matter_type))
+            .map_or(Some(&PhysicsType::Static) , |pixel| Some(&pixel.material.matter_type))
     }
 
     pub fn replace_cell_at(&mut self, pos: IVec2, pixel: Pixel) {
@@ -226,6 +227,7 @@ impl ChunkManager {
         &mut self, 
         commands: &mut Commands,
         images: &mut ResMut<Assets<Image>>,
+        registries: &Res<Registries>,
         noise: &Res<Noise>,
         camera_position: Vec2,
         chunks: &Entity,
@@ -250,7 +252,7 @@ impl ChunkManager {
                     self.activate_chunk(position);
 
                     if !self.chunks.contains_key(&position) {
-                        self.add_chunk(commands, images, noise, position, chunks);
+                        self.add_chunk(commands, images, registries, noise, position, chunks);
                     }
                 }
             }
@@ -428,11 +430,10 @@ impl Plugin for ChunkManagerPlugin {
             .insert_resource(ClearColor(Color::rgb(0.60, 0.88, 1.0)))
             .init_resource::<ChunkManager>()
             .init_resource::<DirtyRects>()
-            .init_resource::<Noise>();
+            .init_resource::<Noise>()
+            .init_resource::<Registries>();
     }
 }
-
-
 
 pub fn chunks_gizmos(
     mut gizmos: Gizmos,
@@ -458,7 +459,9 @@ pub fn manager_setup(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn chunks_update(
+    registries: Res<Registries>,
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut chunk_manager: ResMut<ChunkManager>,
@@ -470,7 +473,7 @@ pub fn chunks_update(
     let camera_transform = camera_query.get_single().unwrap();
     let chunks = chunks_query.get_single().unwrap();
 
-    chunk_manager.update_loaded_chunks(&mut commands, &mut images, &noise, camera_transform.translation.xy(), &chunks);
+    chunk_manager.update_loaded_chunks(&mut commands, &mut images, &registries, &noise, camera_transform.translation.xy(), &chunks);
 
     let DirtyRects {
         current: dirty_rects,

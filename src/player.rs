@@ -1,26 +1,18 @@
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
-use bevy::sprite::Anchor;
+use bevy::input::mouse::MouseWheel;
+
 use bevy::prelude::*;
 use bevy::tasks::Task;
-use bevy_math::{ivec2, vec2, vec3};
+use bevy_math::{vec2, vec3};
 
 use crate::actor::{update_actors, Actor};
 use crate::animation::{AnimationIndices, AnimationTimer};
 use crate::constants::{CHUNK_SIZE, PLAYER_LAYER};
 use crate::world::ChunkManager;
-use crate::{mouse_system, setup};
+use crate::setup;
 
-#[derive(Component)]
+#[derive(Default, Component)]
 pub struct Player {
     state: PlayerState,
-}
-
-impl Default for Player {
-    fn default() -> Self {
-        Self {
-            state: PlayerState::default(),
-        }
-    }
 }
 
 #[derive(Default)]
@@ -40,7 +32,7 @@ pub struct ToolFront;
 pub fn player_setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
     let player_actor = Actor {
         // height: 17,
@@ -52,9 +44,7 @@ pub fn player_setup(
     };
 
     let texture_handle = asset_server.load("player/idle.png");
-    let texture_atlas =
-        TextureAtlas::from_grid(texture_handle, Vec2::new(64.0, 64.0), 8, 1, None, None);
-    let texture_atlas_handle = texture_atlases.add(texture_atlas);
+    let texture_atlas_layout = texture_atlas_layouts.add(TextureAtlasLayout::from_grid(Vec2::new(64.0, 64.0), 8, 1, None, None));
 
     let animation_indices = AnimationIndices { first: 0, last: 7 };
     // commands.spawn((
@@ -73,8 +63,11 @@ pub fn player_setup(
             player_actor,
             Player::default(),
             SpriteSheetBundle {
-                texture_atlas: texture_atlas_handle,
-                sprite: TextureAtlasSprite::new(animation_indices.first),
+                texture: texture_handle,
+                atlas: TextureAtlas {
+                    layout: texture_atlas_layout, 
+                    index: animation_indices.first
+                },
                 transform: Transform{
                     translation: vec3(0.0, 0.0, PLAYER_LAYER),
                     scale: (Vec3::splat(1.0 / CHUNK_SIZE as f32)),
@@ -117,12 +110,9 @@ pub fn update_player(
         }
     }
 
-    // Jump
-    if inputs.jump_just_pressed {
-        if on_ground {
-            actor.velocity.y = JUMP_MAG;
-            player.state = PlayerState::Jumping(time.elapsed_seconds_wrapped_f64());
-        }
+    if inputs.jump_just_pressed && on_ground {
+        actor.velocity.y = JUMP_MAG;
+        player.state = PlayerState::Jumping(time.elapsed_seconds_wrapped_f64());
     }
 
     //Jump higher when holding space
@@ -154,7 +144,7 @@ pub fn update_player(
 
 pub fn update_player_sprite(mut query: Query<(&mut Transform, &Actor), With<Player>>) {
     let (mut transform, actor) = query.single_mut();
-    let left_bottom_vec = vec2(actor.position.x as f32, actor.position.y as f32);
+    let left_bottom_vec = vec2(actor.position.x, actor.position.y);
 
     let size = actor.hitbox.size().as_ivec2();
 
@@ -174,7 +164,7 @@ pub fn update_player_sprite(mut query: Query<(&mut Transform, &Actor), With<Play
 pub struct SavingTask(pub Option<Task<()>>);
 
 pub fn get_input(
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut inputs: ResMut<Inputs>,
 ) {
     //Jump
@@ -186,10 +176,10 @@ pub fn get_input(
     }
 
     //Movement
-    if keys.pressed(KeyCode::A) {
+    if keys.pressed(KeyCode::KeyA) {
         inputs.left = 1.;
     }
-    if keys.pressed(KeyCode::D) {
+    if keys.pressed(KeyCode::KeyD) {
         inputs.right = 1.;
     }
 }

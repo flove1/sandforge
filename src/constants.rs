@@ -1,5 +1,3 @@
-use bevy_math::IVec2;
-
 pub const CHUNK_SIZE: i32 = 64;
 pub const CHUNK_CELLS: i32 = CHUNK_SIZE.pow(2);
 

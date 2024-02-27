@@ -1,12 +1,9 @@
-use std::collections::HashSet;
 
-use array_macro::array;
 use async_channel::Sender;
-use bevy::{render::{texture::Image, render_resource::{Extent3d, TextureDimension, TextureFormat}}, asset::Handle, ecs::entity::{Entity, self}};
-use bevy_math::{ivec2, uvec2, IVec2, URect, UVec2};
-use serde::{Serialize, Deserialize};
+use bevy::{asset::Handle, ecs::entity::Entity, render::{render_asset::RenderAssetUsages, render_resource::{Extent3d, TextureDimension, TextureFormat}, texture::Image}};
+use bevy_math::{ivec2, IVec2, URect};
 
-use crate::{pixel::{Pixel, SimulationType, WALL}, constants::{CHUNK_CELLS, CHUNK_SIZE}, dirty_rect::{RenderMessage, UpdateMessage}, materials::{Material, PhysicsType}, helpers::get_cell_index, world::ChunkManager};
+use crate::{constants::{CHUNK_CELLS, CHUNK_SIZE}, dirty_rect::{RenderMessage, UpdateMessage}, materials::{Material, PhysicsType}, pixel::{Pixel, SimulationType, WALL}};
 
 impl std::ops::Index<IVec2> for ChunkData {
     type Output = Pixel;
@@ -56,6 +53,7 @@ impl ChunkData {
             TextureDimension::D2,
             vec![0; (CHUNK_CELLS * 4) as usize],
             TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::all()
         )
     }
 
@@ -70,14 +68,14 @@ impl ChunkData {
 
         self.cells.iter().enumerate()
             .for_each(|(index, pixel)| {
-                image.data[index * 4 .. (index + 1) * 4].copy_from_slice(&pixel.color);
+                image.data[index * 4 .. (index + 1) * 4].copy_from_slice(&pixel.material.color);
                 if pixel.on_fire {
                     image.data[index * 4 .. (index + 1) * 4].copy_from_slice(&fire_colors[fastrand::i32(0..fire_colors.len() as i32) as usize]);
                 }
                 else {
                     let mut color = pixel.get_color();
 
-                    if let PhysicsType::Liquid(parameters) = pixel.matter_type {
+                    if let PhysicsType::Liquid(parameters) = pixel.material.matter_type {
                         color[3] = (f32::clamp(parameters.volume * 5.0, 0.1, 0.7) * 255.0) as u8;
                     }
 
@@ -111,7 +109,7 @@ impl ChunkData {
                 else {
                     let mut color = pixel.get_color();
 
-                    if let PhysicsType::Liquid(parameters) = pixel.matter_type {
+                    if let PhysicsType::Liquid(parameters) = pixel.material.matter_type {
                         color[3] = (f32::clamp(parameters.volume * 5.0, 0.1, 0.7) * 255.0) as u8;
                     }
 
@@ -294,7 +292,7 @@ impl<'a> ChunkApi<'a> {
         let cell_position = self.cell_position + ivec2(dx, dy);
 
         match self.chunk_group.get(cell_position) {
-            Some(pixel) => pixel.matter_type,
+            Some(pixel) => pixel.material.matter_type,
             None => PhysicsType::Static,
         }
     }
@@ -312,7 +310,7 @@ impl<'a> ChunkApi<'a> {
         let cell_position = self.cell_position + ivec2(dx, dy);
 
         match self.chunk_group.get(cell_position) {
-            Some(pixel) => pixel.material_id == material.id,
+            Some(pixel) => pixel.material.id == material.id,
             None => false,
         }
     }

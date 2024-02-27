@@ -1,23 +1,17 @@
-use compact_str::{format_compact, CompactString};
 use lazy_static::lazy_static;
 use rand::Rng;
 
-use crate::materials::{Material, FireParameters, PhysicsType};
+use crate::materials::{FireParameters, Material, MaterialInstance, PhysicsType};
 
 #[derive(Debug, Clone)]
 pub struct Pixel {
-    pub material_id: String,
-    pub color: [u8; 4],
-    pub matter_type: PhysicsType,
+    pub material: MaterialInstance,
 
     // Created automatically
     pub ra: u8,
     pub rb: u8,
     pub updated_at: u8,
     pub simulation: SimulationType,
-
-    pub temperature: u16,
-    pub fire_parameters: Option<FireParameters>,
 
     pub on_fire: bool,
     pub conductive: bool,
@@ -34,18 +28,17 @@ pub enum SimulationType {
 impl Default for Pixel {
     fn default() -> Self {
         Self {
-            // Read from material:
-            material_id: "air".to_string(),
-            color: [0; 4],
-            matter_type: PhysicsType::Empty,
+            material: MaterialInstance {
+                id: "air".to_string(),
+                matter_type: PhysicsType::Empty,
+                color: [0; 4],
+                fire_parameters: None,
+            },
 
             ra: 0,
             rb: 0,
             updated_at: 0,
             simulation: SimulationType::Ca,
-
-            temperature: 30,
-            fire_parameters: None,
 
             on_fire: false,
             conductive: false,
@@ -55,17 +48,17 @@ impl Default for Pixel {
 
 lazy_static! {
     pub static ref WALL: Pixel = Pixel {
-        material_id: "wall".to_string(),
-        color: [0; 4],
-        matter_type: PhysicsType::Static,
-
+        material: MaterialInstance {
+            id: "wall".to_string(),
+            color: [0; 4],
+            matter_type: PhysicsType::Static,
+            fire_parameters: None,
+        },    
+        
         ra: 0,
         rb: 0,
         updated_at: 0,
         simulation: SimulationType::Ca,
-
-        temperature: 30,
-        fire_parameters: None,
 
         on_fire: false,
         conductive: false,
@@ -75,12 +68,7 @@ lazy_static! {
 impl Pixel {
     pub fn new(material: &Material, updated_at: u8) -> Self {
         Self {
-            material_id: material.id.clone(),
-            color: material.color,
-            matter_type: material.matter_type,
-            fire_parameters: material.fire_parameters.clone(),
-
-            temperature: 30,
+            material: material.into(),
             ra: rand::thread_rng().gen_range(0..=material.color_offset),
             updated_at,
             ..Default::default()
@@ -88,26 +76,10 @@ impl Pixel {
     }
 
     pub fn get_color(&self) -> [u8; 4] {
-        match self.matter_type {
-            PhysicsType::Empty => [0; 4],
-            PhysicsType::Static | PhysicsType::Powder => [
-                self.color[0].saturating_add(self.ra),
-                self.color[1].saturating_add(self.ra),
-                self.color[2].saturating_add(self.ra),
-                self.color[3].saturating_add(self.ra),
-            ],
-            PhysicsType::Liquid { .. } => [
-                self.color[0].saturating_add(fastrand::u8(0..10)),
-                self.color[1].saturating_add(fastrand::u8(0..10)),
-                self.color[2].saturating_add(fastrand::u8(0..10)),
-                self.color[3].saturating_add(fastrand::u8(0..10)),
-            ],
-            PhysicsType::Gas => [
-                self.color[0].saturating_add(fastrand::u8(0..50)),
-                self.color[1].saturating_add(fastrand::u8(0..50)),
-                self.color[2].saturating_add(fastrand::u8(0..50)),
-                self.color[3].saturating_add(fastrand::u8(0..50)),
-            ],
+        match self.material.matter_type {
+            PhysicsType::Empty | PhysicsType::Static | PhysicsType::Powder => self.material.color,
+            PhysicsType::Liquid { .. } => self.material.color.map(|channel| channel + fastrand::u8(0..10)),
+            PhysicsType::Gas => self.material.color.map(|channel| channel + fastrand::u8(0..50)),
         }
     }
 
@@ -131,15 +103,8 @@ impl Pixel {
     //     pixel
     // }
 
-    pub fn new_with_rb(material: &Material, clock: u8, rb: u8) -> Self {
-        let mut pixel = Self::new(material, clock);
-        pixel.rb = rb;
-
-        pixel
-    }
-
     pub fn is_empty(&self) -> bool {
-        self.matter_type == PhysicsType::Empty
+        self.material.matter_type == PhysicsType::Empty
     }
 
     // pub fn update_cell(mut self, api: &mut ChunkApi, dt: f32, clock: u8) {
