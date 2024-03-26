@@ -1,28 +1,17 @@
 use lazy_static::lazy_static;
-use rand::Rng;
 
-use crate::materials::{FireParameters, Material, MaterialInstance, PhysicsType};
+use super::materials::{MaterialInstance, PhysicsType};
 
 #[derive(Debug, Clone)]
 pub struct Pixel {
     pub material: MaterialInstance,
 
-    // Created automatically
     pub ra: u8,
     pub rb: u8,
     pub updated_at: u8,
-    pub simulation: SimulationType,
 
     pub on_fire: bool,
     pub conductive: bool,
-}
-
-#[derive(Debug, Default, Clone)]
-pub enum SimulationType {
-    #[default]
-    Ca,
-    RigidBody(usize, usize),
-    Displaced(f32, f32),
 }
 
 impl Default for Pixel {
@@ -30,7 +19,7 @@ impl Default for Pixel {
         Self {
             material: MaterialInstance {
                 id: "air".to_string(),
-                matter_type: PhysicsType::Empty,
+                physics_type: PhysicsType::Air,
                 color: [0; 4],
                 fire_parameters: None,
             },
@@ -38,8 +27,6 @@ impl Default for Pixel {
             ra: 0,
             rb: 0,
             updated_at: 0,
-            simulation: SimulationType::Ca,
-
             on_fire: false,
             conductive: false,
         }
@@ -51,14 +38,14 @@ lazy_static! {
         material: MaterialInstance {
             id: "wall".to_string(),
             color: [0; 4],
-            matter_type: PhysicsType::Static,
+            physics_type: PhysicsType::Static,
             fire_parameters: None,
-        },    
-        
+        },
+
         ra: 0,
         rb: 0,
         updated_at: 0,
-        simulation: SimulationType::Ca,
+        // simulation: SimulationType::Ca,
 
         on_fire: false,
         conductive: false,
@@ -66,20 +53,29 @@ lazy_static! {
 }
 
 impl Pixel {
-    pub fn new(material: &Material, updated_at: u8) -> Self {
+    pub fn new(material: MaterialInstance, updated_at: u8) -> Self {
         Self {
-            material: material.into(),
-            ra: rand::thread_rng().gen_range(0..=material.color_offset),
+            material: material.clone(),
             updated_at,
             ..Default::default()
         }
     }
 
     pub fn get_color(&self) -> [u8; 4] {
-        match self.material.matter_type {
-            PhysicsType::Empty | PhysicsType::Static | PhysicsType::Powder => self.material.color,
-            PhysicsType::Liquid { .. } => self.material.color.map(|channel| channel + fastrand::u8(0..10)),
-            PhysicsType::Gas => self.material.color.map(|channel| channel + fastrand::u8(0..50)),
+        match self.material.physics_type {
+            PhysicsType::Air
+            | PhysicsType::Static
+            | PhysicsType::Powder
+            | PhysicsType::Rigidbody => self.material.color,
+            PhysicsType::Liquid { .. } => self
+                .material
+                .color
+                .map(|channel| channel + fastrand::u8(0..10)),
+            PhysicsType::Gas => self
+                .material
+                .color
+                .map(|channel| channel + fastrand::u8(0..50)),
+            PhysicsType::Actor => [0; 4],
         }
     }
 
@@ -104,7 +100,7 @@ impl Pixel {
     // }
 
     pub fn is_empty(&self) -> bool {
-        self.material.matter_type == PhysicsType::Empty
+        self.material.physics_type == PhysicsType::Air
     }
 
     // pub fn update_cell(mut self, api: &mut ChunkApi, dt: f32, clock: u8) {
@@ -188,4 +184,3 @@ impl Pixel {
     //     }
     // }
 }
-

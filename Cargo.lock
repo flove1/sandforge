@@ -1637,6 +1637,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "contour"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdc42183f9b9c613aef7c6831a7acd6a36c4e997da09985873d02fd03a13af2b"
+dependencies = [
+ "geo-types",
+ "lazy_static",
+ "rustc-hash",
+ "slab",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2239,6 +2251,17 @@ dependencies = [
  "futures-io",
  "parking",
  "pin-project-lite",
+]
+
+[[package]]
+name = "geo-types"
+version = "0.7.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ff16065e5720f376fbced200a5ae0f47ace85fd70b7e54269790281353b6d61"
+dependencies = [
+ "approx",
+ "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -4069,6 +4092,7 @@ dependencies = [
  "cdt",
  "compact_str",
  "concache",
+ "contour",
  "criterion",
  "dashmap",
  "earcutr",

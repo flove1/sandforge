@@ -4,11 +4,11 @@ use bevy::prelude::*;
 use bevy::tasks::Task;
 use bevy_math::{vec2, vec3};
 
-use crate::actor::{update_actors, Actor};
 use crate::animation::{AnimationIndices, AnimationTimer};
 use crate::constants::{CHUNK_SIZE, PLAYER_LAYER};
-use crate::world::ChunkManager;
 use crate::setup;
+
+use super::actor::{update_actors, Actor};
 
 #[derive(Default, Component)]
 pub struct Player {
@@ -90,11 +90,10 @@ pub const TIME_JUMP_PRESSED: f64 = 0.25;
 pub fn update_player(
     input: (Res<Inputs>, EventReader<MouseWheel>),
     mut player: Query<(&mut Actor, &mut Player, &mut AnimationIndices)>,
-    chunk_manager: ResMut<ChunkManager>,
     time: Res<Time>,
 ) {
-    let (mut actor, mut player, mut anim_idxs) = player.single_mut();
-    let (inputs, mut scroll_evr) = input;
+    let (mut actor, mut player, mut _anim_idxs) = player.single_mut();
+    let (inputs, mut _scroll_evr) = input;
 
     // Movement
     let x = inputs.right - inputs.left;

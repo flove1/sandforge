@@ -1,16 +1,26 @@
-use bevy::{ecs::system::{Res, Resource}, gizmos::gizmos::Gizmos, render::color::Color, utils::HashMap};
+use bevy::{
+    ecs::system::{Res, Resource},
+    gizmos::gizmos::Gizmos,
+    render::color::Color,
+    utils::HashMap,
+};
 use bevy_math::{ivec2, IVec2, URect, UVec2, Vec2};
 use itertools::Itertools;
 
 use crate::{constants::CHUNK_SIZE, helpers::modify_local_position};
 
-pub fn dirty_rects_gizmos(
-    mut gizmos: Gizmos,
-    dirty_rects_resource: Res<DirtyRects>,
-) {
-    dirty_rects_resource.current.iter()
+pub fn dirty_rects_gizmos(mut gizmos: Gizmos, dirty_rects_resource: Res<DirtyRects>) {
+    dirty_rects_resource
+        .current
+        .iter()
         .for_each(|(position, rect)| {
-            gizmos.rect_2d(position.as_vec2() + ((rect.center().as_vec2() + Vec2::ONE / 4.0) / CHUNK_SIZE as f32), 0.0, rect.size().as_vec2() / CHUNK_SIZE as f32 , Color::RED);
+            gizmos.rect_2d(
+                position.as_vec2()
+                    + ((rect.center().as_vec2() + Vec2::ONE / 4.0) / CHUNK_SIZE as f32),
+                0.0,
+                rect.size().as_vec2() / CHUNK_SIZE as f32,
+                Color::RED,
+            );
         });
 }
 
@@ -18,7 +28,7 @@ pub fn dirty_rects_gizmos(
 pub struct DirtyRects {
     pub current: HashMap<IVec2, URect>,
     pub new: HashMap<IVec2, URect>,
-    pub render: HashMap<IVec2, URect>
+    pub render: HashMap<IVec2, URect>,
 }
 
 impl DirtyRects {
@@ -27,14 +37,14 @@ impl DirtyRects {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct UpdateMessage {
     pub chunk_position: IVec2,
     pub cell_position: UVec2,
     pub awake_surrouding: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RenderMessage {
     pub chunk_position: IVec2,
     pub cell_position: UVec2,
@@ -52,14 +62,16 @@ pub fn update_dirty_rects(
             chunk_position,
             URect::from_corners(
                 cell_position.clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32 - 1)),
-                cell_position.saturating_add(UVec2::ONE).clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
-            )
+                cell_position
+                    .saturating_add(UVec2::ONE)
+                    .clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
+            ),
         );
     }
 }
 
 pub fn update_dirty_rects_3x3(
-    dirty_rects: &mut HashMap<IVec2, URect>, 
+    dirty_rects: &mut HashMap<IVec2, URect>,
     chunk_position: IVec2,
     cell_position: UVec2,
 ) {
@@ -70,23 +82,28 @@ pub fn update_dirty_rects_3x3(
         dirty_rects.insert(
             chunk_position,
             URect::from_corners(
-                cell_position.saturating_sub(UVec2::ONE).clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32 - 1)),
-                cell_position.saturating_add(UVec2::ONE * 2).clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
-            )
+                cell_position
+                    .saturating_sub(UVec2::ONE)
+                    .clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32 - 1)),
+                cell_position
+                    .saturating_add(UVec2::ONE * 2)
+                    .clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
+            ),
         );
     }
 
     let chunk_offset = ivec2(
-         (cell_position.x == CHUNK_SIZE as u32 - 1) as i32 - (cell_position.x == 0) as i32,
-         (cell_position.y == CHUNK_SIZE as u32 - 1) as i32 - (cell_position.y == 0) as i32,
+        (cell_position.x == CHUNK_SIZE as u32 - 1) as i32 - (cell_position.x == 0) as i32,
+        (cell_position.y == CHUNK_SIZE as u32 - 1) as i32 - (cell_position.y == 0) as i32,
     );
 
     match chunk_offset {
-        IVec2::ZERO => {},
+        IVec2::ZERO => {}
         IVec2::ONE | IVec2::NEG_ONE => {
             for (x, y) in (-1..=1).cartesian_product(-1..=1) {
-                let (chunk_position, cell_position) = modify_local_position(chunk_position, cell_position, ivec2(x, y));
-    
+                let (chunk_position, cell_position) =
+                    modify_local_position(chunk_position, cell_position, ivec2(x, y));
+
                 if let Some(rect) = dirty_rects.get_mut(&chunk_position) {
                     extend_rect_if_needed(rect, &cell_position)
                 } else {
@@ -94,14 +111,17 @@ pub fn update_dirty_rects_3x3(
                         chunk_position,
                         URect::from_corners(
                             cell_position.clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32 - 1)),
-                            cell_position.saturating_add(UVec2::ONE * 2).clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
-                        )
+                            cell_position
+                                .saturating_add(UVec2::ONE * 2)
+                                .clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
+                        ),
                     );
                 }
             }
-        },
-        IVec2{x, y} => {
-            let (chunk_position, cell_position) = modify_local_position(chunk_position, cell_position, ivec2(x, y));
+        }
+        IVec2 { x, y } => {
+            let (chunk_position, cell_position) =
+                modify_local_position(chunk_position, cell_position, ivec2(x, y));
 
             if let Some(rect) = dirty_rects.get_mut(&chunk_position) {
                 extend_rect_if_needed(rect, &cell_position)
@@ -110,8 +130,10 @@ pub fn update_dirty_rects_3x3(
                     chunk_position,
                     URect::from_corners(
                         cell_position.clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32 - 1)),
-                        cell_position.saturating_add(UVec2::ONE * 2).clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
-                    )
+                        cell_position
+                            .saturating_add(UVec2::ONE * 2)
+                            .clamp(UVec2::ZERO, UVec2::ONE * (CHUNK_SIZE as u32)),
+                    ),
                 );
             }
         }

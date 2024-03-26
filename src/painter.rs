@@ -1,6 +1,6 @@
 use bevy::ecs::{system::Resource, world::{FromWorld, World}};
 
-use crate::materials::Material;
+use crate::simulation::materials::Material;
 
 #[derive(Resource)]
 pub struct BrushRes{
@@ -14,10 +14,7 @@ pub struct BrushRes{
 pub enum BrushType {
     Cell,
     Object,
-    StaticObject,
     Particle(u8),
-    Force(f32),
-    ObjectEraser,
 }
 
 #[derive(Clone, PartialEq)]

@@ -1,4 +1,4 @@
-use bevy_math::{ivec2, IVec2, UVec2};
+use bevy_math::{IVec2, UVec2};
 
 use crate::constants::CHUNK_SIZE;
 
@@ -42,22 +42,16 @@ pub fn line_from_pixels<F: FnMut(i32, i32) -> bool>(
     false
 }
 
-pub fn get_cell_index(x: i32, y: i32) -> usize {
-    (y * CHUNK_SIZE + x) as usize
-}
-
 pub fn global_to_local(position: IVec2) -> (IVec2, UVec2) {
     let chunk_size = IVec2::ONE * CHUNK_SIZE;
     let chunk_position = position.div_euclid(chunk_size);
     let cell_position = position.rem_euclid(chunk_size).as_uvec2();
 
-    return (chunk_position, cell_position);
+    (chunk_position, cell_position)
 }
 
 pub fn local_to_global(chunk_position: IVec2, cell_position: UVec2) -> IVec2 {
-    let global_position = chunk_position * CHUNK_SIZE + cell_position.as_ivec2();
-
-    return global_position;
+    chunk_position * CHUNK_SIZE + cell_position.as_ivec2()
 }
 
 pub fn modify_local_position(
@@ -68,5 +62,5 @@ pub fn modify_local_position(
     let mut global_position = local_to_global(chunk_position, cell_position);
     global_position += change;
 
-    return global_to_local(global_position);
+    global_to_local(global_position)
 }

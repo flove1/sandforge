@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_math::vec2;
 
-use crate::player::Player;
+use crate::actors::player::Player;
 
 /// A resource for the state of the in-game smooth camera.
 #[derive(Resource)]
