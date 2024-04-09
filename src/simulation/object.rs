@@ -1,18 +1,14 @@
 use std::f32::consts::{FRAC_PI_2, PI};
 
-use bevy::prelude::*;
+use bevy::{prelude::*, utils::HashMap};
+use bevy_math::ivec2;
 use bevy_rapier2d::prelude::*;
 use itertools::Itertools;
 
 use crate::constants::{CHUNK_SIZE, COLLIDER_PRECISION};
 
 use super::{
-    chunk_groups::ChunkGroupCustom,
-    dirty_rect::{update_dirty_rects, DirtyRects},
-    materials::{Material, MaterialInstance, PhysicsType},
-    mesh::douglas_peucker,
-    pixel::Pixel,
-    world::ChunkManager,
+    chunk::ChunkState, chunk_groups::ChunkGroupCustom, chunk_manager::ChunkManager, dirty_rect::{update_dirty_rects, DirtyRects}, materials::{Material, MaterialInstance, PhysicsType}, mesh::douglas_peucker, pixel::Pixel
 };
 
 #[derive(Component)]
@@ -144,7 +140,7 @@ fn build_chunk_group(
     position: Vec2,
     object: &Object,
     chunk_manager: &mut ChunkManager,
-) -> ChunkGroupCustom {
+) -> (IVec2, ChunkGroupCustom<Pixel>) {
     let size = f32::max(object.width as f32, object.height as f32);
 
     let chunk_group_position = Vec2::new(position.x - size / 2.0, position.y - size / 2.0)
@@ -160,9 +156,8 @@ fn build_chunk_group(
     let chunk_group_size = (max_position - chunk_group_position + IVec2::ONE).max_element() as u8;
 
     let mut chunk_group = ChunkGroupCustom {
-        chunks: vec![None; chunk_group_size.pow(2) as usize],
-        size: chunk_group_size,
-        position: chunk_group_position,
+        chunks: HashMap::new(),
+        size: CHUNK_SIZE,
     };
 
     for (x, y) in (0..chunk_group_size as i32).cartesian_product(0..chunk_group_size as i32) {
@@ -170,12 +165,14 @@ fn build_chunk_group(
             .chunks
             .get_mut(&(IVec2::new(x, y) + chunk_group_position))
         {
-            chunk_group.chunks[(y * chunk_group_size as i32 + x) as usize] =
-                Some(chunk.cells.as_mut_ptr());
+            if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
+                continue;
+            }
+            chunk_group.chunks.insert(ivec2(x, y), chunk.pixels.as_mut_ptr());
         }
     }
 
-    chunk_group
+    (chunk_group_position, chunk_group)
 }
 
 pub fn fill_objects(
@@ -200,7 +197,7 @@ pub fn fill_objects(
             angle_modifier = -1.0;
         }
 
-        let mut chunk_group = build_chunk_group(position, object, &mut chunk_manager);
+        let (chunk_group_position, mut chunk_group) = build_chunk_group(position, object, &mut chunk_manager);
 
         for (index, object_pixel) in object
             .pixels
@@ -216,7 +213,7 @@ pub fn fill_objects(
             pixel_position = transpose_point(pixel_position, angle);
             let floored_position = (pixel_position + position).floor().as_ivec2();
 
-            if let Some(pixel) = chunk_group.get_mut(floored_position) {
+            if let Some(pixel) = chunk_group.get_mut(floored_position - chunk_group_position * CHUNK_SIZE) {
                 if pixel.is_empty() {
                     *pixel = unsafe { object_pixel.as_ref().unwrap_unchecked().clone() };
 
@@ -264,7 +261,7 @@ pub fn unfill_objects(
             angle_modifier = -1.0;
         }
 
-        let mut chunk_group = build_chunk_group(position, object, &mut chunk_manager);
+        let (chunk_group_position, mut chunk_group) = build_chunk_group(position, object, &mut chunk_manager);
 
         for (index, _) in object
             .pixels
@@ -280,7 +277,7 @@ pub fn unfill_objects(
             pixel_position = transpose_point(pixel_position, angle);
             let floored_position = (pixel_position + position).floor().as_ivec2();
 
-            if let Some(pixel) = chunk_group.get_mut(floored_position) {
+            if let Some(pixel) = chunk_group.get_mut(floored_position - chunk_group_position * CHUNK_SIZE) {
                 if pixel.material.physics_type == PhysicsType::Rigidbody {
                     *pixel = Pixel::new(Material::default().into(), clock);
 
@@ -294,21 +291,5 @@ pub fn unfill_objects(
                 }
             }
         }
-    }
-}
-
-pub struct ObjectPlugin;
-
-impl Plugin for ObjectPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            (
-                unfill_objects.before(PhysicsSet::SyncBackend),
-                fill_objects
-                    .after(PhysicsSet::Writeback)
-                    .after(unfill_objects),
-            ),
-        );
     }
 }

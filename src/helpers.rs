@@ -1,9 +1,15 @@
 use bevy_math::{IVec2, UVec2};
 
+macro_rules! to_index {
+    ($point:expr, $width:expr) => {
+        ($point.y * $width + $point.x) as usize
+    };
+}
+
+pub(crate) use to_index;
+
 use crate::constants::CHUNK_SIZE;
 
-/// 1
-/// 
 /// * `operation` - a function that is called at each point in a line and returns a bool indicating whether the function should continue
 /// 
 /// Returns `true` if function wasn't finished due to `operation` condition

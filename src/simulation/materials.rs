@@ -31,9 +31,9 @@ impl From<Material> for MaterialInstance {
         let channel_offset = fastrand::u8(0..=val.color_offset);
 
         let color_offseted = [
-            val.color[0] + channel_offset,
-            val.color[1] + channel_offset,
-            val.color[2] + channel_offset,
+            val.color[0].saturating_add(channel_offset),
+            val.color[1].saturating_add(channel_offset),
+            val.color[2].saturating_add(channel_offset),
             val.color[3],
         ];
 

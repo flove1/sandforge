@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_math::vec2;
 
-use crate::actors::player::Player;
+use crate::{actors::player::Player, state::AppState};
 
 /// A resource for the state of the in-game smooth camera.
 #[derive(Resource)]
@@ -167,8 +167,11 @@ pub struct Zoom(pub f32);
 pub struct CameraPlugin;
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (update_camera, on_resize_system))
-            .insert_resource(Zoom(1.0))
-            .insert_resource(TrackingCamera::default());
+        app.add_systems(
+            Update,
+            (update_camera, on_resize_system).run_if(in_state(AppState::InGame)),
+        )
+        .insert_resource(Zoom(1.0))
+        .insert_resource(TrackingCamera::default());
     }
 }

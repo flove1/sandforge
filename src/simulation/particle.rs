@@ -1,7 +1,7 @@
 use async_channel::Sender;
 use bevy::{
     prelude::*,
-    render::{mesh::PrimitiveTopology, render_asset::RenderAssetUsages},
+    render::{mesh::PrimitiveTopology, render_asset::RenderAssetUsages, view::NoFrustumCulling},
     sprite::Mesh2dHandle,
     tasks::ComputeTaskPool,
     utils::HashMap,
@@ -14,13 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::constants::{CHUNK_SIZE, PARTICLE_LAYER};
 
 use super::{
-    chunk_groups::ChunkGroup3x3,
-    dirty_rect::{
+    chunk::ChunkState, chunk_groups::ChunkGroup3x3, chunk_manager::ChunkManager, dirty_rect::{
         update_dirty_rects, update_dirty_rects_3x3, DirtyRects, RenderMessage, UpdateMessage,
-    },
-    materials::{MaterialInstance, PhysicsType},
-    pixel::Pixel,
-    world::ChunkManager,
+    }, materials::{MaterialInstance, PhysicsType}, pixel::Pixel
 };
 
 #[derive(Component, Default)]
@@ -156,7 +152,7 @@ impl Particle {
 
 pub struct ParticleApi<'a> {
     pub(super) chunk_position: IVec2,
-    pub(super) chunk_group: &'a mut ChunkGroup3x3,
+    pub(super) chunk_group: &'a mut ChunkGroup3x3<Pixel>,
     pub(super) update_send: &'a Sender<UpdateMessage>,
     pub(super) render_send: &'a Sender<RenderMessage>,
 }
@@ -297,21 +293,7 @@ impl<'a> ParticleApi<'a> {
         succeeded
     }
 }
-
-pub struct ParticlePlugin;
-
-impl Plugin for ParticlePlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Startup, particle_setup)
-            .add_systems(
-                Update,
-                particles_update
-                    .run_if(|chunk_manager: Res<ChunkManager>| chunk_manager.clock() % 4 == 0),
-            )
-            .add_systems(PostUpdate, update_partcile_meshes);
-    }
-}
-
+//
 pub fn particle_setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     let mut rect = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -335,12 +317,12 @@ pub fn particle_setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) 
         Name::new("Particle instances"),
         Mesh2dHandle(meshes.add(rect)),
         SpatialBundle::INHERITED_IDENTITY,
-        // NoFrustumCulling,
+        NoFrustumCulling,
         ParticleInstances,
     ));
 }
 
-fn particles_update(
+pub fn particles_update(
     mut commands: Commands,
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects_resource: ResMut<DirtyRects>,
@@ -417,24 +399,22 @@ fn particles_update(
             ComputeTaskPool::get().scope(|scope| {
                 map.into_iter()
                     .filter_map(|(position, particles)| {
+                        let center_ptr = if let Some(chunk) = chunk_manager.chunks.get_mut(&position) {
+                            chunk.pixels.as_mut_ptr()
+                        } else {
+                            return None;
+                        }; 
+
                         let mut chunk_group = ChunkGroup3x3 {
-                            center: None,
+                            size: CHUNK_SIZE,
+                            center: center_ptr,
                             sides: [None, None, None, None],
                             corners: [None, None, None, None],
                         };
 
                         for (dx, dy) in (-1..=1).cartesian_product(-1..=1) {
                             match (dx, dy) {
-                                (0, 0) => {
-                                    let Some(chunk) = chunk_manager.chunks.get_mut(&position)
-                                    else {
-                                        return None;
-                                    };
-
-                                    let start_ptr = chunk.cells.as_mut_ptr();
-
-                                    chunk_group.center = Some(start_ptr);
-                                }
+                                (0, 0) => continue,
                                 // UP and DOWN
                                 (0, -1) | (0, 1) => {
                                     let Some(chunk) =
@@ -443,7 +423,11 @@ fn particles_update(
                                         continue;
                                     };
 
-                                    let start_ptr = chunk.cells.as_mut_ptr();
+                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
+                                        continue;
+                                    }
+
+                                    let start_ptr = chunk.pixels.as_mut_ptr();
 
                                     chunk_group.sides[if dy == -1 { 0 } else { 3 }] =
                                         Some(start_ptr);
@@ -456,7 +440,11 @@ fn particles_update(
                                         continue;
                                     };
 
-                                    let start_ptr = chunk.cells.as_mut_ptr();
+                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
+                                        continue;
+                                    }
+
+                                    let start_ptr = chunk.pixels.as_mut_ptr();
 
                                     chunk_group.sides[if dx == -1 { 1 } else { 2 }] =
                                         Some(start_ptr);
@@ -469,7 +457,11 @@ fn particles_update(
                                         continue;
                                     };
 
-                                    let start_ptr = chunk.cells.as_mut_ptr();
+                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
+                                        continue;
+                                    }
+
+                                    let start_ptr = chunk.pixels.as_mut_ptr();
 
                                     let corner_idx = match (dx, dy) {
                                         (1, 1) => 3,

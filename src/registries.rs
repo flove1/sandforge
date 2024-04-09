@@ -4,12 +4,14 @@ use bevy::{
 };
 use serde_yaml::Value;
 
-use crate::simulation::materials::{FireParameters, Material, PhysicsType};
+use crate::{generation::biome::Biome, simulation::materials::{FireParameters, Material, PhysicsType}};
 
+// TODO: load as asset
 #[derive(Resource)]
 pub struct Registries {
     pub reactive_materials: HashSet<String>,
     pub materials: Registry<Material>, 
+    pub biomes: Registry<Biome>
 }
 
 impl FromWorld for Registries {
@@ -88,6 +90,7 @@ impl FromWorld for Registries {
         Self {
             materials,
             reactive_materials,
+            biomes: Registry::default()
         }
     }
 }

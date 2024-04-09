@@ -5,8 +5,10 @@ use bevy::tasks::Task;
 use bevy_math::{vec2, vec3};
 
 use crate::animation::{AnimationIndices, AnimationTimer};
+use crate::assets::PlayerSpriteAssets;
 use crate::constants::{CHUNK_SIZE, PLAYER_LAYER};
-use crate::setup;
+use crate::simulation::chunk_manager::manager_setup;
+use crate::state::AppState;
 
 use super::actor::{update_actors, Actor};
 
@@ -31,56 +33,47 @@ pub struct ToolFront;
 
 pub fn player_setup(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    player_sprites: Res<PlayerSpriteAssets>,
 ) {
     let player_actor = Actor {
-        // height: 17,
-        // width: 8,
         position: vec2(0., 0.),
         velocity: vec2(0., 0.),
-        hitbox: Rect::from_corners(Vec2::ZERO, Vec2::new(8., 17.)),
+        hitbox: Rect::from_corners(Vec2::ZERO, Vec2::new(6., 15.)),
         on_ground: false,
     };
 
-    let texture_handle = asset_server.load("player/idle.png");
-    let texture_atlas_layout = texture_atlas_layouts.add(TextureAtlasLayout::from_grid(Vec2::new(64.0, 64.0), 8, 1, None, None));
-
+    let texture_atlas_layout = texture_atlas_layouts.add(TextureAtlasLayout::from_grid(
+        Vec2::new(64.0, 64.0),
+        8,
+        1,
+        None,
+        None,
+    ));
     let animation_indices = AnimationIndices { first: 0, last: 7 };
-    // commands.spawn((
-    //     SpriteSheetBundle {
-    //         texture_atlas: texture_atlas_handle,
-    //         sprite: TextureAtlasSprite::new(animation_indices.first),
-    //         transform: Transform::from_scale(Vec3::splat(1.0 / CHUNK_SIZE as f32)),
-    //         ..default()
-    //     },
-    //     animation_indices,
-    //     AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
-    // ));
 
-    commands
-        .spawn((
-            player_actor,
-            Player::default(),
-            SpriteSheetBundle {
-                texture: texture_handle,
-                atlas: TextureAtlas {
-                    layout: texture_atlas_layout, 
-                    index: animation_indices.first
-                },
-                transform: Transform{
-                    translation: vec3(0.0, 0.0, PLAYER_LAYER),
-                    scale: (Vec3::splat(1.0 / CHUNK_SIZE as f32)),
-                    ..default()
-                },
-                ..default()
+    commands.spawn((
+        player_actor,
+        Player::default(),
+        SpriteSheetBundle {
+            texture: player_sprites.idle.clone(),
+            atlas: TextureAtlas {
+                layout: texture_atlas_layout,
+                index: animation_indices.first,
             },
-            animation_indices,
-            AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
-        ));
+            transform: Transform {
+                translation: vec3(0.0, 0.0, PLAYER_LAYER),
+                scale: (Vec3::splat(1.0 / CHUNK_SIZE as f32)),
+                ..Default::default()
+            },
+            sprite: Sprite { anchor: bevy::sprite::Anchor::Center, ..Default::default() },
+            ..Default::default()
+        },
+        animation_indices,
+        AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
+    ));
 }
 
-pub const TERM_VEL: i32 = -2;
 pub const RUN_SPEED: f32 = 2.;
 pub const JUMP_MAG: f32 = 2.;
 pub const PRESSED_JUMP_MAG: f32 = 0.2;
@@ -123,7 +116,6 @@ pub fn update_player(
         }
     }
 
-
     // (anim_idxs.first, anim_idxs.last) = match player.state {
     //     PlayerState::Idle => (0, 1),
     //     PlayerState::Walking => (8, 11),
@@ -146,13 +138,11 @@ pub fn update_player_sprite(mut query: Query<(&mut Transform, &Actor), With<Play
     let left_bottom_vec = vec2(actor.position.x, actor.position.y);
 
     let size = actor.hitbox.size().as_ivec2();
-
     let center_vec = left_bottom_vec + vec2(size.x as f32 / 2.0, size.y as f32 / 2.0);
 
     if actor.velocity.x < -0.001 {
         transform.rotation = Quat::from_rotation_y(180f32.to_radians());
-    }
-    else if actor.velocity.x > 0.001 {
+    } else if actor.velocity.x > 0.001 {
         transform.rotation = Quat::from_rotation_y(0f32.to_radians());
     }
 
@@ -162,10 +152,7 @@ pub fn update_player_sprite(mut query: Query<(&mut Transform, &Actor), With<Play
 #[derive(Resource, Default)]
 pub struct SavingTask(pub Option<Task<()>>);
 
-pub fn get_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut inputs: ResMut<Inputs>,
-) {
+pub fn get_input(keys: Res<ButtonInput<KeyCode>>, mut inputs: ResMut<Inputs>) {
     //Jump
     if keys.just_pressed(KeyCode::Space) {
         inputs.jump_just_pressed = true;
@@ -205,11 +192,12 @@ impl Plugin for PlayerPlugin {
                 update_player.before(update_actors),
                 update_player_sprite.after(update_actors),
                 clear_input.after(update_player),
-            ),
+            )
+                .run_if(in_state(AppState::InGame)),
         )
-        .add_systems(PreUpdate, get_input)
+        .add_systems(PreUpdate, get_input.run_if(in_state(AppState::InGame)))
         .init_resource::<SavingTask>()
         .init_resource::<Inputs>()
-        .add_systems(PostStartup, player_setup.after(setup));
+        .add_systems(OnExit(AppState::LoadingScreen), player_setup.after(manager_setup));
     }
 }

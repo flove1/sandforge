@@ -1,15 +1,21 @@
-pub mod actors;
+mod actors;
 mod animation;
+mod assets;
 mod camera;
 mod constants;
+mod generation;
 mod gui;
 mod helpers;
 mod painter;
 mod registries;
-pub mod simulation;
+mod simulation;
+mod state;
 
 use actors::{actor::ActorsPlugin, player::PlayerPlugin};
 use ahash::HashMap;
+use assets::{
+    BiomeMapAssets, FontAsset, FontAssetLoader, FontAssets, PlayerSpriteAssets, TileAssets,
+};
 use bevy::{
     diagnostic::FrameTimeDiagnosticsPlugin,
     input::mouse::MouseMotion,
@@ -19,6 +25,9 @@ use bevy::{
     window::PrimaryWindow,
     winit::{UpdateMode, WinitSettings},
 };
+use bevy_asset_loader::loading_state::{
+    config::ConfigureLoadingState, LoadingState, LoadingStateAppExt,
+};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_math::ivec2;
@@ -26,7 +35,6 @@ use bevy_math::ivec2;
 use bevy_rapier2d::{
     dynamics::RigidBody,
     plugin::{NoUserData, RapierConfiguration, RapierPhysicsPlugin},
-    render::RapierDebugRenderPlugin,
 };
 use camera::CameraPlugin;
 use constants::{CHUNK_SIZE, PARTICLE_LAYER};
@@ -36,35 +44,16 @@ use gui::{
 use helpers::line_from_pixels;
 use painter::{BrushRes, BrushType};
 use simulation::{
+    chunk_manager::ChunkManager,
     dirty_rect::{update_dirty_rects, DirtyRects},
     materials::MaterialInstance,
     object::Object,
     particle::{Particle, ParticleInstances},
-    world::{ChunkManager, ChunkManagerPlugin},
+    SimulationPlugin,
 };
+use state::AppState;
 
 fn main() {
-    // pretty_env_logger::formatted_builder()
-    //     .filter_level(log::LevelFilter::Error)
-    //     .format_target(false)
-    //     .format_timestamp(None)
-    //     .init();
-
-    // process_elements_config();
-    // let mut watcher = notify::recommended_watcher(|res| {
-    //     match res {
-    //         Ok(_) => {
-    //             println!("elements config updated detected");
-    //             process_elements_config();
-    //         },
-    //         Err(e) => println!("watch error: {:?}", e),
-    //     }
-    // }).unwrap();
-
-    // if let Err(e) = watcher.watch(Path::new("elements.yaml"), RecursiveMode::NonRecursive) {
-    //     panic!("error while loading elements file: {e}");
-    // }
-
     App::new()
         .add_plugins(
             DefaultPlugins
@@ -80,7 +69,7 @@ fn main() {
                 })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: "⚙️ Sandforge ⚙️".into(),
+                        title: "Sandforge".into(),
                         ..default()
                     }),
                     ..default()
@@ -94,15 +83,20 @@ fn main() {
             RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(CHUNK_SIZE as f32)
                 .in_fixed_schedule(),
         )
-        .add_plugins(RapierDebugRenderPlugin::default())
-        .add_plugins(ChunkManagerPlugin)
+        .add_systems(Startup, setup_camera)
+        // .add_plugins(RapierDebugRenderPlugin::default())
+        .add_plugins(SimulationPlugin)
         .add_plugins(EguiPlugin)
         .add_plugins(FrameTimeDiagnosticsPlugin)
         .add_plugins((ActorsPlugin, PlayerPlugin, animation::AnimationPlugin))
         .add_plugins(CameraPlugin)
         .add_plugins(WorldInspectorPlugin::new())
-        .add_systems(Startup, setup)
-        .add_systems(PreUpdate, mouse_system.run_if(has_window))
+        .add_systems(
+            PreUpdate,
+            mouse_system
+                .run_if(has_window)
+                .run_if(in_state(AppState::InGame)),
+        )
         .add_systems(
             Update,
             (
@@ -111,7 +105,8 @@ fn main() {
                 ui_selected_cell_system,
                 ui_painter_system,
             )
-                .run_if(egui_has_primary_context),
+                .run_if(egui_has_primary_context)
+                .run_if(in_state(AppState::InGame)),
         )
         .insert_resource(RapierConfiguration {
             gravity: Vec2::new(0.0, -0.98),
@@ -121,45 +116,66 @@ fn main() {
         .init_resource::<BrushRes>()
         .init_resource::<MouseState>()
         .init_resource::<PainterObjectBuffer>()
+        .init_state::<AppState>()
+        .init_asset::<FontAsset>()
+        .init_asset_loader::<FontAssetLoader>()
+        .add_loading_state(
+            LoadingState::new(AppState::LoadingScreen)
+                .load_collection::<FontAssets>()
+                .load_collection::<BiomeMapAssets>()
+                .load_collection::<PlayerSpriteAssets>()
+                .load_collection::<TileAssets>()
+                .continue_to_state(AppState::InGame),
+        )
         .register_type::<Particle>()
         .register_type::<MaterialInstance>()
         .run();
 }
 
-fn setup(mut commands: Commands, mut time: ResMut<Time<Fixed>>, mut contexts: EguiContexts) {
+fn setup_camera(mut commands: Commands, mut time: ResMut<Time<Fixed>>) {
     time.set_timestep_hz(58.);
 
-    let mut fonts = egui::FontDefinitions::default();
+    let mut camera = Camera2dBundle::default();
+    camera.camera.hdr = true;
+    camera.projection.scale = 0.25 / CHUNK_SIZE as f32;
 
-    fonts.font_data.insert(
-        "pixel font".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/PeaberryBase.ttf")),
-    );
+    commands.spawn(camera);
+}
 
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, "pixel font".to_owned());
-
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .push("pixel font".to_owned());
-
-    contexts.ctx_mut().set_fonts(fonts);
+fn setup_egui(mut contexts: EguiContexts) {
     contexts.ctx_mut().style_mut(|style| {
         style.visuals.override_text_color = Some(egui::Color32::WHITE);
         style.visuals.window_fill = egui::Color32::from_rgba_unmultiplied(27, 27, 27, 200);
         style.interaction.selectable_labels = false;
     });
+}
 
-    let mut camera = Camera2dBundle::default();
-    camera.camera.hdr = true;
-    camera.projection.scale = 0.4 / CHUNK_SIZE as f32;
+fn setup_egui_fonts(
+    mut contexts: EguiContexts,
+    fonts: Res<FontAssets>,
+    fonts_assets: Res<Assets<FontAsset>>,
+) {
+    let font = fonts_assets.get(fonts.ui.clone()).unwrap();
+    let mut fonts_definitions = egui::FontDefinitions::default();
 
-    commands.spawn(camera);
+    fonts_definitions.font_data.insert(
+        "pixel font".to_owned(),
+        egui::FontData::from_owned(font.get_bytes().clone()),
+    );
+
+    fonts_definitions
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "pixel font".to_owned());
+
+    fonts_definitions
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push("pixel font".to_owned());
+
+    contexts.ctx_mut().set_fonts(fonts_definitions);
 }
 
 #[derive(Default, Resource, PartialEq, Eq)]

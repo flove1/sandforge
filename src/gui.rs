@@ -13,7 +13,7 @@ use crate::{
     registries::Registries,
     simulation::{
         materials::{Material, PhysicsType},
-        world::ChunkManager,
+        chunk_manager::ChunkManager,
     },
     PainterObjectBuffer,
 };
@@ -130,6 +130,11 @@ pub fn ui_selected_cell_system(
             ui.colored_label(
                 egui::Color32::WHITE,
                 format!("Position: {}, {}", world_position.x, world_position.y),
+            );
+
+            ui.colored_label(
+                egui::Color32::WHITE,
+                format!("Chunk position: {}, {}", world_position.x.div_euclid(CHUNK_SIZE), world_position.y.div_euclid(CHUNK_SIZE)),
             );
 
             let Some(pixel) = chunk_manager.get(world_position).ok() else {
@@ -377,21 +382,6 @@ pub fn ui_painter_system(
                     ui.selectable_value(&mut brush.brush_type, BrushType::Cell, "Cell");
                     ui.selectable_value(&mut brush.brush_type, BrushType::Particle(1), "Particle");
                     ui.selectable_value(&mut brush.brush_type, BrushType::Object, "Object");
-                    // ui.selectable_value(
-                    //     &mut brush.brush_type,
-                    //     BrushType::StaticObject,
-                    //     "Static Object",
-                    // );
-                    // ui.selectable_value(
-                    //     &mut brush.brush_type,
-                    //     BrushType::Force(0.25),
-                    //     "Force",
-                    // );
-                    // ui.selectable_value(
-                    //     &mut brush.brush_type,
-                    //     BrushType::ObjectEraser,
-                    //     "Object eraser",
-                    // );
                 });
 
             if let BrushType::Particle(size) = &mut brush.brush_type {

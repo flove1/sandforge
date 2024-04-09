@@ -3,15 +3,13 @@ use bevy::{
     asset::Handle,
     ecs::entity::Entity,
     render::{
-        render_asset::RenderAssetUsages,
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
-        texture::Image,
-    },
+        render_asset::RenderAssetUsages, render_resource::{Extent3d, TextureDimension, TextureFormat}, texture::Image
+    }, utils::HashMap,
 };
 use bevy_math::{ivec2, IVec2, URect, Vec2};
 
 use bevy_rapier2d::prelude::*;
-use crate::constants::{CHUNK_CELLS, CHUNK_SIZE, COLLIDER_PRECISION};
+use crate::{constants::{CHUNK_CELLS, CHUNK_SIZE, COLLIDER_PRECISION}, generation::tiles::ConstraintType};
 
 use super::{
     chunk_groups::ChunkGroup3x3,
@@ -25,30 +23,44 @@ impl std::ops::Index<IVec2> for ChunkData {
     type Output = Pixel;
     #[track_caller]
     fn index(&self, position: IVec2) -> &Self::Output {
-        &self.cells[(position.y * CHUNK_SIZE + position.x) as usize]
+        &self.pixels[(position.y * CHUNK_SIZE + position.x) as usize]
     }
 }
 
 impl std::ops::IndexMut<IVec2> for ChunkData {
     #[track_caller]
     fn index_mut(&mut self, position: IVec2) -> &mut Self::Output {
-        &mut self.cells[(position.y * CHUNK_SIZE + position.x) as usize]
+        &mut self.pixels[(position.y * CHUNK_SIZE + position.x) as usize]
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum ChunkState {
+    Initialized,
+    Reading,
+    Processing,
+    Populating,
+    Active,
+    Sleeping
 }
 
 #[derive(Clone)]
 pub struct ChunkData {
     pub entity: Option<Entity>,
-    pub cells: Vec<Pixel>,
+    pub pixels: Vec<Pixel>,
     pub texture: Handle<Image>,
+    pub layout: Vec<f32>,
+    pub state: ChunkState
 }
 
 impl Default for ChunkData {
     fn default() -> Self {
         Self {
             entity: None,
-            cells: vec![Pixel::default(); CHUNK_CELLS as usize],
+            pixels: vec![Pixel::default(); CHUNK_CELLS as usize],
             texture: Handle::default(),
+            layout: vec![],
+            state: ChunkState::Initialized,
         }
     }
 }
@@ -57,9 +69,11 @@ impl ChunkData {
     pub fn new(entity: Option<Entity>) -> ChunkData {
         let cells = vec![Pixel::default(); CHUNK_CELLS as usize];
         ChunkData {
-            cells,
-            texture: Handle::default(),
             entity,
+            pixels: cells,
+            texture: Handle::default(),
+            layout: vec![],
+            state: ChunkState::Initialized,
         }
     }
 
@@ -86,7 +100,7 @@ impl ChunkData {
             [0xEE, 0xDC, 0x00, 0xFF],
         ];
 
-        self.cells.iter().enumerate().for_each(|(index, pixel)| {
+        self.pixels.iter().enumerate().for_each(|(index, pixel)| {
             image.data[index * 4..(index + 1) * 4].copy_from_slice(&pixel.material.color);
             if pixel.on_fire {
                 image.data[index * 4..(index + 1) * 4].copy_from_slice(
@@ -112,7 +126,7 @@ impl ChunkData {
 
     pub fn build_colliders(&self) -> Result<Vec<Collider>, String> {
         let values = self
-            .cells
+            .pixels
             .iter()
             .map(|pixel| {
                 if pixel.material.physics_type == PhysicsType::Static {
@@ -190,7 +204,7 @@ impl ChunkData {
         for x in rect.min.x..rect.max.x {
             for y in rect.min.y..rect.max.y {
                 let index = (y * CHUNK_SIZE as u32 + x) as usize;
-                let pixel = &self.cells[index];
+                let pixel = &self.pixels[index];
                 if pixel.on_fire {
                     image.data[index * 4..(index + 1) * 4].copy_from_slice(
                         &fire_colors[fastrand::i32(0..fire_colors.len() as i32) as usize],
@@ -218,7 +232,7 @@ impl ChunkData {
 pub struct ChunkApi<'a> {
     pub(super) chunk_position: IVec2,
     pub(super) cell_position: IVec2,
-    pub(super) chunk_group: &'a mut ChunkGroup3x3,
+    pub(super) chunk_group: &'a mut ChunkGroup3x3<Pixel>,
     pub(super) update_send: &'a Sender<UpdateMessage>,
     pub(super) render_send: &'a Sender<RenderMessage>,
     pub(super) clock: u8,
