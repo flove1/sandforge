@@ -12,8 +12,18 @@ pub struct Material {
 
     #[serde(default)]
     pub fire_parameters: Option<FireParameters>,
+
     #[serde(default)]
     pub reactions: Option<HashMap<String, Reaction>>,
+
+    #[serde(default)]
+    pub wang_parameters: Option<WangParameters>
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
+pub struct WangParameters {
+    pub edge_radius: i32,
+    pub noise_percent: f32,
 }
 
 #[derive(Reflect, Debug, Serialize, Deserialize, PartialEq, Clone)]
@@ -68,17 +78,18 @@ impl From<&Material> for MaterialInstance {
 
 #[derive(Reflect, Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct FireParameters {
-    pub fire_temperature: u16,
-    pub ignition_temperature: u16,
+    pub fire_temperature: i32,
+    pub ignition_temperature: i32,
     pub fire_hp: u16,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct Reaction {
     pub probability: f32,
-    pub material: String,
-    pub result_1: String,
-    pub result_2: String,
+    pub input_material_1: String,
+    pub input_material_2: String,
+    pub output_material_1: String,
+    pub output_material_2: String,
 }
 
 #[derive(Reflect, Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
@@ -144,6 +155,7 @@ impl Default for Material {
             color: [0; 4],
             color_offset: 0,
             reactions: None,
+            wang_parameters: None
         }
     }
 }

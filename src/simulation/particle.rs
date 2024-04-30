@@ -14,9 +14,14 @@ use serde::{Deserialize, Serialize};
 use crate::constants::{CHUNK_SIZE, PARTICLE_LAYER};
 
 use super::{
-    chunk::ChunkState, chunk_groups::ChunkGroup3x3, chunk_manager::ChunkManager, dirty_rect::{
+    chunk::ChunkState,
+    chunk_groups::{build_chunk_group, build_chunk_group_mut, ChunkGroupMut},
+    chunk_manager::ChunkManager,
+    dirty_rect::{
         update_dirty_rects, update_dirty_rects_3x3, DirtyRects, RenderMessage, UpdateMessage,
-    }, materials::{MaterialInstance, PhysicsType}, pixel::Pixel
+    },
+    materials::{MaterialInstance, PhysicsType},
+    pixel::Pixel,
 };
 
 #[derive(Component, Default)]
@@ -74,7 +79,7 @@ impl Particle {
         let lx = self.pos.x;
         let ly = self.pos.y;
 
-        self.vel.y -= 0.5;
+        self.vel.y -= 0.2;
 
         let dx = self.vel.x;
         let dy = self.vel.y;
@@ -136,7 +141,7 @@ impl Particle {
                     }
                     _ => {
                         if api
-                            .set(lx as i32, ly as i32, Pixel::new(self.material.clone(), 0))
+                            .set(lx as i32, ly as i32, Pixel::new(self.material.clone()))
                             .is_ok()
                         {
                             return false;
@@ -152,7 +157,7 @@ impl Particle {
 
 pub struct ParticleApi<'a> {
     pub(super) chunk_position: IVec2,
-    pub(super) chunk_group: &'a mut ChunkGroup3x3<Pixel>,
+    pub(super) chunk_group: &'a mut ChunkGroupMut<Pixel>,
     pub(super) update_send: &'a Sender<UpdateMessage>,
     pub(super) render_send: &'a Sender<RenderMessage>,
 }
@@ -214,7 +219,7 @@ impl<'a> ParticleApi<'a> {
         match self.chunk_group.get_mut(cell_position) {
             Some(pixel) => {
                 if condition(pixel.clone()) {
-                    *pixel = Pixel::new(material, 0);
+                    *pixel = Pixel::new(material);
 
                     self.update_send
                         .try_send(UpdateMessage {
@@ -296,19 +301,15 @@ impl<'a> ParticleApi<'a> {
 //
 pub fn particle_setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     let mut rect = Mesh::new(
-        PrimitiveTopology::TriangleList,
+        PrimitiveTopology::TriangleStrip,
         RenderAssetUsages::RENDER_WORLD,
     );
 
     let vertices = vec![
         [0.0, 0.0, PARTICLE_LAYER],
         [1.0 / CHUNK_SIZE as f32, 0.0, PARTICLE_LAYER],
-        [
-            1.0 / CHUNK_SIZE as f32,
-            1.0 / CHUNK_SIZE as f32,
-            PARTICLE_LAYER,
-        ],
         [0.0, 1.0 / CHUNK_SIZE as f32, PARTICLE_LAYER],
+        [1.0 / CHUNK_SIZE as f32, 1.0 / CHUNK_SIZE as f32, PARTICLE_LAYER],
     ];
 
     rect.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
@@ -399,87 +400,8 @@ pub fn particles_update(
             ComputeTaskPool::get().scope(|scope| {
                 map.into_iter()
                     .filter_map(|(position, particles)| {
-                        let center_ptr = if let Some(chunk) = chunk_manager.chunks.get_mut(&position) {
-                            chunk.pixels.as_mut_ptr()
-                        } else {
-                            return None;
-                        }; 
-
-                        let mut chunk_group = ChunkGroup3x3 {
-                            size: CHUNK_SIZE,
-                            center: center_ptr,
-                            sides: [None, None, None, None],
-                            corners: [None, None, None, None],
-                        };
-
-                        for (dx, dy) in (-1..=1).cartesian_product(-1..=1) {
-                            match (dx, dy) {
-                                (0, 0) => continue,
-                                // UP and DOWN
-                                (0, -1) | (0, 1) => {
-                                    let Some(chunk) =
-                                        chunk_manager.chunks.get_mut(&(position + ivec2(dx, dy)))
-                                    else {
-                                        continue;
-                                    };
-
-                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
-                                        continue;
-                                    }
-
-                                    let start_ptr = chunk.pixels.as_mut_ptr();
-
-                                    chunk_group.sides[if dy == -1 { 0 } else { 3 }] =
-                                        Some(start_ptr);
-                                }
-                                //LEFT and RIGHT
-                                (-1, 0) | (1, 0) => {
-                                    let Some(chunk) =
-                                        chunk_manager.chunks.get_mut(&(position + ivec2(dx, dy)))
-                                    else {
-                                        continue;
-                                    };
-
-                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
-                                        continue;
-                                    }
-
-                                    let start_ptr = chunk.pixels.as_mut_ptr();
-
-                                    chunk_group.sides[if dx == -1 { 1 } else { 2 }] =
-                                        Some(start_ptr);
-                                }
-                                //CORNERS
-                                (-1, -1) | (1, -1) | (-1, 1) | (1, 1) => {
-                                    let Some(chunk) =
-                                        chunk_manager.chunks.get_mut(&(position + ivec2(dx, dy)))
-                                    else {
-                                        continue;
-                                    };
-
-                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
-                                        continue;
-                                    }
-
-                                    let start_ptr = chunk.pixels.as_mut_ptr();
-
-                                    let corner_idx = match (dx, dy) {
-                                        (1, 1) => 3,
-                                        (-1, 1) => 2,
-                                        (1, -1) => 1,
-                                        (-1, -1) => 0,
-
-                                        _ => unreachable!(),
-                                    };
-
-                                    chunk_group.corners[corner_idx] = Some(start_ptr);
-                                }
-
-                                _ => unreachable!(),
-                            }
-                        }
-
-                        Some((position, particles, chunk_group))
+                        build_chunk_group_mut(&mut chunk_manager, position, true)
+                            .map(|chunk_group| (position, particles, chunk_group))
                     })
                     .for_each(|(position, particles, mut chunk_group)| {
                         scope.spawn(async move {

@@ -7,9 +7,17 @@
   }
 
 - !Element {
+    id: steel,
+    ui_label: Steel,
+    color: [0x43, 0x46, 0x4B, 0xff], 
+    color_offset: 10, 
+    matter_type: Static
+  }
+
+- !Element {
     id: water,
     ui_label: Water,
-    color: [0x47, 0x7C, 0xB8, 0xBB],
+    color: [0x47, 0x7C, 0xB8, 0xff],
     color_offset: 0, 
     matter_type: !Liquid {
       density: 10,
@@ -41,7 +49,7 @@
 - !Element {
     id: lava,
     ui_label: Lava,
-    color: [0xEA, 0x5C, 0x0F, 0xDD],
+    color: [0xEA, 0x5C, 0x0F, 0xEE],
     color_offset: 0, 
     matter_type: !Liquid {
       density: 15,
@@ -56,31 +64,31 @@
     # }
   }
 
-# - !Element {
-#     id: coal,
-#     ui_label: Coal,
-#     color: [0x09, 0x09, 0x09, 0xff],
-#     color_offset: 25,
-#     matter_type: Powder,
-#     fire_parameters: !FireParameters {
-#       fire_temperature: 200,
-#       ignition_temperature: 150,
-#       fire_hp: 300,
-#     }
-#   }
+- !Element {
+    id: coal,
+    ui_label: Coal,
+    color: [0x09, 0x09, 0x09, 0xff],
+    color_offset: 25,
+    matter_type: Powder,
+    fire_parameters: !FireParameters {
+      fire_temperature: 200,
+      ignition_temperature: 150,
+      fire_hp: 300,
+    }
+  }
 
-# - !Element {
-#     id: wood,
-#     ui_label: Wood,
-#     color: [0x6a, 0x4b, 0x35, 0xff],
-#     color_offset: 50,
-#     matter_type: Static,
-#     fire_parameters: !FireParameters {
-#       fire_temperature: 125,
-#       ignition_temperature: 75,
-#       fire_hp: 100,
-#     }
-#   }
+- !Element {
+    id: wood,
+    ui_label: Wood,
+    color: [0x6a, 0x4b, 0x35, 0xff],
+    color_offset: 50,
+    matter_type: Static,
+    fire_parameters: !FireParameters {
+      fire_temperature: 125,
+      ignition_temperature: 75,
+      fire_hp: 100,
+    }
+  }
 
 - !Element {
     id: steam,
@@ -98,15 +106,31 @@
     matter_type: Gas,
     fire_parameters: !FireParameters {
       fire_temperature: 150,
-      ignition_temperature: 30,
+      ignition_temperature: 15,
       fire_hp: 25,
     }
 }
 
 - !Reaction {
     probability: 0.5,
-    input_element_1: lava,
-    input_element_2: water,
-    out_element_1: stone,
-    out_element_2: stone,
+    input_material_1: lava,
+    input_material_2: water,
+    output_material_1: stone,
+    output_material_2: stone,
+}
+
+- !Reaction {
+    probability: 0.0005,
+    input_material_1: steam,
+    input_material_2: steam,
+    output_material_1: water,
+    output_material_2: air,
+}
+
+- !Reaction {
+    probability: 0.02,
+    input_material_1: water,
+    input_material_2: dirt,
+    output_material_1: water,
+    output_material_2: grass,
 }

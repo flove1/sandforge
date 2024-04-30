@@ -2,13 +2,13 @@ use bevy::prelude::*;
 
 use crate::actors::player::update_player;
 
-#[derive(Component)]
+#[derive(Clone, Component)]
 pub struct AnimationIndices {
     pub first: usize,
     pub last: usize,
 }
 
-#[derive(Component, Deref, DerefMut)]
+#[derive(Component, Clone, Deref, DerefMut)]
 pub struct AnimationTimer(pub Timer);
 
 fn animate_sprite(

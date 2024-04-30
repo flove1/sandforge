@@ -1,20 +1,28 @@
 use bevy::input::mouse::MouseWheel;
 
 use bevy::prelude::*;
+use bevy::sprite::MaterialMesh2dBundle;
 use bevy::tasks::Task;
+use bevy::utils::dbg;
+use bevy::window::PrimaryWindow;
 use bevy_math::{vec2, vec3};
+use bevy_rapier2d::na::ComplexField;
 
 use crate::animation::{AnimationIndices, AnimationTimer};
-use crate::assets::PlayerSpriteAssets;
+use crate::assets::SpriteSheets;
 use crate::constants::{CHUNK_SIZE, PLAYER_LAYER};
-use crate::simulation::chunk_manager::manager_setup;
+use crate::gui::egui_has_primary_context;
+use crate::raycast::raycast;
+use crate::simulation::chunk_manager::{manager_setup, ChunkManager};
 use crate::state::AppState;
 
-use super::actor::{update_actors, Actor};
+use super::actor::{update_actors, Actor, MovementType};
+use super::enemy::spawn_enemy;
 
 #[derive(Default, Component)]
 pub struct Player {
     state: PlayerState,
+    jump_start: Option<f64>
 }
 
 #[derive(Default)]
@@ -25,38 +33,33 @@ pub enum PlayerState {
     Jumping(f64),
 }
 
-#[derive(Component, Default)]
-pub struct Tool;
-
-#[derive(Component)]
-pub struct ToolFront;
-
 pub fn player_setup(
     mut commands: Commands,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    player_sprites: Res<PlayerSpriteAssets>,
+    sprites: Res<SpriteSheets>,
 ) {
     let player_actor = Actor {
-        position: vec2(0., 0.),
+        position: vec2(-3., -9.),
         velocity: vec2(0., 0.),
-        hitbox: Rect::from_corners(Vec2::ZERO, Vec2::new(6., 15.)),
+        hitbox: Rect::from_corners(Vec2::ZERO, Vec2::new(13., 15.)),
         on_ground: false,
+        movement_type: MovementType::Walking,
     };
 
     let texture_atlas_layout = texture_atlas_layouts.add(TextureAtlasLayout::from_grid(
-        Vec2::new(64.0, 64.0),
-        8,
-        1,
+        Vec2::new(48.0, 48.0),
+        9,
+        17,
         None,
         None,
     ));
-    let animation_indices = AnimationIndices { first: 0, last: 7 };
+    let animation_indices = AnimationIndices { first: 0, last: 5 };
 
     commands.spawn((
         player_actor,
         Player::default(),
         SpriteSheetBundle {
-            texture: player_sprites.idle.clone(),
+            texture: sprites.player.clone(),
             atlas: TextureAtlas {
                 layout: texture_atlas_layout,
                 index: animation_indices.first,
@@ -66,7 +69,10 @@ pub fn player_setup(
                 scale: (Vec3::splat(1.0 / CHUNK_SIZE as f32)),
                 ..Default::default()
             },
-            sprite: Sprite { anchor: bevy::sprite::Anchor::Center, ..Default::default() },
+            sprite: Sprite {
+                anchor: bevy::sprite::Anchor::Center,
+                ..Default::default()
+            },
             ..Default::default()
         },
         animation_indices,
@@ -75,40 +81,52 @@ pub fn player_setup(
 }
 
 pub const RUN_SPEED: f32 = 2.;
-pub const JUMP_MAG: f32 = 2.;
-pub const PRESSED_JUMP_MAG: f32 = 0.2;
+pub const JUMP_MAG: f32 = 1.0;
+pub const PRESSED_JUMP_MAG: f32 = 0.175;
 pub const TIME_JUMP_PRESSED: f64 = 0.25;
 
 /// Updates player
 pub fn update_player(
-    input: (Res<Inputs>, EventReader<MouseWheel>),
+    input: (ResMut<Inputs>, EventReader<MouseWheel>),
     mut player: Query<(&mut Actor, &mut Player, &mut AnimationIndices)>,
     time: Res<Time>,
 ) {
     let (mut actor, mut player, mut _anim_idxs) = player.single_mut();
-    let (inputs, mut _scroll_evr) = input;
+    let (mut inputs, _) = input;
 
     // Movement
     let x = inputs.right - inputs.left;
-    actor.velocity.x = x * RUN_SPEED;
+    actor.velocity.x = f32::clamp(
+        actor.velocity.x + x * RUN_SPEED / 2.0,
+        -RUN_SPEED,
+        RUN_SPEED,
+    );
 
-    let on_ground = actor.on_ground;
+    if actor.on_ground && actor.velocity.y.is_sign_negative()  {
+        player.jump_start = None;
+    }
 
-    if on_ground {
-        if x.abs() > 0. {
+    if actor.on_ground {
+        if x.abs().is_sign_negative() {
             player.state = PlayerState::Walking
         } else {
             player.state = PlayerState::Idle
         }
     }
 
-    if inputs.jump_just_pressed && on_ground {
-        actor.velocity.y = JUMP_MAG;
-        player.state = PlayerState::Jumping(time.elapsed_seconds_wrapped_f64());
+    if let Some(buffered_at) = inputs.jump_buffered {
+        if time.elapsed_seconds_wrapped_f64() - buffered_at > 0.1 {
+            inputs.jump_buffered = None
+        }
+        else if actor.on_ground && player.jump_start.is_none() {
+            inputs.jump_buffered = None;
+            actor.velocity.y = JUMP_MAG;
+            player.jump_start = Some(time.elapsed_seconds_wrapped_f64());
+        }
     }
 
     //Jump higher when holding space
-    if let PlayerState::Jumping(jump_start) = player.state {
+    if let Some(jump_start) = player.jump_start {
         if inputs.jump_pressed
             && time.elapsed_seconds_wrapped_f64() - jump_start < TIME_JUMP_PRESSED
         {
@@ -121,47 +139,87 @@ pub fn update_player(
     //     PlayerState::Walking => (8, 11),
     //     PlayerState::Jumping { .. } => (16, 23),
     // };
-
-    //Zoom
-    // for ev in scroll_evr.read() {
-    //     if ev.unit == MouseScrollUnit::Line {
-    //         zoom.0 *= 0.9_f32.powi(ev.y as i32);
-    //         zoom.0 = zoom.0.clamp(ZOOM_LOWER_BOUND, ZOOM_UPPER_BOUND);
-    //     }
-    // }
-
-    //Change shooting atoms
 }
 
-pub fn update_player_sprite(mut query: Query<(&mut Transform, &Actor), With<Player>>) {
-    let (mut transform, actor) = query.single_mut();
-    let left_bottom_vec = vec2(actor.position.x, actor.position.y);
-
-    let size = actor.hitbox.size().as_ivec2();
-    let center_vec = left_bottom_vec + vec2(size.x as f32 / 2.0, size.y as f32 / 2.0);
-
-    if actor.velocity.x < -0.001 {
-        transform.rotation = Quat::from_rotation_y(180f32.to_radians());
-    } else if actor.velocity.x > 0.001 {
-        transform.rotation = Quat::from_rotation_y(0f32.to_radians());
+pub fn update_player_sprite(mut query: Query<(&mut AnimationIndices , &Actor), With<Player>>) {
+    for (mut indices, actor) in query.iter_mut() {
+        if actor.velocity.x.abs() < 0.25 {
+            *indices = AnimationIndices { first: 0, last: 5 }
+        }
+        else {
+            *indices = AnimationIndices { first: 45, last: 52 }
+        }
     }
+}
 
-    transform.translation = (center_vec / CHUNK_SIZE as f32).extend(PLAYER_LAYER);
+pub fn update_actors_transforms(mut query: Query<(&mut Transform, &Actor)>) {
+    for (mut transform, actor) in query.iter_mut() {
+        let left_bottom_vec = vec2(actor.position.x, actor.position.y);
+    
+        let size = actor.hitbox.size().as_ivec2();
+        let center_vec = left_bottom_vec + vec2(size.x as f32 / 2.0, size.y as f32 / 2.0);
+
+        if actor.velocity.x < -0.001 {
+            transform.rotation = Quat::from_rotation_y(180f32.to_radians());
+        } else if actor.velocity.x > 0.001 {
+            transform.rotation = Quat::from_rotation_y(0f32.to_radians());
+        }
+    
+        transform.translation = (center_vec / CHUNK_SIZE as f32).extend(PLAYER_LAYER);
+    }
+}
+
+pub fn raycast_from_player(
+    mut query: Query<&mut Transform, With<Player>>,
+    camera: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    chunk_manager: Res<ChunkManager>,
+    mut gizmos: Gizmos,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let transform = query.single_mut();
+    let (camera, camera_transform) = camera.single();
+
+    if let Some(cursor_position) = q_windows.single().cursor_position() {
+        let player_position = (transform.translation.xy() * CHUNK_SIZE as f32)
+            .round()
+            .as_ivec2();
+
+        let pixel_position = (camera
+            .viewport_to_world(camera_transform, cursor_position)
+            .map(|ray| ray.origin.truncate())
+            .unwrap()
+            * CHUNK_SIZE as f32)
+            .round()
+            .as_ivec2();
+
+        if let Some((point, _)) = raycast(player_position, pixel_position, &chunk_manager) {
+            gizmos.line_2d(
+                transform.translation.xy(),
+                point.as_vec2() / CHUNK_SIZE as f32,
+                Color::RED,
+            );
+        } else {
+            gizmos.line_2d(
+                transform.translation.xy(),
+                pixel_position.as_vec2() / CHUNK_SIZE as f32,
+                Color::BLUE,
+            );
+        }
+    }
 }
 
 #[derive(Resource, Default)]
 pub struct SavingTask(pub Option<Task<()>>);
 
-pub fn get_input(keys: Res<ButtonInput<KeyCode>>, mut inputs: ResMut<Inputs>) {
-    //Jump
+pub fn get_input(keys: Res<ButtonInput<KeyCode>>, mut inputs: ResMut<Inputs>, 
+    time: Res<Time>) {
     if keys.just_pressed(KeyCode::Space) {
-        inputs.jump_just_pressed = true;
+        inputs.jump_buffered = Some(time.elapsed_seconds_wrapped_f64());
         inputs.jump_pressed = true;
     } else if keys.pressed(KeyCode::Space) {
         inputs.jump_pressed = true;
     }
 
-    //Movement
     if keys.pressed(KeyCode::KeyA) {
         inputs.left = 1.;
     }
@@ -171,7 +229,9 @@ pub fn get_input(keys: Res<ButtonInput<KeyCode>>, mut inputs: ResMut<Inputs>) {
 }
 
 pub fn clear_input(mut inputs: ResMut<Inputs>) {
-    *inputs = Inputs::default();
+    inputs.jump_pressed = false;
+    inputs.left = 0.;
+    inputs.right = 0.;
 }
 
 #[derive(Resource, Default)]
@@ -180,24 +240,5 @@ pub struct Inputs {
     right: f32,
 
     jump_pressed: bool,
-    jump_just_pressed: bool,
-}
-
-pub struct PlayerPlugin;
-impl Plugin for PlayerPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            (
-                update_player.before(update_actors),
-                update_player_sprite.after(update_actors),
-                clear_input.after(update_player),
-            )
-                .run_if(in_state(AppState::InGame)),
-        )
-        .add_systems(PreUpdate, get_input.run_if(in_state(AppState::InGame)))
-        .init_resource::<SavingTask>()
-        .init_resource::<Inputs>()
-        .add_systems(OnExit(AppState::LoadingScreen), player_setup.after(manager_setup));
-    }
+    jump_buffered: Option<f64>
 }

@@ -1,1 +1,1 @@
-Game engine that is inspired with Noita.
+Videogame that is inspired with Noita.

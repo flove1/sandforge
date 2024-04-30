@@ -59,13 +59,16 @@ pub struct BiomeMapAssets {
 }
 
 #[derive(AssetCollection, Resource)]
-pub struct PlayerSpriteAssets {
-    #[asset(path = "player/idle.png")]
-    pub idle: Handle<Image>
+pub struct SpriteSheets {
+    #[asset(path = "player/alchemist.png")]
+    pub player: Handle<Image>,
+
+    #[asset(path = "bat.png")]
+    pub bat: Handle<Image>,
 }
 
 #[derive(AssetCollection, Resource)]
 pub struct TileAssets {
-    #[asset(path = "caves.png")]
+    #[asset(path = "coalmine.png")]
     pub caves: Handle<Image>
 }

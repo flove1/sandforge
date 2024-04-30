@@ -1,50 +1,33 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use bevy::{
-    prelude::*,
-    tasks::ComputeTaskPool,
-    utils::HashMap,
-};
-use bevy_math::{ivec2, vec2, IVec2, Rect, UVec2, Vec3Swizzles};
-use itertools::{Either, Itertools};
-use noise::SuperSimplex;
+use bevy::{ prelude::*, tasks::ComputeTaskPool, utils::HashMap };
+use bevy_math::{ ivec2, vec2, IVec2, Rect, UVec2, Vec3Swizzles };
+use itertools::{ Either, Itertools };
 
 use crate::{
-    constants::{CHUNK_SIZE, WORLD_HEIGHT, WORLD_WIDTH},
-    generation::{
-        chunk::ChunkGenerationEvent,
-        tiles::TileGenerator,
-    },
+    constants::{ CHUNK_SIZE, WORLD_HEIGHT, WORLD_WIDTH },
+    generation::tiles::TileRequestEvent,
+    registries::{ self, Registries },
 };
 
 use super::{
-    chunk::{ChunkApi, ChunkData, ChunkState},
-    chunk_groups::ChunkGroup3x3,
+    chunk::{ ChunkApi, ChunkData, ChunkState },
+    chunk_groups::build_chunk_group_mut,
     dirty_rect::{
-        update_dirty_rects, update_dirty_rects_3x3, DirtyRects, RenderMessage, UpdateMessage,
+        update_dirty_rects,
+        update_dirty_rects_3x3,
+        DirtyRects,
+        RenderMessage,
+        UpdateMessage,
     },
-    materials::{update_gas, update_liquid, update_sand, MaterialInstance, PhysicsType},
+    materials::{ update_gas, update_liquid, update_sand, MaterialInstance, PhysicsType },
     pixel::Pixel,
-    Noise,
 };
 
 #[derive(Component)]
 pub struct Chunks;
 
-impl FromWorld for Noise {
-    fn from_world(_: &mut bevy::prelude::World) -> Self {
-        Self(SuperSimplex::new(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .subsec_millis(),
-        ))
-    }
-}
-
 #[derive(Resource)]
 pub struct ChunkManager {
-    pub chunks: HashMap<IVec2, ChunkData>,
+    pub chunks: HashMap<IVec2, (Entity, ChunkData)>,
     clock: u8,
 }
 
@@ -79,8 +62,7 @@ impl ChunkManager {
     pub fn get(&self, pos: IVec2) -> Result<&Pixel, String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        self.chunks
-            .get(&chunk_position)
+        self.get_chunk_data(&chunk_position)
             .map(|chunk| &chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .ok_or("pixel not loaded yet".to_string())
     }
@@ -88,8 +70,7 @@ impl ChunkManager {
     pub fn get_mut(&mut self, pos: IVec2) -> Result<&mut Pixel, String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        self.chunks
-            .get_mut(&chunk_position)
+        self.get_chunk_data_mut(&chunk_position)
             .map(|chunk| &mut chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .ok_or("pixel not loaded yet".to_string())
     }
@@ -97,8 +78,7 @@ impl ChunkManager {
     pub fn get_material(&self, pos: IVec2) -> Result<&MaterialInstance, String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        self.chunks
-            .get(&chunk_position)
+        self.get_chunk_data(&chunk_position)
             .map(|chunk| &chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .map(|pixel| &pixel.material)
             .ok_or("pixel not loaded yet".to_string())
@@ -107,8 +87,7 @@ impl ChunkManager {
     pub fn get_material_mut(&mut self, pos: IVec2) -> Result<&mut MaterialInstance, String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        self.chunks
-            .get_mut(&chunk_position)
+        self.get_chunk_data_mut(&chunk_position)
             .map(|chunk| &mut chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .map(|pixel| &mut pixel.material)
             .ok_or("pixel not loaded yet".to_string())
@@ -117,8 +96,8 @@ impl ChunkManager {
     pub fn set(&mut self, pos: IVec2, material: MaterialInstance) -> Result<(), String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
-            chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material, 0);
+        if let Some(chunk) = self.get_chunk_data_mut(&chunk_position) {
+            chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material);
             Ok(())
         } else {
             Err("chunk is not loaded".to_string())
@@ -129,14 +108,14 @@ impl ChunkManager {
         &mut self,
         pos: IVec2,
         material: MaterialInstance,
-        condition: F,
+        condition: F
     ) -> Result<bool, String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        match self.chunks.get_mut(&chunk_position) {
+        match self.get_chunk_data_mut(&chunk_position) {
             Some(chunk) => {
                 if condition(chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)].clone()) {
-                    chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material, 0);
+                    chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material);
                     Ok(true)
                 } else {
                     Ok(false)
@@ -146,7 +125,6 @@ impl ChunkManager {
         }
     }
 
-    // TODO: rewrite
     pub fn displace(&mut self, pos: IVec2, material: MaterialInstance) -> bool {
         let mut succeeded = false;
 
@@ -157,16 +135,19 @@ impl ChunkManager {
         let scan_max_i = scan_w.max(scan_h) * scan_w.max(scan_h); // the max is pointless now but could change w or h later
 
         for _ in 0..scan_max_i {
-            if (scan_pos.x >= -scan_w / 2)
-                && (scan_pos.x <= scan_w / 2)
-                && (scan_pos.y >= -scan_h / 2)
-                && (scan_pos.y <= scan_h / 2)
+            if
+                scan_pos.x >= -scan_w / 2 &&
+                scan_pos.x <= scan_w / 2 &&
+                scan_pos.y >= -scan_h / 2 &&
+                scan_pos.y <= scan_h / 2
             {
-                if let Ok(true) = self.set_with_condition(
-                    pos + IVec2::new(scan_pos.x, scan_pos.y),
-                    material.clone(),
-                    |pixel| (pixel.material.physics_type == PhysicsType::Air),
-                ) {
+                if
+                    let Ok(true) = self.set_with_condition(
+                        pos + IVec2::new(scan_pos.x, scan_pos.y),
+                        material.clone(),
+                        |pixel| pixel.material.physics_type == PhysicsType::Air
+                    )
+                {
                     succeeded = true;
                     break;
                 }
@@ -174,9 +155,10 @@ impl ChunkManager {
 
             // update scan coordinates
 
-            if (scan_pos.x == scan_pos.y)
-                || ((scan_pos.x < 0) && (scan_pos.x == -scan_pos.y))
-                || ((scan_pos.x > 0) && (scan_pos.x == 1 - scan_pos.y))
+            if
+                scan_pos.x == scan_pos.y ||
+                (scan_pos.x < 0 && scan_pos.x == -scan_pos.y) ||
+                (scan_pos.x > 0 && scan_pos.x == 1 - scan_pos.y)
             {
                 let temp = scan_delta_pos.x;
                 scan_delta_pos.x = -scan_delta_pos.y;
@@ -190,59 +172,68 @@ impl ChunkManager {
         succeeded
     }
 
-    pub fn get_chunk(&self, chunk_position: &IVec2) -> Option<&ChunkData> {
-        self.chunks.get(chunk_position)
+    pub fn get_chunk_id(&self, chunk_position: &IVec2) -> Option<Entity> {
+        self.chunks.get(chunk_position).map(|chunk| chunk.0)
     }
 
-    pub fn get_chunk_mut(&mut self, chunk_position: &IVec2) -> Option<&mut ChunkData> {
-        self.chunks.get_mut(chunk_position)
+    pub fn get_chunk_data(&self, chunk_position: &IVec2) -> Option<&ChunkData> {
+        self.chunks.get(chunk_position).map(|chunk| &chunk.1)
+    }
+
+    pub fn get_chunk_data_mut(&mut self, chunk_position: &IVec2) -> Option<&mut ChunkData> {
+        self.chunks.get_mut(chunk_position).map(|chunk| &mut chunk.1)
     }
 }
 
 pub fn manager_setup(mut commands: Commands) {
-    commands.spawn((
-        Name::new("Chunks"),
-        SpatialBundle::INHERITED_IDENTITY,
-        Chunks,
-    ));
+    commands.spawn((Name::new("Chunks"), SpatialBundle::INHERITED_IDENTITY, Chunks));
 }
 
 pub fn update_loaded_chunks(
-    mut ev_chunkgen: EventWriter<ChunkGenerationEvent>,
+    mut ev_chunkgen: EventWriter<TileRequestEvent>,
     mut chunk_manager: ResMut<ChunkManager>,
-    camera_query: Query<&Transform, With<Camera>>,
-    tile_generator: Res<TileGenerator>,
+    mut dirty_rects_resource: ResMut<DirtyRects>,
+    camera_query: Query<&Transform, With<Camera>>
 ) {
+    let DirtyRects { current, .. } = &mut *dirty_rects_resource;
+
     let camera_position = camera_query.single().translation.xy();
 
     let area = Rect::from_center_size(
         camera_position,
-        vec2(WORLD_WIDTH as f32, WORLD_HEIGHT as f32) * 1.5,
+        vec2((WORLD_WIDTH as f32) * 1.5, (WORLD_HEIGHT as f32) * 1.5)
     );
 
     // suspend chunks out of bounds
-    chunk_manager
-        .chunks.iter_mut()
+    chunk_manager.chunks
+        .iter_mut()
+        .map(|(position, chunk)| (position, &mut chunk.1))
         .filter(|(_, chunk)| chunk.state == ChunkState::Active)
-        .for_each(|(position, chunk)| if !area.contains(position.as_vec2()) {
-            chunk.state = ChunkState::Sleeping
+        .for_each(|(position, chunk)| {
+            if !area.contains(position.as_vec2()) {
+                chunk.state = ChunkState::Sleeping;
+            }
         });
 
-    for x in area.min.x.floor() as i32..area.max.x.ceil() as i32 {
-        for y in area.min.y.floor() as i32..area.max.y.ceil() as i32 {
+    for x in area.min.x.ceil() as i32..area.max.x.floor() as i32 {
+        for y in area.min.y.ceil() as i32..area.max.y.floor() as i32 {
             let position = ivec2(x, y);
 
-            match chunk_manager.chunks.get_mut(&position) {
+            match chunk_manager.get_chunk_data_mut(&position) {
                 Some(chunk) => {
+                    if chunk.state == ChunkState::Sleeping {
+                        update_dirty_rects(current, position, UVec2::ZERO);
+                        update_dirty_rects(
+                            current,
+                            position,
+                            UVec2::splat((CHUNK_SIZE as u32) - 1)
+                        );
+                    }
                     chunk.state = ChunkState::Active;
-                    // if chunk.state = ChunkState::Sleeping {
-                    // }
-                },
+                }
                 None => {
-                    ev_chunkgen.send(ChunkGenerationEvent(
-                        position.div_euclid(IVec2::ONE * tile_generator.scale) * tile_generator.scale,
-                    ));
-                },
+                    ev_chunkgen.send(TileRequestEvent(position));
+                }
             }
         }
     }
@@ -252,6 +243,7 @@ pub fn update_loaded_chunks(
 pub fn chunks_update(
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects_resource: ResMut<DirtyRects>,
+    registries: Res<Registries>
 ) {
     let DirtyRects {
         current: dirty_rects,
@@ -271,10 +263,14 @@ pub fn chunks_update(
                     update_dirty_rects_3x3(
                         new_dirty_rects,
                         update.chunk_position,
-                        update.cell_position,
+                        update.cell_position
                     );
                 } else {
-                    update_dirty_rects(new_dirty_rects, update.chunk_position, update.cell_position)
+                    update_dirty_rects(
+                        new_dirty_rects,
+                        update.chunk_position,
+                        update.cell_position
+                    );
                 }
             }
         });
@@ -287,175 +283,216 @@ pub fn chunks_update(
 
         let update_send = &update_send;
         let render_send = &render_send;
+        let clock = chunk_manager.clock;
 
-        let mut groups: [Vec<IVec2>; 4] = [vec![], vec![], vec![], vec![]];
-
-        chunk_manager
-            .chunks
+        let active_chunks = chunk_manager.chunks
             .iter()
+            .map(|(position, chunk)| (position, &chunk.1))
             .filter(|(_, chunk)| chunk.state == ChunkState::Active)
-            .for_each(|(position, _)| {
-                let index = (position.x.abs() % 2 + (position.y.abs() % 2) * 2) as usize;
+            .map(|(position, _)| *position)
+            .collect_vec();
 
-                unsafe { groups.get_unchecked_mut(index) }.push(*position);
-            });
+        // it possible to iterate in checker patttern which potentially improves performance but produces worse looking simulation on chunk borders
 
-        fastrand::shuffle(&mut groups);
-
-        for group in groups {
-            ComputeTaskPool::get().scope(|scope| {
-                let clock = chunk_manager.clock;
-
-                group
-                    .into_iter()
-                    .filter_map(|position| {
-                        dirty_rects
-                            .get(&position)
-                            .cloned()
-                            .map(|dirty_rect| (position, dirty_rect))
-                    })
-                    .filter_map(|(position, dirty_rect)| {
-                        let center_ptr =
-                            if let Some(chunk) = chunk_manager.chunks.get_mut(&position) {
-                                chunk.pixels.as_mut_ptr()
-                            } else {
-                                return None;
-                            };
-
-                        let mut chunk_group = ChunkGroup3x3 {
-                            size: CHUNK_SIZE,
-                            center: center_ptr,
-                            sides: [None; 4],
-                            corners: [None; 4],
-                        };
-
-                        for (dx, dy) in (-1..=1).cartesian_product(-1..=1) {
-                            match (dx, dy) {
-                                (0, 0) => continue,
-                                // UP and DOWN
-                                (0, -1) | (0, 1) => {
-                                    let Some(chunk) =
-                                        chunk_manager.chunks.get_mut(&(position + ivec2(dx, dy)))
-                                    else {
-                                        continue;
-                                    };
-
-                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
-                                        continue;
-                                    }
-
-                                    let start_ptr = chunk.pixels.as_mut_ptr();
-
-                                    chunk_group.sides[if dy == -1 { 0 } else { 3 }] =
-                                        Some(start_ptr);
-                                }
-                                //LEFT and RIGHT
-                                (-1, 0) | (1, 0) => {
-                                    let Some(chunk) =
-                                        chunk_manager.chunks.get_mut(&(position + ivec2(dx, dy)))
-                                    else {
-                                        continue;
-                                    };
-
-                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
-                                        continue;
-                                    }
-
-                                    let start_ptr = chunk.pixels.as_mut_ptr();
-
-                                    chunk_group.sides[if dx == -1 { 1 } else { 2 }] =
-                                        Some(start_ptr);
-                                }
-                                //CORNERS
-                                (-1, -1) | (1, -1) | (-1, 1) | (1, 1) => {
-                                    let Some(chunk) =
-                                        chunk_manager.chunks.get_mut(&(position + ivec2(dx, dy)))
-                                    else {
-                                        continue;
-                                    };
-
-                                    if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
-                                        continue;
-                                    }
-
-                                    let start_ptr = chunk.pixels.as_mut_ptr();
-
-                                    let corner_idx = match (dx, dy) {
-                                        (1, 1) => 3,
-                                        (-1, 1) => 2,
-                                        (1, -1) => 1,
-                                        (-1, -1) => 0,
-
-                                        _ => unreachable!(),
-                                    };
-
-                                    chunk_group.corners[corner_idx] = Some(start_ptr);
-                                }
-
-                                _ => unreachable!(),
-                            }
-                        }
-
-                        Some((position, dirty_rect, chunk_group))
-                    })
-                    .for_each(|(position, dirty_rect, mut chunk_group)| {
-                        scope.spawn(async move {
-                            let mut api = ChunkApi {
-                                cell_position: ivec2(0, 0),
-                                chunk_position: position,
-                                chunk_group: &mut chunk_group,
-                                update_send,
-                                render_send,
-                                clock,
-                            };
-
-                            let x_range = if fastrand::bool() {
-                                Either::Left(dirty_rect.min.x as i32..dirty_rect.max.x as i32)
-                            } else {
-                                Either::Right(
-                                    (dirty_rect.min.x as i32..dirty_rect.max.x as i32).rev(),
-                                )
-                            };
-
-                            for x_cell in x_range {
-                                for y_cell in dirty_rect.min.y as i32..dirty_rect.max.y as i32 {
-                                    api.switch_position(ivec2(x_cell, y_cell));
-
-                                    if api.get_counter(0, 0) == clock {
-                                        api.keep_alive(0, 0);
-                                        continue;
-                                    }
-
-                                    match api.get_physics_type(0, 0) {
-                                        PhysicsType::Powder => {
-                                            update_sand(&mut api);
-                                        }
-                                        PhysicsType::Gas => {
-                                            update_gas(&mut api);
-                                        }
-                                        PhysicsType::Liquid(..) => {
-                                            update_liquid(&mut api);
-                                        }
-                                        _ => {}
-                                    }
-
-                                    api.mark_updated();
-                                }
-                            }
+        // to iterate from bottom to top
+        for (_, group) in active_chunks
+            .into_iter()
+            .group_by(|position| position.y)
+            .into_iter()
+            .sorted_by(|(y1, _), (y2, _)| y1.cmp(y2)) {
+            // to avoid data races
+            for (_, group) in &group.group_by(|position| position.x % 2 == 0) {
+                ComputeTaskPool::get().scope(|scope| {
+                    group
+                        .filter_map(|position| {
+                            dirty_rects
+                                .get(&position)
+                                .cloned()
+                                .map(|dirty_rect| (position, dirty_rect))
                         })
-                    })
-            });
+                        .filter_map(|(position, dirty_rect)| {
+                            build_chunk_group_mut(&mut chunk_manager, position, true).map(
+                                |chunk_group| (position, dirty_rect, chunk_group)
+                            )
+                        })
+                        .for_each(|(position, dirty_rect, mut chunk_group)| {
+                            let reactive_materials = registries.reactive_materials.read();
+                            let materials = registries.materials.read();
+
+                            scope.spawn(async move {
+                                let mut api = ChunkApi {
+                                    cell_position: ivec2(0, 0),
+                                    chunk_position: position,
+                                    chunk_group: &mut chunk_group,
+                                    update_send,
+                                    render_send,
+                                    clock,
+                                };
+
+                                let x_range = if fastrand::bool() {
+                                    Either::Left(dirty_rect.min.x as i32..dirty_rect.max.x as i32)
+                                } else {
+                                    Either::Right(
+                                        (dirty_rect.min.x as i32..dirty_rect.max.x as i32).rev()
+                                    )
+                                };
+
+                                for x_cell in x_range {
+                                    for y_cell in dirty_rect.min.y as i32..dirty_rect.max.y as i32 {
+                                        api.switch_position(ivec2(x_cell, y_cell));
+
+                                        if api.get_counter(0, 0) == clock {
+                                            api.keep_alive(0, 0);
+                                            continue;
+                                        }
+
+                                        match api.get_physics_type(0, 0) {
+                                            PhysicsType::Powder => {
+                                                update_sand(&mut api);
+                                            }
+                                            PhysicsType::Gas => {
+                                                update_gas(&mut api);
+                                            }
+                                            PhysicsType::Liquid(..) => {
+                                                update_liquid(&mut api);
+                                            }
+                                            _ => {}
+                                        }
+
+                                        let directions = [
+                                            [1, 0],
+                                            [-1, 0],
+                                            [0, 1],
+                                            [0, -1],
+                                        ];
+
+                                        {
+                                            let mut pixel = api.get(0, 0);
+                                            match pixel.on_fire {
+                                                true => {
+                                                    api.keep_alive(0, 0);
+                                                    if
+                                                        let Some(fire_parameters) =
+                                                            pixel.material.fire_parameters.as_mut()
+                                                    {
+                                                        for direction in directions.iter() {
+                                                            let mut pixel = api.get(
+                                                                direction[0],
+                                                                direction[1]
+                                                            );
+    
+                                                            if
+                                                                pixel.temperature < fire_parameters.fire_temperature
+                                                            {
+                                                                pixel.temperature += (fastrand::f32() *
+                                                                    ((
+                                                                        pixel.temperature.abs_diff(
+                                                                            fire_parameters.fire_temperature
+                                                                        ) as f32
+                                                                    ) /
+                                                                        8.0)) as i32;
+                                                            }
+    
+                                                            api.set(direction[0], direction[1], pixel);
+                                                        }
+    
+                                                        if fire_parameters.fire_hp <= 0 {
+                                                            api.update(Pixel::default());
+                                                            continue;
+                                                        } else if fastrand::f32() > 0.75 {
+                                                            fire_parameters.fire_hp -= 1;
+                                                        }
+                                                    }
+                                                }
+                                                false => {
+                                                    if
+                                                        let Some(fire_parameters) =
+                                                            &mut pixel.material.fire_parameters
+                                                    {
+                                                        if
+                                                        pixel.temperature >=
+                                                            fire_parameters.ignition_temperature
+                                                        {
+                                                            pixel.on_fire = true;
+                                                        } else {
+                                                            pixel.temperature -= (30 - pixel.temperature) / 16;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            api.update(pixel);
+                                        }
+
+                                        let id = &api.get(0, 0).material.id;
+                                        if reactive_materials.contains(id) {
+                                            let material = materials
+                                                .get(id)
+                                                .unwrap();
+                                            if let Some(reactions) = &material.reactions {
+                                                for (x, y) in (-1..=1).cartesian_product(-1..=1) {
+                                                    if x == 0 && y == 0 {
+                                                        continue;
+                                                    }
+
+                                                    let neighbour = api.get(x, y);
+
+                                                    if
+                                                        let Some(reaction) = reactions.get(
+                                                            &neighbour.material.id
+                                                        )
+                                                    {
+                                                        if fastrand::f32() < reaction.probability {
+                                                            api.set(
+                                                                0,
+                                                                0,
+                                                                Pixel::new(
+                                                                    materials
+                                                                        .get(
+                                                                            &reaction.output_material_1
+                                                                        )
+                                                                        .unwrap()
+                                                                        .into()
+                                                                ).with_clock(clock)
+                                                            );
+                                                            api.set(
+                                                                x,
+                                                                y,
+                                                                Pixel::new(
+                                                                    materials
+                                                                        .get(
+                                                                            &reaction.output_material_2
+                                                                        )
+                                                                        .unwrap()
+                                                                        .into()
+                                                                ).with_clock(clock)
+                                                            );
+
+                                                            break;
+                                                        }
+
+                                                        api.keep_alive(x, y);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        api.mark_updated();
+                                    }
+                                }
+                            })
+                        })
+                });
+            }
         }
+
+        // for (y, ) in layers {
+        // }
 
         update_send.close();
         render_send.close();
     });
 
-    let new_positions = dirty_rects_resource
-        .new
-        .keys()
-        .copied()
-        .collect::<Vec<IVec2>>();
+    let new_positions = dirty_rects_resource.new.keys().copied().collect::<Vec<IVec2>>();
 
     new_positions.iter().for_each(|position| {
         if !dirty_rects_resource.current.contains_key(position) {
@@ -463,7 +500,7 @@ pub fn chunks_update(
             update_dirty_rects(
                 &mut dirty_rects_resource.new,
                 *position,
-                UVec2::ONE * (CHUNK_SIZE - 1) as u32,
+                UVec2::ONE * ((CHUNK_SIZE - 1) as u32)
             );
         }
     });

@@ -10,6 +10,8 @@ pub struct Pixel {
     pub rb: u8,
     pub updated_at: u8,
 
+    pub temperature: i32,
+
     pub on_fire: bool,
     pub conductive: bool,
 }
@@ -27,6 +29,7 @@ impl Default for Pixel {
             ra: 0,
             rb: 0,
             updated_at: 0,
+            temperature: 30,
             on_fire: false,
             conductive: false,
         }
@@ -45,6 +48,7 @@ lazy_static! {
         ra: 0,
         rb: 0,
         updated_at: 0,
+        temperature: 30,
         // simulation: SimulationType::Ca,
 
         on_fire: false,
@@ -53,11 +57,17 @@ lazy_static! {
 }
 
 impl Pixel {
-    pub fn new(material: MaterialInstance, updated_at: u8) -> Self {
+    pub fn new(material: MaterialInstance) -> Self {
         Self {
             material: material.clone(),
-            updated_at,
             ..Default::default()
+        }
+    }
+
+    pub fn with_clock(self, updated_at: u8) -> Self {
+        Self {
+            updated_at,
+            ..self
         }
     }
 
@@ -70,11 +80,11 @@ impl Pixel {
             PhysicsType::Liquid { .. } => self
                 .material
                 .color
-                .map(|channel| channel + fastrand::u8(0..10)),
+                .map(|channel| channel.saturating_add(fastrand::u8(0..10))),
             PhysicsType::Gas => self
                 .material
                 .color
-                .map(|channel| channel + fastrand::u8(0..50)),
+                .map(|channel| channel.saturating_add(fastrand::u8(0..50))),
             PhysicsType::Actor => [0; 4],
         }
     }
