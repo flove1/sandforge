@@ -1,28 +1,27 @@
 use std::time::Duration;
 
-use bevy::{ prelude::*, time::common_conditions::on_timer };
+use bevy::prelude::*;
+use bevy_rapier2d::plugin::PhysicsSet;
+use leafwing_input_manager::plugin::InputManagerPlugin;
 
-use crate::{
-    constants::CHUNK_SIZE,
-    gui::egui_has_primary_context,
-    simulation::{chunk_manager::manager_setup, object::unfill_objects},
-    state::AppState,
-};
+use crate::{ simulation::object::unfill_objects, state::AppState };
 
 use self::{
-    actor::{ render_actor_gizmos, update_actors, Actor },
-    enemy::{ spawn_enemy, update_enemy },
+    actor::{ render_actor_gizmos, update_actor_translation, update_actors, Actor, MovementType },
+    effects::{ damage_flash, death },
+    enemy::{ enemy_despawn, enemy_update, update_enemy_rotation },
+    health::{
+        create_health_bars,
+        process_damage_events,
+        update_health_bar_translation,
+        update_health_bars,
+        DamageEvent,
+        Health,
+        HealthBar,
+    },
     pathfinding::{ gizmos_path, pathfind },
     player::{
-        clear_input,
-        get_input,
-        player_setup,
-        raycast_from_player,
-        update_actors_transforms,
-        update_player,
-        update_player_sprite,
-        Inputs,
-        SavingTask,
+        player_dash, player_hook, player_jump, player_jump_extend, player_kick, player_run, player_setup, player_shoot, update_player_rotation, update_rope_position, PlayerActions
     },
 };
 
@@ -30,40 +29,64 @@ pub mod actor;
 pub mod enemy;
 pub mod player;
 pub mod pathfinding;
+pub mod effects;
+pub mod health;
 
 pub struct ActorsPlugin;
 impl Plugin for ActorsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, get_input.run_if(in_state(AppState::InGame)))
-            .add_systems(OnExit(AppState::LoadingScreen), (
-                player_setup.after(manager_setup),
-                spawn_enemy,
-            ))
+        app.add_event::<DamageEvent>()
+            .add_plugins(InputManagerPlugin::<PlayerActions>::default())
+            .add_systems(OnEnter(AppState::WorldInitilialization), enemy_despawn)
+            .add_systems(OnExit(AppState::WorldInitilialization), player_setup)
+            .add_systems(
+                Update,
+                (create_health_bars, player_jump, player_kick, player_dash, player_hook, player_shoot).run_if(
+                    in_state(AppState::Game)
+                )
+            )
+            .add_systems(PreUpdate, pathfind.run_if(in_state(AppState::Game)))
             .add_systems(
                 FixedUpdate,
-                (
-                    update_player,
-                    update_actors,
-                    update_actors_transforms,
-                    update_player_sprite,
-                    update_enemy,
-                )
+                (player_jump_extend, player_run, update_actors, enemy_update)
                     .chain()
-                    .run_if(in_state(AppState::InGame)).before(unfill_objects)
+                    .run_if(in_state(AppState::Game))
+                    .before(unfill_objects)
+            )
+            .add_systems(
+                FixedPostUpdate,
+                (
+                    update_player_rotation,
+                    update_enemy_rotation,
+                    update_actor_translation,
+                    update_health_bar_translation,
+                ).run_if(in_state(AppState::Game))
             )
             .add_systems(
                 PostUpdate,
                 (
-                    clear_input,
-                    raycast_from_player.run_if(egui_has_primary_context),
-                    render_actor_gizmos,
-                    pathfind,
-                    gizmos_path,
+                    update_rope_position,
+                    process_damage_events,
+                    damage_flash,
+                    death,
+                    update_health_bars,
                 )
-                    .run_if(in_state(AppState::InGame))
-                    .run_if(in_state(AppState::InGame))
+                    .chain()
+                    .run_if(in_state(AppState::Game))
             )
-            .init_resource::<SavingTask>()
-            .init_resource::<Inputs>();
+            .register_type::<Actor>()
+            .register_type::<MovementType>()
+            .register_type::<Health>()
+            .register_type::<HealthBar>();
+
+        // #[cfg(feature = "debug-render")]
+        // app.add_systems(
+        //     PostUpdate,
+        //     (
+        //         gizmos_path,
+        //         render_actor_gizmos,
+        //         raycast_from_player.run_if(egui_has_primary_context),
+        //     ).run_if(in_state(AppState::Game))
+        // );
     }
 }

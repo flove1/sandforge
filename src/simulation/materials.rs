@@ -1,7 +1,10 @@
-use bevy::{reflect::Reflect, utils::HashMap};
-use serde::{Deserialize, Serialize};
+use bevy::{ reflect::Reflect, utils::HashMap };
+use bevy_math::{ IVec2, Vec2 };
+use serde::{ Deserialize, Serialize };
 
-use super::{chunk::ChunkApi, pixel::Pixel};
+use crate::helpers::WalkGrid;
+
+use super::{ chunk::ChunkApi, pixel::Pixel };
 
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct Material {
@@ -17,7 +20,7 @@ pub struct Material {
     pub reactions: Option<HashMap<String, Reaction>>,
 
     #[serde(default)]
-    pub wang_parameters: Option<WangParameters>
+    pub wang_parameters: Option<WangParameters>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
@@ -26,7 +29,7 @@ pub struct WangParameters {
     pub noise_percent: f32,
 }
 
-#[derive(Reflect, Debug, Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct MaterialInstance {
     pub id: String,
     pub physics_type: PhysicsType,
@@ -69,7 +72,7 @@ impl From<&Material> for MaterialInstance {
 
         MaterialInstance {
             id: val.id.clone(),
-            physics_type: val.matter_type,
+            physics_type: val.matter_type.clone(),
             color: color_offseted,
             fire_parameters: val.fire_parameters.clone(),
         }
@@ -92,7 +95,7 @@ pub struct Reaction {
     pub output_material_2: String,
 }
 
-#[derive(Reflect, Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub enum PhysicsType {
     Air,
     Static,
@@ -101,6 +104,7 @@ pub enum PhysicsType {
     Gas,
     Rigidbody,
     Actor,
+    Disturbed(Box<PhysicsType>),
 }
 
 #[derive(Reflect, Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
@@ -127,6 +131,7 @@ impl ToString for PhysicsType {
             PhysicsType::Gas { .. } => "Gas".to_string(),
             PhysicsType::Rigidbody => "Rigidbody".to_string(),
             PhysicsType::Actor => "Actor".to_string(),
+            PhysicsType::Disturbed(..) => "Disturbed material".to_string(),
         }
     }
 }
@@ -155,243 +160,65 @@ impl Default for Material {
             color: [0; 4],
             color_offset: 0,
             reactions: None,
-            wang_parameters: None
+            wang_parameters: None,
         }
     }
 }
 
-// pub fn process_elements_config() {
-//     let parsed_yaml: Value =
-//         serde_yaml::from_str(&std::fs::read_to_string("elements.yaml").unwrap()).unwrap();
+// pub fn update_force(api: &mut ChunkApi) {
+//     let mut pixel = api.get(0, 0);
 
-//     let elements: Vec<Material> = parsed_yaml
-//         .as_sequence()
-//         .unwrap()
-//         .iter()
-//         .filter_map(|item| serde_yaml::from_value(item.clone()).ok())
-//         .collect();
+//     let PhysicsType::Force(position, velocity) = &mut pixel.material.physics_type else {
+//         unreachable!();
+//     };
 
-//     let reactions: Vec<Reaction> = parsed_yaml
-//         .as_sequence()
-//         .unwrap()
-//         .iter()
-//         .filter_map(|item| serde_yaml::from_value(item.clone()).ok())
-//         .collect();
+//     let delta = *position + *velocity;
 
-//     elements.into_iter().for_each(|material| {
-//         ELEMENTS.insert(material.id.to_string(), material);
-//     });
+//     for point in WalkGrid::new(IVec2::ZERO, (delta.signum() * delta.abs().ceil()).as_ivec2()) {
+//         let neighbor = api.get(point.x, point.y);
 
-//     REACTIONS.clear();
-
-//     reactions.into_iter().for_each(|reaction| {
-//         if !REACTIONS.contains_key(&reaction.input_element_1) {
-//             REACTIONS.insert(
-//                 reaction.input_element_1.clone(),
-//                 DashMap::with_hasher(ahash::RandomState::new()),
-//             );
+//         match neighbor.material.physics_type {
+//             PhysicsType::Air => todo!(),
+//             PhysicsType::Static => api.update(pixel.with_material(pixel.material.)),
+//             PhysicsType::Powder => todo!(),
+//             PhysicsType::Liquid(_) => todo!(),
+//             PhysicsType::Gas => todo!(),
+//             PhysicsType::Rigidbody => todo!(),
+//             PhysicsType::Actor => todo!(),
+//             PhysicsType::Force(_, _) => todo!(),
+//             PhysicsType::Disturbed(_) => todo!(),
 //         }
 
-//         REACTIONS
-//             .get_mut(reaction.input_element_1.as_str())
-//             .unwrap()
-//             .insert(reaction.input_element_2.clone(), reaction);
-//     });
-// }
-
-// lazy_static! {
-//     pub static ref ELEMENTS: DashMap<String, Material, ahash::RandomState> = {
-//         let elements = DashMap::with_hasher(ahash::RandomState::new());
-
-//         [
-//             Material::default(),
-//             Material {
-//                 id: "grass".to_string(),
-//                 matter_type: PhysicsType::Static,
-//                 color: [0x7d, 0xaa, 0x4d, 0xff],
-//                 color_offset: 10,
-//                 fire_parameters: Some(FireParameters {
-//                     fire_temperature: 125,
-//                     ignition_temperature: 75,
-//                     fire_hp: 25,
-//                 }),
-//             },
-//             Material {
-//                 id: "dirt".to_string(),
-//                 matter_type: PhysicsType::Static,
-//                 color: [0x6d, 0x5f, 0x3d, 0xff],
-//                 color_offset: 15,
-//                 fire_parameters: None,
-//             },
-//             Material {
-//                 id: "stone".to_string(),
-//                 matter_type: PhysicsType::Static,
-//                 color: [0x71, 0x77, 0x77, 0xff],
-//                 color_offset: 20,
-//                 fire_parameters: None,
-//             },
-//             Material {
-//                 id: "actor".to_string(),
-//                 matter_type: PhysicsType::Empty,
-//                 color: [0xff, 0x00, 0x00, 0x50],
-//                 color_offset: 0,
-//                 fire_parameters: None,
-//             },
-//         ]
-//         .into_iter()
-//         .for_each(|material| {
-//             elements.insert(material.id.to_string(), material);
-//         });
-
-//         elements
-//     };
-//     pub static ref REACTIONS: DashMap<String, DashMap<String, Reaction, ahash::RandomState>, ahash::RandomState> =
-//         { DashMap::with_hasher(ahash::RandomState::new()) };
-// }
-
-// pub fn update_displaced(mut pixel: Pixel, api: &mut ChunkApi, _dt: f32) {
-//     let SimulationType::Displaced(dx, dy) = &mut pixel.simulation else {
-//         panic!();
-//     };
-
-//     if (dx.abs() + dy.abs()) < 0.1 {
-//         pixel.simulation = SimulationType::Ca;
-//         api.update(pixel);
-//         api.keep_alive(0, 0);
-//         return;
-//     }
-
-//     let rounded_dx = (dx.round() as i32).clamp(-1, 1);
-//     let rounded_dy = (dy.round() as i32).clamp(-1, 1);
-
-//     match api.get(rounded_dx, rounded_dy).matter_type {
-//         PhysicsType::Empty => {
-//             api.swap(rounded_dx, rounded_dy);
-//             *dx *= 0.1;
-//             *dy *= 0.1;
-//             api.update(pixel);
-//             api.keep_alive(0, 0);
-//             return;
-//         },
-//         PhysicsType::Static => {
-//             let angle = dy.atan2(*dx) - (rounded_dy as f32).atan2(rounded_dx as f32);
-
-//             *dx = *dx * angle.sin();
-//             *dy = *dy * angle.cos();
-//         },
-//         _ => {}
-//     }
-
-//     let affected_horizontal: HashSet<i32> = if *dx > 0.5 {
-//         [0, 1].into_iter().collect()
-//     }
-//     else if *dx < -0.5 {
-//         [-1, 0].into_iter().collect()
-//     }
-//     else {
-//         [-1, 0, 1].into_iter().collect()
-//     };
-
-//     let affected_vertical: HashSet<i32> = if *dy > 0.5 {
-//         [0, 1].into_iter().collect()
-//     }
-//     else if *dy < -0.5 {
-//         [-1, 0].into_iter().collect()
-//     }
-//     else {
-//         [-1, 0, 1].into_iter().collect()
-//     };
-
-//     let affected_total_count = affected_horizontal.len() * affected_vertical.len();
-
-//     let mut dx_sum_changes = 0.0;
-//     let mut dy_sum_changes = 0.0;
-
-//     for (collision_dx, collision_dy) in affected_horizontal.into_iter().zip(affected_vertical.into_iter()) {
-//         if collision_dx == 0 && collision_dy == 0 {
+//         if matches!(neighbor.material.physics_type, PhysicsType::Air | PhysicsType::Gas) {
 //             continue;
 //         }
-
-//         let mut affected_cell = api.get(collision_dx, collision_dy);
-
-//         match affected_cell.matter_type {
-//             PhysicsType::Powder | PhysicsType::Liquid(_) | PhysicsType::Gas => {
-//                 match &mut affected_cell.simulation {
-//                     SimulationType::Ca => {
-//                         let angle = dy.atan2(*dx) - (collision_dy as f32).atan2(collision_dx as f32);
-//                         let distance = f32::sqrt(collision_dx.pow(2) as f32 + collision_dy.pow(2) as f32);
-
-//                         let dx_change = *dx * angle.sin() / distance / affected_total_count as f32;
-//                         let dy_change = *dy * angle.cos() / distance / affected_total_count as f32;
-
-//                         affected_cell.simulation = SimulationType::Displaced(
-//                             dx_change,
-//                             dy_change,
-//                         );
-//                         dx_sum_changes += dx_change.abs();
-//                         dy_sum_changes += dy_change.abs();
-
-//                         api.set(collision_dx, collision_dy, affected_cell);
-//                     },
-//                     SimulationType::Displaced(dx1, dy1) => {
-//                         let angle = dy.atan2(*dx) - (collision_dy as f32).atan2(collision_dx as f32);
-//                         let distance = f32::sqrt(collision_dx.pow(2) as f32 + collision_dy.pow(2) as f32);
-
-//                         let dx_change = *dx * angle.sin() / distance / affected_total_count as f32;
-//                         let dy_change = *dy * angle.cos() / distance / affected_total_count as f32;
-
-//                         *dx1 += dx_change;
-//                         *dy1 += dy_change;
-
-//                         dx_sum_changes += dx_change.abs();
-//                         dy_sum_changes += dy_change.abs();
-
-//                         api.set(collision_dx, collision_dy, affected_cell);
-//                     },
-//                     _ => {}
-//                 }
-//             },
-//             _ => {},
+//         else {
+//             *velocity /= 2.0;
 //         }
+        
 //     }
-
-//     *dx = f32::clamp(dx.abs() - dx_sum_changes.abs(), 0.0, dx.abs()) * dx.signum() * 0.99;
-//     *dy = f32::clamp(dy.abs() - dy_sum_changes.abs(), 0.0, dy.abs()) * dy.signum() * 0.99;
-
-//     api.update(pixel);
-//     api.keep_alive(0, 0);
 // }
 
 pub fn update_sand(api: &mut ChunkApi) {
     let dx = api.rand_dir();
 
-    if matches!(
-        api.get_physics_type(0, -1),
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) {
-        if api.once_in(5)
-            && matches!(
-                api.get_physics_type(dx, -1),
-                PhysicsType::Air | PhysicsType::Gas { .. }
-            )
+    if matches!(api.get_physics_type(0, -1), PhysicsType::Air | PhysicsType::Gas { .. }) {
+        if
+            api.once_in(5) &&
+            matches!(api.get_physics_type(dx, -1), PhysicsType::Air | PhysicsType::Gas { .. })
         {
             api.swap(dx, -1);
         } else {
             api.swap(0, -1);
         }
-    } else if matches!(
-        api.get_physics_type(dx, -1),
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) {
+    } else if matches!(api.get_physics_type(dx, -1), PhysicsType::Air | PhysicsType::Gas { .. }) {
         api.swap(dx, -1);
-    } else if matches!(
-        api.get_physics_type(-dx, -1),
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) {
+    } else if matches!(api.get_physics_type(-dx, -1), PhysicsType::Air | PhysicsType::Gas { .. }) {
         api.swap(-dx, -1);
     } else if matches!(api.get_physics_type(0, -1), PhysicsType::Liquid { .. }) {
-        if api.once_in(30)
-            && matches!(
+        if
+            api.once_in(30) &&
+            matches!(
                 api.get_physics_type(dx, -1),
                 PhysicsType::Air | PhysicsType::Gas { .. } | PhysicsType::Liquid { .. }
             )
@@ -403,50 +230,6 @@ pub fn update_sand(api: &mut ChunkApi) {
     }
 }
 
-// pub fn update_fire(pixel: &mut Pixel, mut api: ChunkApi, _dt: f32) -> ChunkApi {
-//     let directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)];
-
-//     for (dx, dy) in directions {
-//         let pixel = api.get(dx, dy);
-
-//         let modifier = if dy == -1 { 0.5 } else { 1.0 };
-
-//         match pixel.material {
-//             PhysicsType::Wood => {
-//                 if api.once_in((100.0 * modifier) as i32) {
-//                     api.set(dx, dy, Pixel::new_with_rb(PhysicsType::Fire, pixel.clock, 80))
-//                 }
-//             }
-
-//             PhysicsType::Coal => {
-//                 if api.once_in((500.0 * modifier) as i32) {
-//                     api.set(dx, dy, Pixel::new_with_rb(PhysicsType::Fire, pixel.clock, 100))
-//                 }
-//             }
-
-//             PhysicsType::Gas => {
-//                 if api.once_in(10) {
-//                     api.set(dx, dy, Pixel::new_with_rb(PhysicsType::Fire, pixel.clock, 10))
-//                 }
-//             }
-
-//             _ => {}
-//         }
-//     }
-
-//     if api.once_in(2) {
-//         pixel.rb -= 1;
-//     }
-
-//     if pixel.rb == 0 {
-//         pixel.material = PhysicsType::Empty;
-//     }
-
-//     api.set(0, 0, *pixel);
-//     api
-// }
-
-// Sometimes stuck on edges, needs fixing
 pub fn update_liquid(api: &mut ChunkApi) {
     let mut pixel = api.get(0, 0);
     let PhysicsType::Liquid(parameters) = &mut pixel.material.physics_type.clone() else {
@@ -484,20 +267,16 @@ pub fn update_liquid(api: &mut ChunkApi) {
 
                 if required_flow > parameters.volume {
                     api.update(Pixel::default());
-                    api.set(
-                        0,
-                        -1,
-                        Pixel {
-                            material: MaterialInstance {
-                                physics_type: PhysicsType::Liquid(Liquid {
-                                    volume: bottom_parameters.volume + parameters.volume,
-                                    ..*bottom_parameters
-                                }),
-                                ..bottom_cell.material.clone()
-                            },
-                            ..bottom_cell.clone()
+                    api.set(0, -1, Pixel {
+                        material: MaterialInstance {
+                            physics_type: PhysicsType::Liquid(Liquid {
+                                volume: bottom_parameters.volume + parameters.volume,
+                                ..*bottom_parameters
+                            }),
+                            ..bottom_cell.material.clone()
                         },
-                    );
+                        ..bottom_cell.clone()
+                    });
 
                     return;
                 }
@@ -513,19 +292,15 @@ pub fn update_liquid(api: &mut ChunkApi) {
                     ..pixel.clone()
                 });
 
-                api.set(
-                    0,
-                    -1,
-                    Pixel {
-                        material: MaterialInstance {
-                            physics_type: PhysicsType::Liquid(Liquid {
-                                ..*bottom_parameters
-                            }),
-                            ..bottom_cell.material.clone()
-                        },
-                        ..bottom_cell.clone()
+                api.set(0, -1, Pixel {
+                    material: MaterialInstance {
+                        physics_type: PhysicsType::Liquid(Liquid {
+                            ..*bottom_parameters
+                        }),
+                        ..bottom_cell.material.clone()
                     },
-                );
+                    ..bottom_cell.clone()
+                });
             }
         }
         _ => {}
@@ -539,44 +314,38 @@ pub fn update_liquid(api: &mut ChunkApi) {
                 let flow = parameters.volume / 2.0 - parameters.dry_threshold;
                 parameters.volume -= flow;
 
-                api.set(
-                    0,
-                    1,
-                    Pixel {
-                        material: MaterialInstance {
-                            physics_type: PhysicsType::Liquid(Liquid {
-                                volume: flow,
-                                ..*parameters
-                            }),
-                            ..pixel.material.clone()
-                        },
-                        ..pixel.clone()
+                api.set(0, 1, Pixel {
+                    material: MaterialInstance {
+                        physics_type: PhysicsType::Liquid(Liquid {
+                            volume: flow,
+                            ..*parameters
+                        }),
+                        ..pixel.material.clone()
                     },
-                )
+                    ..pixel.clone()
+                });
             }
             PhysicsType::Liquid(top_parameters) => {
-                if pixel.material.id == top_cell.material.id
-                    && top_parameters.volume < parameters.volume
+                if
+                    pixel.material.id == top_cell.material.id &&
+                    top_parameters.volume < parameters.volume
                 {
-                    let flow = ((top_parameters.volume + parameters.volume) / 2.0
-                        - top_parameters.volume)
-                        / 2.0;
+                    let flow =
+                        ((top_parameters.volume + parameters.volume) / 2.0 -
+                            top_parameters.volume) /
+                        2.0;
                     parameters.volume -= flow;
 
-                    api.set(
-                        0,
-                        1,
-                        Pixel {
-                            material: MaterialInstance {
-                                physics_type: PhysicsType::Liquid(Liquid {
-                                    volume: top_parameters.volume + flow,
-                                    ..top_parameters
-                                }),
-                                ..top_cell.material.clone()
-                            },
-                            ..top_cell.clone()
+                    api.set(0, 1, Pixel {
+                        material: MaterialInstance {
+                            physics_type: PhysicsType::Liquid(Liquid {
+                                volume: top_parameters.volume + flow,
+                                ..top_parameters
+                            }),
+                            ..top_cell.material.clone()
                         },
-                    )
+                        ..top_cell.clone()
+                    });
                 }
             }
             // PhysicsType::Static => {
@@ -609,9 +378,9 @@ pub fn update_liquid(api: &mut ChunkApi) {
     let mut flows = 0;
 
     let modifier = 1.0;
-    let max_offset = i32::clamp(10 - parameters.viscosity as i32 + 1, 1, 10);
+    let max_offset = i32::clamp(10 - (parameters.viscosity as i32) + 1, 1, 10);
 
-    'offset_loop: for offset in 1..=(max_offset as f32 * modifier) as i32 {
+    'offset_loop: for offset in 1..=((max_offset as f32) * modifier) as i32 {
         if parameters.volume < parameters.dry_threshold {
             api.keep_alive(0, 0);
             api.update(Pixel::default());
@@ -631,135 +400,109 @@ pub fn update_liquid(api: &mut ChunkApi) {
                     parameters.volume -= flow;
 
                     if api.get(dx * offset, *dy - 1).material.physics_type == PhysicsType::Air {
-                        api.set(
-                            dx * offset,
-                            *dy - 1,
-                            Pixel {
-                                updated_at: pixel.updated_at.saturating_sub(1),
-                                material: MaterialInstance {
-                                    physics_type: PhysicsType::Liquid(Liquid {
-                                        volume: flow,
-                                        ..*parameters
-                                    }),
-                                    ..pixel.material.clone()
-                                },
-                                ..pixel.clone()
+                        api.set(dx * offset, *dy - 1, Pixel {
+                            updated_at: pixel.updated_at.saturating_sub(1),
+                            material: MaterialInstance {
+                                physics_type: PhysicsType::Liquid(Liquid {
+                                    volume: flow,
+                                    ..*parameters
+                                }),
+                                ..pixel.material.clone()
                             },
-                        );
+                            ..pixel.clone()
+                        });
                         *dy -= 1;
                     } else {
-                        api.set(
-                            dx * offset,
-                            *dy,
-                            Pixel {
-                                updated_at: pixel.updated_at.saturating_sub(1),
-                                material: MaterialInstance {
-                                    physics_type: PhysicsType::Liquid(Liquid {
-                                        volume: flow,
-                                        ..*parameters
-                                    }),
-                                    ..pixel.material.clone()
-                                },
-                                ..pixel.clone()
+                        api.set(dx * offset, *dy, Pixel {
+                            updated_at: pixel.updated_at.saturating_sub(1),
+                            material: MaterialInstance {
+                                physics_type: PhysicsType::Liquid(Liquid {
+                                    volume: flow,
+                                    ..*parameters
+                                }),
+                                ..pixel.material.clone()
                             },
-                        )
+                            ..pixel.clone()
+                        });
                     }
                 }
                 PhysicsType::Liquid(dx_parameters) => {
                     if pixel.material.id == dx_cell.material.id {
-                        let flow = [
-                            parameters.volume - dx_parameters.volume,
-                            max_flow / 2.0,
-                            1.0,
-                        ]
-                        .into_iter()
-                        .reduce(f32::min)
-                        .unwrap();
+                        let flow = [parameters.volume - dx_parameters.volume, max_flow / 2.0, 1.0]
+                            .into_iter()
+                            .reduce(f32::min)
+                            .unwrap();
 
                         if dx_parameters.volume < parameters.volume {
                             parameters.volume -= flow;
 
                             flows += 1;
-                            api.set(
-                                dx * offset,
-                                *dy,
-                                Pixel {
-                                    material: MaterialInstance {
-                                        physics_type: PhysicsType::Liquid(Liquid {
-                                            volume: dx_parameters.volume + flow,
-                                            ..*dx_parameters
-                                        }),
-                                        ..dx_cell.material.clone()
-                                    },
-                                    ..dx_cell.clone()
+                            api.set(dx * offset, *dy, Pixel {
+                                material: MaterialInstance {
+                                    physics_type: PhysicsType::Liquid(Liquid {
+                                        volume: dx_parameters.volume + flow,
+                                        ..*dx_parameters
+                                    }),
+                                    ..dx_cell.material.clone()
                                 },
-                            )
+                                ..dx_cell.clone()
+                            });
                         }
                     } else if parameters.density > dx_parameters.density {
-                        let offset_directions = [(dx * (offset + 1), *dy), (dx * offset, *dy + 1)];
+                        let offset_directions = [
+                            (dx * (offset + 1), *dy),
+                            (dx * offset, *dy + 1),
+                        ];
                         let mut succesfully_moved = false;
 
                         for (dx_next, dy_next) in offset_directions {
                             let offset_cell = api.get(dx_next, dy_next);
 
                             if offset_cell.material.physics_type == PhysicsType::Air {
-                                api.set(
-                                    dx_next,
-                                    dy_next,
-                                    Pixel {
-                                        updated_at: dx_cell.updated_at.saturating_sub(1),
-                                        ..dx_cell.clone()
-                                    },
-                                );
+                                api.set(dx_next, dy_next, Pixel {
+                                    updated_at: dx_cell.updated_at.saturating_sub(1),
+                                    ..dx_cell.clone()
+                                });
                             } else if offset_cell.material.id == dx_cell.material.id {
                                 let PhysicsType::Liquid(offset_parameters) =
-                                    offset_cell.material.physics_type
-                                else {
+                                    offset_cell.material.physics_type else {
                                     panic!();
                                 };
 
                                 let maximum_receive_flow = f32::clamp(
                                     offset_parameters.max_compression - offset_parameters.volume,
                                     0.0,
-                                    1.0,
+                                    1.0
                                 );
                                 if maximum_receive_flow > dx_parameters.volume {
-                                    api.set(
-                                        dx_next,
-                                        dy_next,
-                                        Pixel {
-                                            material: MaterialInstance {
-                                                physics_type: PhysicsType::Liquid(Liquid {
-                                                    volume: offset_parameters.volume
-                                                        + dx_parameters.volume,
-                                                    ..offset_parameters
-                                                }),
-                                                ..offset_cell.material.clone()
-                                            },
-                                            ..offset_cell.clone()
+                                    api.set(dx_next, dy_next, Pixel {
+                                        material: MaterialInstance {
+                                            physics_type: PhysicsType::Liquid(Liquid {
+                                                volume: offset_parameters.volume +
+                                                dx_parameters.volume,
+                                                ..offset_parameters
+                                            }),
+                                            ..offset_cell.material.clone()
                                         },
-                                    )
+                                        ..offset_cell.clone()
+                                    });
                                 } else {
                                     let flow_to_avg =
-                                        (dx_parameters.volume + offset_parameters.volume) / 2.0
-                                            - offset_parameters.volume;
+                                        (dx_parameters.volume + offset_parameters.volume) / 2.0 -
+                                        offset_parameters.volume;
 
                                     dx_parameters.volume -= flow_to_avg;
 
-                                    api.set(
-                                        dx_next,
-                                        dy_next,
-                                        Pixel {
-                                            material: MaterialInstance {
-                                                physics_type: PhysicsType::Liquid(Liquid {
-                                                    volume: offset_parameters.volume + flow_to_avg,
-                                                    ..offset_parameters
-                                                }),
-                                                ..offset_cell.material.clone()
-                                            },
-                                            ..offset_cell.clone()
+                                    api.set(dx_next, dy_next, Pixel {
+                                        material: MaterialInstance {
+                                            physics_type: PhysicsType::Liquid(Liquid {
+                                                volume: offset_parameters.volume + flow_to_avg,
+                                                ..offset_parameters
+                                            }),
+                                            ..offset_cell.material.clone()
                                         },
-                                    );
+                                        ..offset_cell.clone()
+                                    });
 
                                     continue;
                                 }
@@ -771,21 +514,17 @@ pub fn update_liquid(api: &mut ChunkApi) {
                             parameters.volume -= flow;
 
                             flows += 1;
-                            api.set(
-                                dx * offset,
-                                *dy,
-                                Pixel {
-                                    updated_at: pixel.updated_at.saturating_sub(1),
-                                    material: MaterialInstance {
-                                        physics_type: PhysicsType::Liquid(Liquid {
-                                            volume: flow,
-                                            ..*parameters
-                                        }),
-                                        ..pixel.material.clone()
-                                    },
-                                    ..pixel.clone()
+                            api.set(dx * offset, *dy, Pixel {
+                                updated_at: pixel.updated_at.saturating_sub(1),
+                                material: MaterialInstance {
+                                    physics_type: PhysicsType::Liquid(Liquid {
+                                        volume: flow,
+                                        ..*parameters
+                                    }),
+                                    ..pixel.material.clone()
                                 },
-                            );
+                                ..pixel.clone()
+                            });
 
                             succesfully_moved = true;
                             break;
@@ -825,28 +564,19 @@ pub fn update_gas(api: &mut ChunkApi) {
     let mut pixel = api.get(0, 0);
     let mut dx = api.rand_dir();
 
-    if matches!(
-        api.get(dx, 0).material.physics_type,
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) && matches!(
-        api.get(dx, 1).material.physics_type,
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) {
+    if
+        matches!(api.get(dx, 0).material.physics_type, PhysicsType::Air) &&
+        matches!(api.get(dx, 1).material.physics_type, PhysicsType::Air)
+    {
         api.swap(dx, 0);
-    } else if matches!(
-        api.get(-dx, 0).material.physics_type,
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) && matches!(
-        api.get(-dx, 1).material.physics_type,
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) {
+    } else if
+        matches!(api.get(-dx, 0).material.physics_type, PhysicsType::Air) &&
+        matches!(api.get(-dx, 1).material.physics_type, PhysicsType::Air)
+    {
         api.swap(-dx, 0);
     }
 
-    if matches!(
-        api.get(0, 1).material.physics_type,
-        PhysicsType::Air | PhysicsType::Gas { .. }
-    ) {
+    if matches!(api.get(0, 1).material.physics_type, PhysicsType::Air) {
         api.swap(0, 1);
         if api.once_in(20) {
             //randomize direction when falling sometimes
@@ -862,8 +592,9 @@ pub fn update_gas(api: &mut ChunkApi) {
     let dx0 = api.get(dx, 0);
     let dxd = api.get(dx * 2, 0);
 
-    if dx0.material.physics_type == PhysicsType::Air
-        && dxd.material.physics_type == PhysicsType::Air
+    if
+        dx0.material.physics_type == PhysicsType::Air &&
+        dxd.material.physics_type == PhysicsType::Air
     {
         // scoot double
         pixel.rb = 6;
@@ -873,17 +604,14 @@ pub fn update_gas(api: &mut ChunkApi) {
         let nbr = api.get(dx, dy);
 
         // spread opinion
-        if matches!(nbr.material.physics_type, PhysicsType::Liquid { .. })
-            && nbr.ra % 2 != pixel.ra % 2
+        if
+            matches!(nbr.material.physics_type, PhysicsType::Gas { .. }) &&
+            nbr.ra % 2 != pixel.ra % 2
         {
-            api.set(
-                dx,
-                dy,
-                Pixel {
-                    ra: pixel.ra,
-                    ..pixel.clone()
-                },
-            )
+            api.set(dx, dy, Pixel {
+                ra: pixel.ra,
+                ..pixel.clone()
+            });
         }
     } else if dx0.material.physics_type == PhysicsType::Air {
         pixel.rb = 3;
@@ -892,17 +620,14 @@ pub fn update_gas(api: &mut ChunkApi) {
         let (dx, dy) = api.rand_vec_8();
         let nbr = api.get(dx, dy);
 
-        if matches!(nbr.material.physics_type, PhysicsType::Liquid { .. })
-            && nbr.ra % 2 != pixel.ra % 2
+        if
+            matches!(nbr.material.physics_type, PhysicsType::Gas { .. }) &&
+            nbr.ra % 2 != pixel.ra % 2
         {
-            api.set(
-                dx,
-                dy,
-                Pixel {
-                    ra: pixel.ra,
-                    ..pixel.clone()
-                },
-            )
+            api.set(dx, dy, Pixel {
+                ra: pixel.ra,
+                ..pixel.clone()
+            });
         }
     } else if pixel.rb == 0 {
         if matches!(api.get(-dx, 0).material.physics_type, PhysicsType::Air) {

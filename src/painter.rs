@@ -8,11 +8,12 @@ use bevy::{
 use bevy_egui::EguiContexts;
 use bevy_math::{ ivec2, vec2, IVec2 };
 use bevy_rapier2d::{
-    dynamics::{ ExternalImpulse, RigidBody, Sleeping, Velocity },
-    geometry::{ Collider, ColliderMassProperties },
+    dynamics::{ ExternalImpulse, ReadMassProperties, RigidBody, Sleeping, Velocity },
+    geometry::{ Collider, ColliderMassProperties, CollisionGroups, Group },
 };
 
 use crate::{
+    camera::TrackingCamera,
     constants::{ CHUNK_SIZE, PARTICLE_LAYER },
     has_window,
     helpers::WalkGrid,
@@ -21,7 +22,8 @@ use crate::{
         chunk_manager::ChunkManager,
         dirty_rect::{ update_dirty_rects, DirtyRects },
         materials::{ Material, MaterialInstance, PhysicsType },
-        object::Object,
+        mesh::{ ChunkColliderEveny, ACTOR_MASK, OBJECT_MASK, TERRAIN_MASK },
+        object::{ ExplosionParameters, Object, ObjectBundle },
         particle::{ Particle, ParticleInstances },
     },
     state::AppState,
@@ -36,7 +38,7 @@ impl Plugin for PainterPlugin {
             .init_resource::<PainterObjectBuffer>()
             .add_systems(
                 PreUpdate,
-                mouse_system.run_if(has_window).run_if(in_state(AppState::InGame))
+                mouse_system.run_if(has_window).run_if(in_state(AppState::Game))
             );
     }
 }
@@ -45,7 +47,6 @@ impl Plugin for PainterPlugin {
 enum MouseState {
     #[default]
     Normal,
-    Dragging,
     Painting,
 }
 
@@ -108,32 +109,28 @@ impl FromWorld for BrushRes {
 
 #[derive(Resource, Default)]
 pub struct PainterObjectBuffer {
-    pub map: HashMap<IVec2, MaterialInstance>,
+    pub map: HashMap<IVec2, Material>,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn mouse_system(
     mut commands: Commands,
     brush: Res<BrushRes>,
-    keys: Res<ButtonInput<KeyCode>>,
     window_q: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut chunk_set: ParamSet<(
-        Query<&Children, With<Chunk>>,
-        Query<Entity, (With<Parent>, With<Collider>)>,
-    )>,
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects: ResMut<DirtyRects>,
     mut motion_evr: EventReader<MouseMotion>,
     mut cursor_evr: EventReader<CursorMoved>,
-    mut camera: Query<(&Camera, &mut Transform, &GlobalTransform), With<Camera>>,
+    mut camera: Query<(&Camera, &mut Transform, &GlobalTransform), With<TrackingCamera>>,
     mut contexts: EguiContexts,
     mut mouse_state: ResMut<MouseState>,
     mut object_buffer: ResMut<PainterObjectBuffer>,
-    particles: Query<(Entity, &Mesh2dHandle), With<ParticleInstances>>,
+    partcle_q: Query<(Entity, &Mesh2dHandle), With<ParticleInstances>>,
     buttons: Res<ButtonInput<MouseButton>>,
-    mut materials: ResMut<Assets<ColorMaterial>>
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut chunk_collider_ev: EventWriter<ChunkColliderEveny>
 ) {
-    let (particles, particle_mesh) = particles.get_single().unwrap();
+    let (particles, particle_mesh) = partcle_q.get_single().unwrap();
     let (camera, mut camera_transform, camera_global_transform) = camera.single_mut();
     let (window_entity, window) = window_q.single();
 
@@ -164,7 +161,7 @@ fn mouse_system(
                             )
                         ),
                         transform: Transform::from_translation(
-                            (particle.pos / (CHUNK_SIZE as f32)).extend(PARTICLE_LAYER)
+                            (particle.pos / (CHUNK_SIZE as f32)).extend(2.0)
                         ),
                         ..Default::default()
                     };
@@ -183,9 +180,8 @@ fn mouse_system(
             BrushType::Object => {
                 if brush.material.as_ref().unwrap().matter_type == PhysicsType::Air {
                     buffer.insert(position, brush.material.as_ref().unwrap().into());
-                }
-                else {
-                    object_buffer.map.insert(position, brush.material.as_ref().unwrap().into());
+                } else {
+                    object_buffer.map.insert(position, brush.material.as_ref().unwrap().clone());
                 }
             }
             _ => {
@@ -259,35 +255,9 @@ fn mouse_system(
         }
     }
 
-    for chunk_position in affected_chunks {
-        if let Some((entity, chunk)) = chunk_manager.chunks.get(&chunk_position) {
-            let mut chunk_children = vec![];
-
-            for child_entity in chunk_set.p0().get(*entity).unwrap() {
-                chunk_children.push(*child_entity);
-            }
-
-            for child in chunk_children {
-                if let Ok(child_entity) = chunk_set.p1().get(child) {
-                    commands.entity(child_entity).despawn();
-                }
-            }
-
-            if let Ok(colliders) = chunk.build_colliders() {
-                commands.entity(*entity).with_children(|parent| {
-                    for collider in colliders {
-                        parent.spawn((
-                            collider,
-                            TransformBundle {
-                                local: Transform::IDENTITY,
-                                ..Default::default()
-                            },
-                        ));
-                    }
-                });
-            }
-        }
-    }
+    chunk_collider_ev.send_batch(
+        affected_chunks.into_iter().map(|position| ChunkColliderEveny(position))
+    );
 
     cursor_evr.clear();
     motion_evr.clear();
@@ -295,7 +265,7 @@ fn mouse_system(
     if buttons.just_released(MouseButton::Left) {
         if brush.brush_type == BrushType::Object {
             let mut rect: Option<IRect> = None;
-            let values = object_buffer.map.drain().collect::<Vec<(IVec2, MaterialInstance)>>();
+            let values = object_buffer.map.drain().collect::<Vec<(IVec2, Material)>>();
 
             values.iter().for_each(|(pos, _)| {
                 let rect = rect.get_or_insert(IRect::new(pos.x, pos.y, pos.x + 1, pos.y + 1));
@@ -308,7 +278,7 @@ fn mouse_system(
             });
 
             if let Some(rect) = rect {
-                let mut pixels: Vec<Option<MaterialInstance>> =
+                let mut pixels: Vec<Option<Material>> =
                     vec![None; (rect.size().x * rect.size().y) as usize];
 
                 values.iter().for_each(|(pos, material)| {
@@ -327,22 +297,24 @@ fn mouse_system(
                     )
                 {
                     if let Ok(collider) = object.create_collider() {
-                        commands
-                            .spawn((
+                        commands.spawn((
+                            ObjectBundle {
                                 object,
                                 collider,
-                                RigidBody::Dynamic,
-                                Velocity::zero(),
-                                Sleeping::default(),
-                                ExternalImpulse::default(),
-                                TransformBundle {
+                                transform: TransformBundle {
                                     local: Transform::from_translation(
                                         rect.center().extend(0).as_vec3() / (CHUNK_SIZE as f32)
                                     ),
                                     ..Default::default()
                                 },
-                            ))
-                            .insert(ColliderMassProperties::Density(2.0));
+                                mass_properties: ColliderMassProperties::Density(2.0),
+                                ..Default::default()
+                            },
+                            // ExplosionParameters {
+                            //     radius: 64,
+                            //     timer: Timer::from_seconds(4.0, TimerMode::Once),
+                            // },
+                        ));
                     }
                 }
             }

@@ -5,15 +5,13 @@ use bevy_egui::egui::mutex::RwLock;
 use serde_yaml::Value;
 
 use crate::{
-    generation::biome::Biome,
     simulation::materials::{ FireParameters, Material, PhysicsType, Reaction },
 };
 
 #[derive(Resource)]
 pub struct Registries {
-    pub reactive_materials: Arc<RwLock<HashSet<String>>>,
-    pub materials: Arc<RwLock<HashMap<String, Material>>>,
-    pub biomes: Arc<RwLock<HashMap<String, Biome>>>,
+    pub reactive_materials: HashSet<String>,
+    pub materials: HashMap<String, Material>,
 }
 
 impl FromWorld for Registries {
@@ -45,7 +43,7 @@ impl FromWorld for Registries {
         materials.insert("stone".to_string(), Material {
             id: "stone".to_string(),
             matter_type: PhysicsType::Static,
-            color: [0x71, 0x77, 0x77, 0xff],
+            color: [0x77, 0x77, 0x77, 0xff],
             color_offset: 25,
             fire_parameters: None,
             ..Default::default()
@@ -80,9 +78,8 @@ impl FromWorld for Registries {
             });
 
         Self {
-            materials: Arc::new(RwLock::new(materials)),
-            reactive_materials: Arc::new(RwLock::new(reactive_materials)),
-            biomes: Arc::new(RwLock::new(HashMap::new())),
+            materials: materials,
+            reactive_materials: reactive_materials,
         }
     }
 }

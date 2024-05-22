@@ -1,26 +1,32 @@
+use std::mem;
+
 use async_channel::Sender;
 use bevy::{
     prelude::*,
-    render::{mesh::PrimitiveTopology, render_asset::RenderAssetUsages, view::NoFrustumCulling},
+    render::{ mesh::PrimitiveTopology, render_asset::RenderAssetUsages, view::NoFrustumCulling },
     sprite::Mesh2dHandle,
     tasks::ComputeTaskPool,
     utils::HashMap,
 };
 use bevy_math::ivec2;
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{ Pod, Zeroable };
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
-use crate::constants::{CHUNK_SIZE, PARTICLE_LAYER};
+use crate::constants::{ CHUNK_SIZE, PARTICLE_LAYER };
 
 use super::{
     chunk::ChunkState,
-    chunk_groups::{build_chunk_group, build_chunk_group_mut, ChunkGroupMut},
+    chunk_groups::{ build_chunk_group, ChunkGroup },
     chunk_manager::ChunkManager,
     dirty_rect::{
-        update_dirty_rects, update_dirty_rects_3x3, DirtyRects, RenderMessage, UpdateMessage,
+        update_dirty_rects,
+        update_dirty_rects_3x3,
+        DirtyRects,
+        RenderMessage,
+        UpdateMessage,
     },
-    materials::{MaterialInstance, PhysicsType},
+    materials::{ MaterialInstance, PhysicsType },
     pixel::Pixel,
 };
 
@@ -34,7 +40,7 @@ pub enum InObjectState {
     Outside,
 }
 
-#[derive(Component, Reflect, Debug, Clone, Serialize, Deserialize)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Particle {
     pub active: bool,
     pub material: MaterialInstance,
@@ -55,10 +61,10 @@ impl From<&Particle> for ParticleRenderInstance {
         ParticleRenderInstance {
             pos: val.pos.extend(PARTICLE_LAYER),
             color: [
-                val.material.color[0] as f32 / 255.0,
-                val.material.color[1] as f32 / 255.0,
-                val.material.color[2] as f32 / 255.0,
-                val.material.color[3] as f32 / 255.0,
+                (val.material.color[0] as f32) / 255.0,
+                (val.material.color[1] as f32) / 255.0,
+                (val.material.color[2] as f32) / 255.0,
+                (val.material.color[3] as f32) / 255.0,
             ],
         }
     }
@@ -75,7 +81,7 @@ impl Particle {
         }
     }
 
-    pub fn update(&mut self, api: &mut ParticleApi) -> bool {
+    pub fn try_to_place(&mut self, api: &mut ParticleApi) -> Result<(), &'static str> {
         let lx = self.pos.x;
         let ly = self.pos.y;
 
@@ -84,9 +90,9 @@ impl Particle {
         let dx = self.vel.x;
         let dy = self.vel.y;
 
-        let steps = (dx.abs() + dy.abs()).sqrt() as u32 + 1;
+        let steps = ((dx.abs() + dy.abs()).sqrt() as u32) + 1;
         for s in 0..steps {
-            let thru = (s + 1) as f32 / steps as f32;
+            let thru = ((s + 1) as f32) / (steps as f32);
 
             self.pos.x = lx + dx * thru;
             self.pos.y = ly + dy * thru;
@@ -126,11 +132,11 @@ impl Particle {
                     Some(material) if material.physics_type != PhysicsType::Air => {
                         let succeeded = api.displace(
                             IVec2::new(self.pos.x as i32, self.pos.y as i32),
-                            self.material.clone(),
+                            self.material.clone()
                         );
 
                         if succeeded {
-                            return false;
+                            return Ok(());
                         }
 
                         // upwarp if completely blocked
@@ -140,24 +146,21 @@ impl Particle {
                         break;
                     }
                     _ => {
-                        if api
-                            .set(lx as i32, ly as i32, Pixel::new(self.material.clone()))
-                            .is_ok()
-                        {
-                            return false;
+                        if api.set(lx as i32, ly as i32, Pixel::new(self.material.clone())).is_ok() {
+                            return Ok(());
                         }
                     }
                 }
             }
         }
 
-        true
+        Err("not collided or not fitting position")
     }
 }
 
 pub struct ParticleApi<'a> {
     pub(super) chunk_position: IVec2,
-    pub(super) chunk_group: &'a mut ChunkGroupMut<Pixel>,
+    pub(super) chunk_group: &'a mut ChunkGroup<Pixel>,
     pub(super) update_send: &'a Sender<UpdateMessage>,
     pub(super) render_send: &'a Sender<RenderMessage>,
 }
@@ -172,9 +175,7 @@ impl<'a> ParticleApi<'a> {
     pub fn get_material(&self, x: i32, y: i32) -> Option<MaterialInstance> {
         let cell_position = ivec2(x, y) - self.chunk_position * CHUNK_SIZE;
 
-        self.chunk_group
-            .get(cell_position)
-            .map(|pixel| pixel.material.clone())
+        self.chunk_group.get(cell_position).map(|pixel| pixel.material.clone())
     }
 
     pub fn set(&mut self, x: i32, y: i32, pixel: Pixel) -> Result<(), String> {
@@ -187,8 +188,8 @@ impl<'a> ParticleApi<'a> {
                 self.update_send
                     .try_send(UpdateMessage {
                         cell_position: cell_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2(),
-                        chunk_position: self.chunk_position
-                            + cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
+                        chunk_position: self.chunk_position +
+                        cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
                         awake_surrouding: true,
                     })
                     .unwrap();
@@ -196,8 +197,8 @@ impl<'a> ParticleApi<'a> {
                 self.render_send
                     .try_send(RenderMessage {
                         cell_position: cell_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2(),
-                        chunk_position: self.chunk_position
-                            + cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
+                        chunk_position: self.chunk_position +
+                        cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
                     })
                     .unwrap();
 
@@ -212,7 +213,7 @@ impl<'a> ParticleApi<'a> {
         x: i32,
         y: i32,
         material: MaterialInstance,
-        condition: F,
+        condition: F
     ) -> Result<(), String> {
         let cell_position = ivec2(x, y) - self.chunk_position * CHUNK_SIZE;
 
@@ -226,8 +227,8 @@ impl<'a> ParticleApi<'a> {
                             cell_position: cell_position
                                 .rem_euclid(IVec2::ONE * CHUNK_SIZE)
                                 .as_uvec2(),
-                            chunk_position: self.chunk_position
-                                + cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
+                            chunk_position: self.chunk_position +
+                            cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
                             awake_surrouding: true,
                         })
                         .unwrap();
@@ -237,8 +238,8 @@ impl<'a> ParticleApi<'a> {
                             cell_position: cell_position
                                 .rem_euclid(IVec2::ONE * CHUNK_SIZE)
                                 .as_uvec2(),
-                            chunk_position: self.chunk_position
-                                + cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
+                            chunk_position: self.chunk_position +
+                            cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
                         })
                         .unwrap();
 
@@ -253,63 +254,52 @@ impl<'a> ParticleApi<'a> {
 
     // TODO: rewrite
     pub fn displace(&mut self, pos: IVec2, material: MaterialInstance) -> bool {
-        let mut succeeded = false;
-
-        let scan_w = 32;
-        let scan_h = 32;
+        let scan_radius = 16;
         let mut scan_pos = IVec2::ZERO;
         let mut scan_delta_pos = IVec2::new(0, -1);
-        let scan_max_i = scan_w.max(scan_h) * scan_w.max(scan_h);
 
-        for _ in 0..scan_max_i {
-            let check_scan = (scan_pos.x >= -scan_w / 2)
-                && (scan_pos.x <= scan_w / 2)
-                && (scan_pos.y >= -scan_h / 2)
-                && (scan_pos.y <= scan_h / 2);
+        for _ in 0..scan_radius {
+            let check_scan = scan_pos.abs().cmple(IVec2::splat(scan_radius)).all();
 
-            if check_scan
-                && self
+            if
+                check_scan &&
+                self
                     .set_with_condition(
                         pos.x + scan_pos.x,
                         pos.y + scan_pos.y,
                         material.clone(),
-                        |pixel| (pixel.material.physics_type == PhysicsType::Air),
+                        |pixel| pixel.material.physics_type == PhysicsType::Air
                     )
                     .is_ok()
             {
-                succeeded = true;
-                break;
+                return true;
             }
 
             // update scan coordinates
-            if (scan_pos.x == scan_pos.y)
-                || ((scan_pos.x < 0) && (scan_pos.x == -scan_pos.y))
-                || ((scan_pos.x > 0) && (scan_pos.x == 1 - scan_pos.y))
+            if
+                scan_pos.x == scan_pos.y ||
+                (scan_pos.x < 0 && scan_pos.x == -scan_pos.y) ||
+                (scan_pos.x > 0 && scan_pos.x == 1 - scan_pos.y)
             {
-                let temp = scan_delta_pos.x;
-                scan_delta_pos.x = -scan_delta_pos.y;
-                scan_delta_pos.y = temp;
+                mem::swap(&mut scan_delta_pos.x, &mut scan_delta_pos.y);
+                scan_delta_pos.x *= -1;
             }
 
-            scan_pos.x += scan_delta_pos.x;
-            scan_pos.y += scan_delta_pos.y;
+            scan_pos += scan_delta_pos;
         }
 
-        succeeded
+        false
     }
 }
 //
 pub fn particle_setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    let mut rect = Mesh::new(
-        PrimitiveTopology::TriangleStrip,
-        RenderAssetUsages::RENDER_WORLD,
-    );
+    let mut rect = Mesh::new(PrimitiveTopology::TriangleStrip, RenderAssetUsages::RENDER_WORLD);
 
     let vertices = vec![
-        [0.0, 0.0, PARTICLE_LAYER],
-        [1.0 / CHUNK_SIZE as f32, 0.0, PARTICLE_LAYER],
-        [0.0, 1.0 / CHUNK_SIZE as f32, PARTICLE_LAYER],
-        [1.0 / CHUNK_SIZE as f32, 1.0 / CHUNK_SIZE as f32, PARTICLE_LAYER],
+        [0.0, 0.0, 0.0],
+        [1.0 / (CHUNK_SIZE as f32), 0.0, 0.0],
+        [0.0, 1.0 / (CHUNK_SIZE as f32), 0.0],
+        [1.0 / (CHUNK_SIZE as f32), 1.0 / (CHUNK_SIZE as f32), 0.0]
     ];
 
     rect.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
@@ -328,15 +318,11 @@ pub fn particles_update(
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects_resource: ResMut<DirtyRects>,
     mut particles: Query<(Entity, &mut Particle)>,
-    particles_instances: Query<Entity, With<ParticleInstances>>,
+    particles_instances: Query<Entity, With<ParticleInstances>>
 ) {
     let particles_instances = particles_instances.single();
 
-    let DirtyRects {
-        new: new_dirty_rects,
-        render: render_rects,
-        ..
-    } = &mut *dirty_rects_resource;
+    let DirtyRects { new: new_dirty_rects, render: render_rects, .. } = &mut *dirty_rects_resource;
 
     let (update_send, update_recv) = async_channel::unbounded::<UpdateMessage>();
     let (render_send, render_recv) = async_channel::unbounded::<RenderMessage>();
@@ -349,10 +335,14 @@ pub fn particles_update(
                     update_dirty_rects_3x3(
                         new_dirty_rects,
                         update.chunk_position,
-                        update.cell_position,
+                        update.cell_position
                     );
                 } else {
-                    update_dirty_rects(new_dirty_rects, update.chunk_position, update.cell_position)
+                    update_dirty_rects(
+                        new_dirty_rects,
+                        update.chunk_position,
+                        update.cell_position
+                    );
                 }
             }
         });
@@ -365,9 +355,8 @@ pub fn particles_update(
 
         scope.spawn(async move {
             while let Ok(entity) = particle_recv.recv().await {
-                commands
-                    .entity(particles_instances)
-                    .remove_children(&[entity]);
+                commands.entity(particles_instances).remove_children(&[entity]);
+
                 commands.entity(entity).despawn();
             }
         });
@@ -386,23 +375,28 @@ pub fn particles_update(
         for (entity, particle) in particles.iter_mut().filter(|(_, particle)| particle.active) {
             let chunk_position = particle.pos.as_ivec2().div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-            unsafe {
-                particles_maps.get_unchecked_mut(
-                    (chunk_position.x.abs() % 2 + (chunk_position.y.abs() % 2 * 2)) as usize,
-                )
-            }
-            .entry(chunk_position)
-            .or_insert_with(Vec::new)
-            .push((entity, particle));
+            (
+                unsafe {
+                    particles_maps.get_unchecked_mut(
+                        ((chunk_position.x.abs() % 2) + (chunk_position.y.abs() % 2) * 2) as usize
+                    )
+                }
+            )
+                .entry(chunk_position)
+                .or_insert_with(Vec::new)
+                .push((entity, particle));
         }
 
         particles_maps.into_iter().for_each(|map| {
             ComputeTaskPool::get().scope(|scope| {
                 map.into_iter()
-                    .filter_map(|(position, particles)| {
-                        build_chunk_group_mut(&mut chunk_manager, position, true)
-                            .map(|chunk_group| (position, particles, chunk_group))
-                    })
+                    .filter_map(|(position, particles)|
+                        build_chunk_group(&mut chunk_manager, position).map(|chunk_group| (
+                            position,
+                            particles,
+                            chunk_group,
+                        ))
+                    )
                     .for_each(|(position, particles, mut chunk_group)| {
                         scope.spawn(async move {
                             let mut api = ParticleApi {
@@ -414,15 +408,12 @@ pub fn particles_update(
 
                             particles
                                 .into_iter()
-                                .filter_map(|(entity, mut particle)| {
-                                    let alive = particle.update(&mut api);
-
-                                    if alive {
-                                        None
-                                    } else {
-                                        Some(entity)
-                                    }
-                                })
+                                .filter_map(|(entity, mut particle)|
+                                    particle
+                                        .try_to_place(&mut api)
+                                        .ok()
+                                        .map(|_| entity)
+                                )
                                 .for_each(|entity| {
                                     particle_send.try_send(entity).unwrap();
                                 });
@@ -439,8 +430,8 @@ pub fn particles_update(
 
 pub fn update_partcile_meshes(mut particles: Query<(&mut Particle, &mut Transform)>) {
     for (particle, mut transform) in particles.iter_mut() {
-        transform.translation.x = particle.pos.x / CHUNK_SIZE as f32;
-        transform.translation.y = particle.pos.y / CHUNK_SIZE as f32;
+        transform.translation.x = particle.pos.x / (CHUNK_SIZE as f32);
+        transform.translation.y = particle.pos.y / (CHUNK_SIZE as f32);
     }
 }
 

@@ -16,7 +16,7 @@ use itertools::Itertools;
 use crate::{
     constants::{ CHUNK_SIZE, WORLD_HEIGHT, WORLD_WIDTH },
     simulation::{
-        chunk_groups::{ build_chunk_group, ChunkGroup, ChunkGroupMut },
+        chunk_groups::{ build_chunk_group, ChunkGroup},
         chunk_manager::ChunkManager,
         materials::PhysicsType,
         mesh::douglas_peucker,
@@ -24,29 +24,32 @@ use crate::{
     },
 };
 
-use super::{ actor::Actor, enemy::Enemy, player::Player };
+use super::{ actor::Actor, enemy::Enemy, player::Player};
 
 #[derive(Component)]
-pub struct Path(pub Vec<IVec2>);
+pub struct Path{
+    pub nodes: Vec<IVec2>,
+    pub created_at: f64
+}
 
 #[derive(Component)]
 pub struct PathGenerationTask(Task<Option<Path>>);
 
 #[inline]
 fn is_empty(position: IVec2, size: IVec2, chunk_group: &ChunkGroup<Pixel>) -> bool {
-    let size = (size.as_vec2() / 2.0).round().as_ivec2();
+    let size = (size.as_vec2() / 2.0).round().as_ivec2() - 1
+    ;
     // let minimum = position - IVec2::splat(8);
     // let maximum = position + IVec2::splat(8);
 
-
     // chunk_group
-    // .get(position + ivec2(x, y))
-    // .map_or(false, |pixel|
-    //     matches!(
-    //         pixel.material.physics_type,
-    //         PhysicsType::Air | PhysicsType::Gas | PhysicsType::Liquid(..)
+    //     .get(position)
+    //     .map_or(false, |pixel|
+    //         matches!(
+    //             pixel.material.physics_type,
+    //             PhysicsType::Air | PhysicsType::Gas | PhysicsType::Liquid(..)
+    //         )
     //     )
-    // )
 
     (-size.x..=size.x)
         .cartesian_product(-size.y..=size.y)
@@ -113,7 +116,7 @@ fn astar_search(
     cost_so_far.insert(start, 0);
 
     while let Some(Node { position, .. }) = open_set.pop() {
-        if (position - goal).abs().cmple(size).all() {
+        if position == goal {
             let mut path = vec![goal.as_vec2()];
             let mut current = position;
 
@@ -122,11 +125,18 @@ fn astar_search(
                 current = came_from[&current].unwrap();
             }
 
+            // path.push(start.as_vec2());
+
             return Some(
                 douglas_peucker(&path, 4.0)
                     .iter()
                     .rev()
-                    .map(|position| { position.round().as_ivec2() + chunk_position * CHUNK_SIZE + ivec2(fastrand::i32(-2..=2), fastrand::i32(-2..=2)) })
+                    .map(|position| {
+                        position.round().as_ivec2() +
+                            chunk_position * CHUNK_SIZE +
+                            ivec2(fastrand::i32(-2..=2), fastrand::i32(-2..=2))
+                            // - size / 2
+                    })
                     .collect_vec()
             );
         }
@@ -150,17 +160,21 @@ fn astar_search(
 
 pub fn pathfind(
     mut commands: Commands,
-    chunk_manager: Res<ChunkManager>,
-    mut actors: Query<(Entity, &Actor, &Transform, Option<&mut PathGenerationTask>), With<Enemy>>,
-    player_q: Query<&Transform, (With<Player>, Without<Enemy>)>
+    mut chunk_manager: ResMut<ChunkManager>,
+    mut actors: Query<(Entity, &Actor, &Transform, Option<&mut PathGenerationTask>, Option<&Path>), With<Enemy>>,
+    player_q: Query<&Transform, (With<Player>, Without<Enemy>)>,
+    time: Res<Time>
 ) {
     let thread_pool = AsyncComputeTaskPool::get();
     let player_position = (player_q.single().translation.xy() * (CHUNK_SIZE as f32))
         .round()
         .as_ivec2();
 
-    for (entity, actor, transform, mut task) in actors.iter_mut() {
-        let position = (transform.translation.xy() * (CHUNK_SIZE as f32)).round().as_ivec2();
+    for (entity, actor, transform, mut task, path) in actors.iter_mut() {
+        let position = (transform.translation.xy() * (CHUNK_SIZE as f32))
+            .round()
+            .as_ivec2();
+        
         let chunk_position = ((player_position + position) / 2).div_euclid(
             IVec2::splat(CHUNK_SIZE)
         );
@@ -182,32 +196,37 @@ pub fn pathfind(
             }
         }
 
-        let size = actor.hitbox.size().as_ivec2();
-        let Some(chunk_group) = build_chunk_group(&chunk_manager, chunk_position, true) else {
-            continue;
-        };
+        
+        if path.map_or(true, |path| time.elapsed_seconds_f64() - path.created_at > 0.1) {
+            let size = actor.hitbox.size().as_ivec2();
+            let created_at = time.elapsed_seconds_f64();
+            let Some(chunk_group) = build_chunk_group(&mut chunk_manager, chunk_position) else {
+                continue;
+            };
 
-        commands
-            .entity(entity)
-            .insert(
-                PathGenerationTask(
-                    thread_pool.spawn(async move {
-                        astar_search(
-                            position - chunk_position * CHUNK_SIZE,
-                            player_position - chunk_position * CHUNK_SIZE,
-                            size,
-                            &chunk_group,
-                            chunk_position
-                        ).map(Path)
-                    })
-                )
-            );
+            commands
+                .entity(entity)
+                .insert(
+                    PathGenerationTask(
+                        thread_pool.spawn(async move {
+                            astar_search(
+                                position - chunk_position * CHUNK_SIZE,
+                                player_position - chunk_position * CHUNK_SIZE,
+                                size,
+                                &chunk_group,
+                                chunk_position
+                            ).map(|nodes| Path { nodes, created_at })
+                        })
+                    )
+                );
+        }
+
     }
 }
 
 pub fn gizmos_path(mut actors: Query<Option<&Path>, With<Enemy>>, mut gizmos: Gizmos) {
     for path in actors.iter_mut().flatten() {
-        for (p1, p2) in path.0[0..path.0.len() - 1].iter().zip(path.0[1..path.0.len()].iter()) {
+        for (p1, p2) in path.nodes[0..path.nodes.len() - 1].iter().zip(path.nodes[1..path.nodes.len()].iter()) {
             gizmos.line_2d(
                 p1.as_vec2() / (CHUNK_SIZE as f32) + 0.5 / (CHUNK_SIZE as f32),
                 p2.as_vec2() / (CHUNK_SIZE as f32) + 0.5 / (CHUNK_SIZE as f32),

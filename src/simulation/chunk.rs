@@ -1,21 +1,21 @@
 use async_channel::Sender;
 use bevy::{
-    asset::Handle,
-    ecs::{component::Component, entity::Entity},
+    asset::{Assets, Handle},
+    ecs::{ bundle::Bundle, component::Component, entity::Entity },
     render::{
         render_asset::RenderAssetUsages,
         render_resource::{ Extent3d, TextureDimension, TextureFormat },
-        texture::{BevyDefault, Image},
+        texture::{ BevyDefault, Image },
     },
     utils::HashMap,
 };
-use bevy_math::{ ivec2, IVec2, URect, Vec2 };
+use bevy_math::{ ivec2, IVec2, URect, UVec2, Vec2 };
 
 use bevy_rapier2d::prelude::*;
 use crate::{ constants::{ CHUNK_CELLS, CHUNK_SIZE, COLLIDER_PRECISION } };
 
 use super::{
-    chunk_groups::ChunkGroupMut,
+    chunk_groups::ChunkGroup,
     dirty_rect::{ RenderMessage, UpdateMessage },
     materials::{ Material, PhysicsType },
     mesh::douglas_peucker,
@@ -43,10 +43,10 @@ pub struct Chunk;
 #[derive(Component)]
 pub struct ChunkCollider;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChunkState {
     Initialized,
-    Reading,
+    Generating,
     Processing,
     Populating,
     Active,
@@ -57,6 +57,8 @@ pub enum ChunkState {
 pub struct ChunkData {
     pub pixels: Vec<Pixel>,
     pub texture: Handle<Image>,
+    pub background: Handle<Image>,
+    pub lighting: Handle<Image>,
     pub state: ChunkState,
 }
 
@@ -65,6 +67,8 @@ impl Default for ChunkData {
         Self {
             pixels: vec![Pixel::default(); CHUNK_CELLS as usize],
             texture: Handle::default(),
+            background: Handle::default(),
+            lighting: Handle::default(),
             state: ChunkState::Initialized,
         }
     }
@@ -76,6 +80,8 @@ impl ChunkData {
         ChunkData {
             pixels: cells,
             texture: Handle::default(),
+            background: Handle::default(),
+            lighting: Handle::default(),
             state: ChunkState::Initialized,
         }
     }
@@ -94,40 +100,23 @@ impl ChunkData {
         )
     }
 
-    pub fn update_all(&self, image: &mut Image) {
-        let fire_colors: [[u8; 4]; 5] = [
-            [0xa9, 0x43, 0x1e, 0xff],
-            [0xd7, 0x88, 0x25, 0xff],
-            [0xea, 0xaa, 0x00, 0xff],
-            [0xe1, 0xcd, 0x00, 0xff],
-            [0xee, 0xdc, 0x00, 0xff],
-        ];
+    pub fn update_lighting(&self, images: &mut Assets<Image>, rect: URect) {
+        let background = images.get(self.background.clone());
+        let texture = images.get(self.texture.clone());
+        let lighting = images.get(self.lighting.clone());
 
-        self.pixels
-            .iter()
-            .enumerate()
-            .for_each(|(index, pixel)| {
-                image.data[index * 4..(index + 1) * 4].copy_from_slice(&pixel.material.color);
-                if pixel.on_fire {
-                    image.data[index * 4..(index + 1) * 4].copy_from_slice(
-                        &fire_colors[fastrand::i32(0..fire_colors.len() as i32) as usize]
-                    );
-                } else {
-                    let mut color = pixel.get_color();
+        for x in rect.min.x..rect.max.x {
+            for y in rect.min.y..rect.max.y {
+                let index = (y * (CHUNK_SIZE as u32) + x) as usize;
+            }
+        }
+    }
 
-                    if let PhysicsType::Liquid(parameters) = pixel.material.physics_type {
-                        color[3] = (f32::clamp(parameters.volume * 5.0, 0.1, 0.7) * 255.0) as u8;
-                    }
-
-                    // if let SimulationType::Displaced(dx, dy) = pixel.simulation {
-                    //     color[0] = f32::sqrt(dx.powi(2) + dy.powi(2)) as u8 * 16;
-                    //     color[1] = 0;
-                    //     color[2] = 0;
-                    // }
-
-                    image.data[index * 4..(index + 1) * 4].copy_from_slice(&color);
-                }
-            });
+    pub fn update_texture(&self, image: &mut Image) {
+        self.update_texture_part(
+            image,
+            URect::from_corners(UVec2::ZERO, UVec2::splat(CHUNK_SIZE as u32))
+        );
     }
 
     pub fn build_colliders(&self) -> Result<Vec<Collider>, String> {
@@ -194,7 +183,7 @@ impl ChunkData {
             .map_err(|_| "no contours were found".to_string())
     }
 
-    pub fn update_rect(&self, image: &mut Image, rect: URect) {
+    pub fn update_texture_part(&self, image: &mut Image, rect: URect) {
         let fire_colors: [[u8; 4]; 5] = [
             [0xa9, 0x43, 0x1e, 0xff],
             [0xd7, 0x88, 0x25, 0xff],
@@ -234,7 +223,7 @@ impl ChunkData {
 pub struct ChunkApi<'a> {
     pub(super) chunk_position: IVec2,
     pub(super) cell_position: IVec2,
-    pub(super) chunk_group: &'a mut ChunkGroupMut<Pixel>,
+    pub(super) chunk_group: &'a mut ChunkGroup<Pixel>,
     pub(super) update_send: &'a Sender<UpdateMessage>,
     pub(super) render_send: &'a Sender<RenderMessage>,
     pub(super) clock: u8,
@@ -263,7 +252,7 @@ impl<'a> ChunkApi<'a> {
         let cell_position = self.cell_position + ivec2(dx, dy);
 
         match self.chunk_group.get(cell_position) {
-            Some(pixel) => pixel.material.physics_type,
+            Some(pixel) => pixel.material.physics_type.clone(),
             None => PhysicsType::Static,
         }
     }

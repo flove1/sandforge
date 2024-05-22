@@ -1,37 +1,39 @@
 use bevy::prelude::*;
 
-use crate::actors::player::update_player;
+#[derive(Component)]
+pub struct DespawnOnFinish;
 
-#[derive(Clone, Component)]
-pub struct AnimationIndices {
-    pub first: usize,
-    pub last: usize,
+pub fn despawn_expired_animations(
+    mut commands: Commands,
+    mut anim_q: Query<(Entity, &AnimationState), With<DespawnOnFinish>>
+) {
+    for (entity, state) in anim_q.iter_mut() {
+        if state.is_ended() {
+            commands.entity(entity).despawn_recursive();
+        }
+    }
 }
 
-#[derive(Component, Clone, Deref, DerefMut)]
-pub struct AnimationTimer(pub Timer);
+#[derive(Clone, Component, Deref)]
+pub struct Animation(pub benimator::Animation);
 
-fn animate_sprite(
+#[derive(Default, Component, Deref, DerefMut)]
+pub struct AnimationState(pub benimator::State);
+
+fn animate(
     time: Res<Time>,
-    mut query: Query<(&AnimationIndices, &mut AnimationTimer, &mut TextureAtlas)>,
+    mut query: Query<(&mut AnimationState, &mut TextureAtlas, &Animation)>
 ) {
-    for (indices, mut timer, mut sprite) in &mut query {
-        timer.tick(time.delta());
-        if timer.just_finished() {
-            sprite.index = if !(indices.first..=indices.last).contains(&sprite.index)
-                || sprite.index == indices.last
-            {
-                indices.first
-            } else {
-                sprite.index + 1
-            };
-        }
+    for (mut state, mut texture, animation) in query.iter_mut() {
+        state.update(animation, time.delta());
+
+        texture.index = state.frame_index();
     }
 }
 
 pub struct AnimationPlugin;
 impl Plugin for AnimationPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, animate_sprite.after(update_player));
+        app.add_systems(FixedPostUpdate, (animate, despawn_expired_animations).chain());
     }
 }

@@ -1,16 +1,24 @@
-use bevy::{ prelude::*, tasks::ComputeTaskPool, utils::HashMap };
+use bevy::{
+    prelude::*,
+    render::view::RenderLayers,
+    sprite::Anchor,
+    tasks::ComputeTaskPool,
+    utils::HashMap,
+};
 use bevy_math::{ ivec2, vec2, IVec2, Rect, UVec2, Vec3Swizzles };
+use bevy_rapier2d::dynamics::RigidBody;
 use itertools::{ Either, Itertools };
 
 use crate::{
+    camera::{ TrackingCamera, BACKGROUND_LAYER, LIGHTING_LAYER, TERRAIN_LAYER },
     constants::{ CHUNK_SIZE, WORLD_HEIGHT, WORLD_WIDTH },
-    generation::tiles::TileRequestEvent,
-    registries::{ self, Registries },
+    generation::chunk::GenerationEvent,
+    registries::Registries,
 };
 
 use super::{
-    chunk::{ ChunkApi, ChunkData, ChunkState },
-    chunk_groups::build_chunk_group_mut,
+    chunk::{ Chunk, ChunkApi, ChunkData, ChunkState },
+    chunk_groups::build_chunk_group,
     dirty_rect::{
         update_dirty_rects,
         update_dirty_rects_3x3,
@@ -23,7 +31,7 @@ use super::{
 };
 
 #[derive(Component)]
-pub struct Chunks;
+pub struct Terrain;
 
 #[derive(Resource)]
 pub struct ChunkManager {
@@ -63,6 +71,9 @@ impl ChunkManager {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
         self.get_chunk_data(&chunk_position)
+            .filter(
+                |chunk| (chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping)
+            )
             .map(|chunk| &chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .ok_or("pixel not loaded yet".to_string())
     }
@@ -71,6 +82,9 @@ impl ChunkManager {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
         self.get_chunk_data_mut(&chunk_position)
+            .filter(
+                |chunk| (chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping)
+            )
             .map(|chunk| &mut chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .ok_or("pixel not loaded yet".to_string())
     }
@@ -79,6 +93,9 @@ impl ChunkManager {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
         self.get_chunk_data(&chunk_position)
+            .filter(
+                |chunk| (chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping)
+            )
             .map(|chunk| &chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .map(|pixel| &pixel.material)
             .ok_or("pixel not loaded yet".to_string())
@@ -88,6 +105,9 @@ impl ChunkManager {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
         self.get_chunk_data_mut(&chunk_position)
+            .filter(
+                |chunk| (chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping)
+            )
             .map(|chunk| &mut chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
             .map(|pixel| &mut pixel.material)
             .ok_or("pixel not loaded yet".to_string())
@@ -96,11 +116,18 @@ impl ChunkManager {
     pub fn set(&mut self, pos: IVec2, material: MaterialInstance) -> Result<(), String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        if let Some(chunk) = self.get_chunk_data_mut(&chunk_position) {
+        if
+            let Some(chunk) = self
+                .get_chunk_data_mut(&chunk_position)
+                .filter(
+                    |chunk|
+                        chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping
+                )
+        {
             chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material);
             Ok(())
         } else {
-            Err("chunk is not loaded".to_string())
+            Err("pixel not loaded yet".to_string())
         }
     }
 
@@ -112,16 +139,22 @@ impl ChunkManager {
     ) -> Result<bool, String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        match self.get_chunk_data_mut(&chunk_position) {
-            Some(chunk) => {
-                if condition(chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)].clone()) {
-                    chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material);
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
+        if
+            let Some(chunk) = self
+                .get_chunk_data_mut(&chunk_position)
+                .filter(
+                    |chunk|
+                        chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping
+                )
+        {
+            if condition(chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)].clone()) {
+                chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material);
+                Ok(true)
+            } else {
+                Ok(false)
             }
-            None => Err("chunk is not loaded".to_string()),
+        } else {
+            Err("pixel not loaded yet".to_string())
         }
     }
 
@@ -186,23 +219,24 @@ impl ChunkManager {
 }
 
 pub fn manager_setup(mut commands: Commands) {
-    commands.spawn((Name::new("Chunks"), SpatialBundle::INHERITED_IDENTITY, Chunks));
+    commands.spawn((Name::new("Terrain"), SpatialBundle::INHERITED_IDENTITY, Terrain));
 }
 
 pub fn update_loaded_chunks(
-    mut ev_chunkgen: EventWriter<TileRequestEvent>,
+    mut commands: Commands,
+    mut ev_chunkgen: EventWriter<GenerationEvent>,
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects_resource: ResMut<DirtyRects>,
-    camera_query: Query<&Transform, With<Camera>>
+    mut images: ResMut<Assets<Image>>,
+    camera_q: Query<(&Transform, &OrthographicProjection), With<TrackingCamera>>,
+    terrain_q: Query<Entity, With<Terrain>>
 ) {
     let DirtyRects { current, .. } = &mut *dirty_rects_resource;
+    let chunks_entity = terrain_q.single();
 
-    let camera_position = camera_query.single().translation.xy();
+    let (transform, projection) = camera_q.single();
 
-    let area = Rect::from_center_size(
-        camera_position,
-        vec2((WORLD_WIDTH as f32) * 1.5, (WORLD_HEIGHT as f32) * 1.5)
-    );
+    let area = Rect::from_center_size(transform.translation.xy(), projection.area.size() + 4.0);
 
     // suspend chunks out of bounds
     chunk_manager.chunks
@@ -228,11 +262,60 @@ pub fn update_loaded_chunks(
                             position,
                             UVec2::splat((CHUNK_SIZE as u32) - 1)
                         );
+                        chunk.state = ChunkState::Active;
                     }
-                    chunk.state = ChunkState::Active;
                 }
                 None => {
-                    ev_chunkgen.send(TileRequestEvent(position));
+                    let chunk = ChunkData {
+                        pixels: vec![],
+                        texture: images.add(ChunkData::new_image()),
+                        background: images.add(ChunkData::new_image()),
+                        lighting: images.add(ChunkData::new_image()),
+                        state: ChunkState::Generating,
+                        ..Default::default()
+                    };
+
+                    let entity = commands
+                        .spawn((
+                            Chunk,
+                            RigidBody::Fixed,
+                            SpriteBundle {
+                                texture: chunk.texture.clone(),
+                                sprite: Sprite {
+                                    custom_size: Some(vec2(1.0, 1.0)),
+                                    anchor: Anchor::BottomLeft,
+                                    flip_y: true,
+                                    ..Default::default()
+                                },
+                                transform: Transform::from_translation(
+                                    position.as_vec2().extend(0.0)
+                                ),
+                                ..Default::default()
+                            },
+                            RenderLayers::layer(TERRAIN_LAYER),
+                        ))
+                        .with_children(|parent| {
+                            parent.spawn((
+                                SpriteBundle {
+                                    texture: chunk.background.clone(),
+                                    sprite: Sprite {
+                                        custom_size: Some(vec2(1.0, 1.0)),
+                                        anchor: Anchor::BottomLeft,
+                                        flip_y: true,
+                                        ..Default::default()
+                                    },
+                                    transform: Transform::from_translation(Vec2::ZERO.extend(-1.0)),
+                                    ..Default::default()
+                                },
+                                RenderLayers::layer(BACKGROUND_LAYER),
+                            ));
+                        })
+                        .id();
+
+                    commands.entity(chunks_entity).add_child(entity);
+
+                    chunk_manager.chunks.insert(position, (entity, chunk));
+                    ev_chunkgen.send(GenerationEvent(position));
                 }
             }
         }
@@ -311,13 +394,13 @@ pub fn chunks_update(
                                 .map(|dirty_rect| (position, dirty_rect))
                         })
                         .filter_map(|(position, dirty_rect)| {
-                            build_chunk_group_mut(&mut chunk_manager, position, true).map(
+                            build_chunk_group(&mut chunk_manager, position).map(
                                 |chunk_group| (position, dirty_rect, chunk_group)
                             )
                         })
                         .for_each(|(position, dirty_rect, mut chunk_group)| {
-                            let reactive_materials = registries.reactive_materials.read();
-                            let materials = registries.materials.read();
+                            let reactive_materials = &registries.reactive_materials;
+                            let materials = &registries.materials;
 
                             scope.spawn(async move {
                                 let mut api = ChunkApi {
@@ -356,6 +439,20 @@ pub fn chunks_update(
                                             PhysicsType::Liquid(..) => {
                                                 update_liquid(&mut api);
                                             }
+                                            PhysicsType::Disturbed( .., original_type) => {
+                                                let original_position = api.cell_position;
+                                                update_sand(&mut api);
+
+                                                let original = api.get(0, 0);
+                                                
+                                                if original_position == api.cell_position  {
+                                                    let original_material = MaterialInstance {
+                                                        physics_type: *original_type,
+                                                        ..original.material.clone()
+                                                    };
+                                                    api.update(original.with_material(original_material))
+                                                }
+                                            }
                                             _ => {}
                                         }
 
@@ -380,22 +477,28 @@ pub fn chunks_update(
                                                                 direction[0],
                                                                 direction[1]
                                                             );
-    
+
                                                             if
-                                                                pixel.temperature < fire_parameters.fire_temperature
+                                                                pixel.temperature <
+                                                                fire_parameters.fire_temperature
                                                             {
-                                                                pixel.temperature += (fastrand::f32() *
-                                                                    ((
-                                                                        pixel.temperature.abs_diff(
-                                                                            fire_parameters.fire_temperature
-                                                                        ) as f32
-                                                                    ) /
-                                                                        8.0)) as i32;
+                                                                pixel.temperature +=
+                                                                    (fastrand::f32() *
+                                                                        ((
+                                                                            pixel.temperature.abs_diff(
+                                                                                fire_parameters.fire_temperature
+                                                                            ) as f32
+                                                                        ) /
+                                                                            8.0)) as i32;
                                                             }
-    
-                                                            api.set(direction[0], direction[1], pixel);
+
+                                                            api.set(
+                                                                direction[0],
+                                                                direction[1],
+                                                                pixel
+                                                            );
                                                         }
-    
+
                                                         if fire_parameters.fire_hp <= 0 {
                                                             api.update(Pixel::default());
                                                             continue;
@@ -410,12 +513,13 @@ pub fn chunks_update(
                                                             &mut pixel.material.fire_parameters
                                                     {
                                                         if
-                                                        pixel.temperature >=
+                                                            pixel.temperature >=
                                                             fire_parameters.ignition_temperature
                                                         {
                                                             pixel.on_fire = true;
                                                         } else {
-                                                            pixel.temperature -= (30 - pixel.temperature) / 16;
+                                                            pixel.temperature -=
+                                                                (30 - pixel.temperature) / 16;
                                                         }
                                                     }
                                                 }
@@ -425,9 +529,7 @@ pub fn chunks_update(
 
                                         let id = &api.get(0, 0).material.id;
                                         if reactive_materials.contains(id) {
-                                            let material = materials
-                                                .get(id)
-                                                .unwrap();
+                                            let material = materials.get(id).unwrap();
                                             if let Some(reactions) = &material.reactions {
                                                 for (x, y) in (-1..=1).cartesian_product(-1..=1) {
                                                     if x == 0 && y == 0 {
@@ -484,9 +586,6 @@ pub fn chunks_update(
                 });
             }
         }
-
-        // for (y, ) in layers {
-        // }
 
         update_send.close();
         render_send.close();

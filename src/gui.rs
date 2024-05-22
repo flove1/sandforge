@@ -12,21 +12,18 @@ use bevy::{
     window::PrimaryWindow,
 };
 use bevy_math::{ ivec2, vec2 };
-use bevy_rapier2d::{dynamics::{ExternalImpulse, RigidBody, Sleeping, Velocity}, geometry::ColliderMassProperties, plugin::{RapierConfiguration, RapierContext}};
-use egui_notify::{ Toast, ToastLevel, ToastOptions, Toasts };
-use itertools::Itertools;
+use bevy_rapier2d::{
+    dynamics::{ ExternalImpulse, RigidBody, Sleeping, Velocity },
+    geometry::ColliderMassProperties,
+};
+use egui_notify::{ ToastLevel, Toasts };
 
 use crate::{
-    assets::{ FontAsset, FontAssets },
-    constants::CHUNK_SIZE,
-    painter::{ BrushRes, BrushShape, BrushType, PainterObjectBuffer },
-    registries::Registries,
-    simulation::{
+    assets::{ FontBytes, FontAssets }, camera::TrackingCamera, constants::CHUNK_SIZE, has_window, painter::{ BrushRes, BrushShape, BrushType, PainterObjectBuffer }, registries::Registries, simulation::{
         chunk_manager::ChunkManager,
         materials::{ Material, PhysicsType },
-        object::Object,
-    },
-    state::AppState,
+        object::{ get_object_by_click, Object, ObjectBundle },
+    }, state::AppState
 };
 
 pub struct GuiPlugin;
@@ -36,18 +33,19 @@ impl Plugin for GuiPlugin {
         app.add_event::<ToastEvent>()
             .init_resource::<Inventory>()
             .init_resource::<ToastsRes>()
-            .add_systems(Startup, setup_egui)
+            .add_systems(OnEnter(AppState::WorldInitilialization), setup_egui)
             .add_systems(
                 Update,
                 (
                     ui_info_system,
-                    ui_selected_cell_system,
+                    // ui_selected_cell_system,
                     ui_painter_system,
                     ui_inventory_system,
                     show_toasts,
+                    get_object_by_click.run_if(has_window),
                 )
                     .run_if(egui_has_primary_context)
-                    .run_if(in_state(AppState::InGame))
+                    .run_if(in_state(AppState::Game))
             );
     }
 }
@@ -62,36 +60,17 @@ pub struct ToastEvent {
 #[derive(Default, Resource)]
 pub struct ToastsRes(Toasts);
 
-fn setup_egui(mut contexts: EguiContexts) {
+fn setup_egui(
+    mut contexts: EguiContexts,
+    fonts: Res<FontAssets>,
+    fonts_assets: Res<Assets<FontBytes>>
+) {
     contexts.ctx_mut().style_mut(|style| {
         style.visuals.override_text_color = Some(egui::Color32::WHITE);
         style.visuals.window_fill = egui::Color32::from_rgba_unmultiplied(27, 27, 27, 200);
         style.interaction.selectable_labels = false;
     });
-}
 
-pub fn show_toasts(
-    mut contexts: EguiContexts,
-    mut toasts: ResMut<ToastsRes>,
-    mut events: EventReader<ToastEvent>
-) {
-    let ctx = contexts.ctx_mut();
-    let toasts = &mut toasts.0;
-
-    for event in events.read() {
-        let ToastEvent { duration, level, content } = event.clone();
-
-        toasts.basic(content).set_level(level).set_duration(Some(duration));
-    }
-
-    toasts.show(ctx);
-}
-
-pub fn setup_egui_fonts(
-    mut contexts: EguiContexts,
-    fonts: Res<FontAssets>,
-    fonts_assets: Res<Assets<FontAsset>>
-) {
     let font = fonts_assets.get(fonts.ui.clone()).unwrap();
     let mut fonts_definitions = egui::FontDefinitions::default();
 
@@ -111,6 +90,23 @@ pub fn setup_egui_fonts(
         .push("pixel font".to_owned());
 
     contexts.ctx_mut().set_fonts(fonts_definitions);
+}
+
+pub fn show_toasts(
+    mut contexts: EguiContexts,
+    mut toasts: ResMut<ToastsRes>,
+    mut events: EventReader<ToastEvent>
+) {
+    let ctx = contexts.ctx_mut();
+    let toasts = &mut toasts.0;
+
+    for event in events.read() {
+        let ToastEvent { duration, level, content } = event.clone();
+
+        toasts.basic(content).set_level(level).set_duration(Some(duration));
+    }
+
+    toasts.show(ctx);
 }
 
 pub fn egui_has_primary_context(query: Query<&EguiContext, With<PrimaryWindow>>) -> bool {
@@ -156,7 +152,7 @@ fn ui_info_system(mut contexts: EguiContexts, diagnostics: Res<DiagnosticsStore>
 fn ui_selected_cell_system(
     mut contexts: EguiContexts,
     q_window: Query<&Window, With<PrimaryWindow>>,
-    mut q_camera: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    mut q_camera: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>,
     registries: Res<Registries>,
     chunk_manager: Res<ChunkManager>
 ) {
@@ -164,14 +160,14 @@ fn ui_selected_cell_system(
 
     egui::Window
         ::new("Selected pixel")
-        .auto_sized()
+        .max_width(ctx.pixels_per_point() * 120.0)
         .title_bar(false)
         .anchor(egui::Align2::LEFT_BOTTOM, egui::Vec2 {
             x: ctx.pixels_per_point() * 8.0,
             y: -ctx.pixels_per_point() * 8.0,
         })
         .show(ctx, |ui| {
-            ui.set_max_width(ctx.pixels_per_point() * 80.0);
+            // ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
             let (camera, camera_global_transform) = q_camera.single_mut();
             let window = q_window.single();
@@ -215,10 +211,7 @@ fn ui_selected_cell_system(
                 egui::Color32::WHITE,
                 format!(
                     "Material name: {}",
-                    registries.materials
-                    .read()
-                        .get(&pixel.material.id.to_string())
-                        .unwrap().id
+                    registries.materials.get(&pixel.material.id.to_string()).unwrap().id
                 )
             );
 
@@ -275,7 +268,10 @@ fn ui_selected_cell_system(
             if let Some(fire_parameters) = &pixel.material.fire_parameters {
                 ui.separator();
 
-                ui.colored_label(egui::Color32::WHITE, format!("temperature: {}", pixel.temperature));
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("temperature: {}", pixel.temperature)
+                );
 
                 ui.colored_label(egui::Color32::WHITE, format!("burning: {}", pixel.on_fire));
 
@@ -319,7 +315,6 @@ fn ui_painter_system(
             ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
             let mut elements = registries.materials
-                .read()
                 .values()
                 .cloned()
                 .collect::<Vec<Material>>();
@@ -475,8 +470,8 @@ pub struct Cell {
     pub object: Object,
 }
 
-const INVENTORY_ROWS: usize = 4;
-const INVENTORY_COLUMNS: usize = 2;
+const INVENTORY_ROWS: usize = 2;
+const INVENTORY_COLUMNS: usize = 4;
 const INVENTORY_SLOTS: usize = INVENTORY_ROWS * INVENTORY_COLUMNS;
 
 #[derive(Resource)]
@@ -541,9 +536,9 @@ fn ui_inventory_system(
     mut inventory: ResMut<Inventory>,
     mut events: EventWriter<ToastEvent>,
     window_q: Query<(Entity, &Window), With<PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>
 ) {
-    let (window_entity, window) = window_q.single();
+    let (_window_entity, window) = window_q.single();
     let (camera, camera_global_transform) = camera_q.single();
     let ctx = contexts.ctx_mut();
 
@@ -551,9 +546,9 @@ fn ui_inventory_system(
         ::new("inventory")
         .auto_sized()
         .title_bar(false)
-        .anchor(egui::Align2::LEFT_TOP, [
+        .anchor(egui::Align2::LEFT_BOTTOM, [
             ctx.pixels_per_point() * 8.0,
-            ctx.pixels_per_point() * 8.0,
+            - ctx.pixels_per_point() * 8.0,
         ])
         .show(ctx, |ui| {
             egui::Grid
@@ -569,10 +564,12 @@ fn ui_inventory_system(
                         let (_, payload) = ui.dnd_drop_zone::<usize, ()>(
                             Frame::menu(ui.style()),
                             |ui| {
-                                let drag_stopped = ctx.drag_stopped_id() == cell_option.as_ref().map(|cell| cell.id);
+                                let drag_stopped =
+                                    ctx.drag_stopped_id() ==
+                                    cell_option.as_ref().map(|cell| cell.id);
                                 let over_ui = ctx.is_pointer_over_area();
 
-                                if cell_option.is_none() || drag_stopped && over_ui {
+                                if cell_option.is_none() || (drag_stopped && over_ui) {
                                     let rect = ui.allocate_exact_size(
                                         cell_size,
                                         Sense::click_and_drag()
@@ -583,7 +580,6 @@ fn ui_inventory_system(
                                         Color32::TRANSPARENT
                                     );
 
-                                    
                                     return;
                                 }
 
@@ -597,42 +593,42 @@ fn ui_inventory_system(
                                         egui::Rounding::default().at_most(0.5),
                                         Color32::TRANSPARENT
                                     );
-                                    
+
                                     if let Some(position) = window.cursor_position() {
                                         let point = camera
                                             .viewport_to_world(camera_global_transform, position)
                                             .map(|ray| ray.origin.truncate())
                                             .unwrap();
-    
-                                        let collider_result = cell_option.as_ref().unwrap().object.create_collider();
-                                        
+
+                                        let collider_result = cell_option
+                                            .as_ref()
+                                            .unwrap()
+                                            .object.create_collider();
+
                                         if let Ok(collider) = collider_result {
                                             let cell = cell_option.take().unwrap();
-                                            commands
-                                                .spawn((
-                                                    cell.object,
-                                                    collider,
-                                                    RigidBody::Dynamic,
-                                                    Sleeping::default(),
-                                                    Velocity::zero(),
-                                                    ExternalImpulse::default(),
-                                                    TransformBundle {
-                                                        local: Transform::from_translation(
-                                                            point.extend(0.0)
-                                                        ),
-                                                        ..Default::default()
-                                                    },
-                                                ))
-                                                .insert(ColliderMassProperties::Density(2.0));
+                                            commands.spawn(ObjectBundle {
+                                                object: cell.object,
+                                                collider,
+                                                transform: TransformBundle {
+                                                    local: Transform::from_translation(
+                                                        point.extend(0.0)
+                                                    ),
+                                                    ..Default::default()
+                                                },
+                                                mass_properties: ColliderMassProperties::Density(
+                                                    2.0
+                                                ),
+                                                ..Default::default()
+                                            });
                                         }
-    
+
                                         events.send(ToastEvent {
                                             content: "Dropped in world".to_string(),
                                             level: egui_notify::ToastLevel::Info,
                                             duration: Duration::from_secs(2),
                                         });
-                                    }
-                                    else {
+                                    } else {
                                         events.send(ToastEvent {
                                             content: "Position is out of bounds".to_string(),
                                             level: egui_notify::ToastLevel::Error,
@@ -656,25 +652,22 @@ fn ui_inventory_system(
                                         let y_offset =
                                             (texture_size - (cell.object.height as usize)) / 2;
 
-                                        let mut colors =
-                                            vec![0; texture_size.pow(2) * 4 as usize];
+                                        let mut colors = vec![0; texture_size.pow(2) * 4 as usize];
 
                                         cell.object.pixels
                                             .iter()
                                             .enumerate()
                                             .filter(|(_, pixel)| pixel.is_some())
-                                            .map(|(index, pixel)| (
-                                                index,
-                                                pixel.as_ref().unwrap(),
-                                            ))
+                                            .map(|(index, pixel)| (index, pixel.as_ref().unwrap()))
                                             .for_each(|(pixel_index, pixel)| {
-                                                let y =
-                                                    pixel_index / (cell.object.width as usize);
-                                                let x =
-                                                    pixel_index % (cell.object.width as usize);
+                                                let y = pixel_index / (cell.object.width as usize);
+                                                let x = pixel_index % (cell.object.width as usize);
 
                                                 let index =
-                                                    ((cell.object.height as usize - (y + 1) + y_offset) * texture_size +
+                                                    (((cell.object.height as usize) -
+                                                        (y + 1) +
+                                                        y_offset) *
+                                                        texture_size +
                                                         x +
                                                         x_offset) *
                                                     4;
@@ -694,7 +687,10 @@ fn ui_inventory_system(
                                         )
                                     });
 
-                                    let cell_rect = ui.allocate_exact_size(cell_size, Sense::click_and_drag()).0;                  
+                                    let cell_rect = ui.allocate_exact_size(
+                                        cell_size,
+                                        Sense::click_and_drag()
+                                    ).0;
 
                                     ui.painter().image(
                                         texture.id(),

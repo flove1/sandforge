@@ -11,6 +11,10 @@ pub fn raycast(start: IVec2, end: IVec2, chunk_manager: &ChunkManager) -> Option
     let mut chunk_ptr = chunk_manager.get_chunk_data(&chunk_position)
         .map(|chunk| chunk.pixels.as_ptr());
 
+    if chunk_ptr.is_none() {
+        return None;
+    }
+
     for point in WalkGrid::new(start, end) {
         let current_chunk_position = point.div_euclid(IVec2::splat(CHUNK_SIZE));
 
@@ -19,6 +23,10 @@ pub fn raycast(start: IVec2, end: IVec2, chunk_manager: &ChunkManager) -> Option
             chunk_ptr = chunk_manager
                 .get_chunk_data(&current_chunk_position)
                 .map(|chunk| chunk.pixels.as_ptr());
+
+            if chunk_ptr.is_none() {
+                return None;
+            }
         }
 
         if let Some(pixel) = chunk_ptr.map(|ptr| 

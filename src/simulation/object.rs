@@ -1,35 +1,85 @@
 use std::{ f32::consts::{ FRAC_PI_2, PI }, time::{ Duration, SystemTime, UNIX_EPOCH } };
 
-use bevy::{ prelude::*, sprite::{MaterialMesh2dBundle, Mesh2dHandle}, utils::HashMap, window::PrimaryWindow };
+use bevy::{
+    prelude::*,
+    sprite::{ MaterialMesh2dBundle, Mesh2dHandle },
+    utils::HashMap,
+    window::PrimaryWindow,
+};
 use bevy_egui::{ egui::Id, EguiContexts };
 use bevy_math::ivec2;
 use bevy_rapier2d::prelude::*;
 use itertools::Itertools;
 
-use crate::{ constants::CHUNK_SIZE, gui::{ Cell, Inventory, ToastEvent } };
-
-use super::{
-    chunk::ChunkState, chunk_groups::ChunkGroupCustom, chunk_manager::ChunkManager, dirty_rect::{ update_dirty_rects, DirtyRects }, materials::{ Material, MaterialInstance, PhysicsType }, mesh::douglas_peucker, particle::{Particle, ParticleInstances}, pixel::Pixel
+use crate::{
+    actors::{ actor::Actor, enemy::Enemy, health::DamageEvent },
+    camera::TrackingCamera,
+    constants::CHUNK_SIZE,
+    gui::{ Cell, Inventory, ToastEvent },
 };
 
-#[derive(Clone, Component)]
+use super::{
+    chunk::ChunkState,
+    chunk_groups::{ build_chunk_group, ChunkGroupCustom },
+    chunk_manager::ChunkManager,
+    dirty_rect::{ update_dirty_rects, DirtyRects },
+    materials::{ Material, MaterialInstance, PhysicsType },
+    mesh::{ douglas_peucker, ChunkColliderEveny, ACTOR_MASK, OBJECT_MASK },
+    particle::{ Particle, ParticleInstances },
+    pixel::Pixel,
+};
+
+#[derive(Bundle)]
+pub struct ObjectBundle {
+    pub object: Object,
+    pub transform: TransformBundle,
+    pub collider: Collider,
+    pub velocity: Velocity,
+    pub sleeping: Sleeping,
+    pub mass_properties: ColliderMassProperties,
+    pub rb: RigidBody,
+    pub impulse: ExternalImpulse,
+    pub collision_groups: CollisionGroups,
+    pub read_mass: ReadMassProperties,
+}
+
+impl Default for ObjectBundle {
+    fn default() -> Self {
+        Self {
+            object: Default::default(),
+            transform: TransformBundle::default(),
+            rb: RigidBody::Dynamic,
+            velocity: Velocity::zero(),
+            sleeping: Sleeping::default(),
+            impulse: ExternalImpulse::default(),
+            read_mass: ReadMassProperties::default(),
+            mass_properties: ColliderMassProperties::default(),
+            collision_groups: CollisionGroups::new(
+                Group::from_bits_truncate(OBJECT_MASK),
+                Group::all()
+            ),
+            collider: Collider::default(),
+        }
+    }
+}
+
+#[derive(Default, Clone, Component)]
 pub struct Object {
     pub width: u16,
     pub height: u16,
     pub pixels: Vec<Option<Pixel>>,
     pub placed: bool,
-    pub explosion_parameters: Option<ExplosionParameters>,
 }
 
-#[derive(Clone)]
+#[derive(Component, Clone)]
 pub struct ExplosionParameters {
-    pub intensity: f32,
-    pub delay: Duration,
+    pub radius: i32,
+    pub timer: Timer,
 }
 
 impl Object {
     pub fn from_pixels(
-        pixels: Vec<Option<MaterialInstance>>,
+        pixels: Vec<Option<Material>>,
         width: u16,
         height: u16
     ) -> Result<Self, String> {
@@ -45,13 +95,12 @@ impl Object {
                 .into_iter()
                 .map(|material| {
                     material.map(|material| {
-                        let mut pixel = Pixel::new(material);
+                        let mut pixel = Pixel::new(material.into());
                         pixel.material.physics_type = PhysicsType::Rigidbody;
                         pixel
                     })
                 })
                 .collect(),
-            explosion_parameters: None,
         })
     }
 
@@ -147,7 +196,72 @@ fn transpose_point(mut point: Vec2, angle: f32) -> Vec2 {
     point
 }
 
-fn build_chunk_group(
+pub fn process_explosion(
+    mut commands: Commands,
+    mut dirty_rects_resource: ResMut<DirtyRects>,
+    mut chunk_manager: ResMut<ChunkManager>,
+    mut object_q: Query<(Entity, &Transform, &mut ExplosionParameters), With<Object>>,
+    mut chunk_collider_ev: EventWriter<ChunkColliderEveny>,
+    time: Res<Time>
+) {
+    let DirtyRects { current: dirty_rects, render: render_rects, .. } = &mut *dirty_rects_resource;
+    let clock = chunk_manager.clock();
+
+    for (entity, transform, mut explosion_parameters) in object_q.iter_mut() {
+        explosion_parameters.timer.tick(time.delta());
+
+        if !explosion_parameters.timer.finished() {
+            continue;
+        }
+
+        let position = (transform.translation.xy() * (CHUNK_SIZE as f32)).round().as_ivec2();
+        let chunk_position = position.div_euclid(IVec2::splat(CHUNK_SIZE));
+
+        let Some(mut chunk_group) = build_chunk_group(&mut chunk_manager, chunk_position) else {
+            continue;
+        };
+
+        for x in -explosion_parameters.radius..=explosion_parameters.radius {
+            for y in -explosion_parameters.radius..=explosion_parameters.radius {
+                if x.pow(2) + y.pow(2) > explosion_parameters.radius.pow(2) {
+                    continue;
+                }
+
+                let pixel_position = position + ivec2(x, y);
+
+                if
+                    let Some(pixel) = chunk_group.get_mut(
+                        pixel_position - chunk_position * CHUNK_SIZE
+                    )
+                {
+                    *pixel = Pixel::new(Material::default().into()).with_clock(clock);
+
+                    update_dirty_rects(
+                        dirty_rects,
+                        pixel_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
+                        pixel_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
+                    );
+
+                    update_dirty_rects(
+                        render_rects,
+                        pixel_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
+                        pixel_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
+                    );
+                }
+            }
+        }
+
+        chunk_collider_ev.send_batch(
+            (-1..=1)
+                .cartesian_product(-1..=1)
+                .map(|(x, y)| ChunkColliderEveny(chunk_position + ivec2(x, y)))
+        );
+
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
+fn build_object_chunk_group(
     position: Vec2,
     object: &Object,
     chunk_manager: &mut ChunkManager
@@ -191,9 +305,12 @@ pub fn fill_objects(
     mut commands: Commands,
     mut dirty_rects_resource: ResMut<DirtyRects>,
     mut chunk_manager: ResMut<ChunkManager>,
-    mut objects: Query<(&Transform, &mut Object, &Sleeping, &Velocity, &mut ExternalImpulse), Without<Camera>>,
+    mut objects: Query<
+        (&Transform, &mut Object, &Sleeping, &Velocity, &mut ExternalImpulse),
+        Without<Camera>
+    >,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    particles: Query<(Entity, &Mesh2dHandle), With<ParticleInstances>>,
+    particles: Query<(Entity, &Mesh2dHandle), With<ParticleInstances>>
 ) {
     let (particles, particle_mesh) = particles.get_single().unwrap();
     let DirtyRects { current: dirty_rects, render: render_rects, .. } = &mut *dirty_rects_resource;
@@ -213,7 +330,7 @@ pub fn fill_objects(
             angle_modifier = -1.0;
         }
 
-        let (chunk_group_position, mut chunk_group) = build_chunk_group(
+        let (chunk_group_position, mut chunk_group) = build_object_chunk_group(
             position,
             &object,
             &mut chunk_manager
@@ -244,11 +361,7 @@ pub fn fill_objects(
                         let particle = Particle::new(
                             std::mem::take(world_pixel).material.clone(),
                             floored_position.as_vec2(),
-                            Vec2::new(
-                                fastrand::f32() -
-                                    0.5,
-                                fastrand::f32() / 2.0 + 0.5
-                            )
+                            Vec2::new(fastrand::f32() - 0.5, fastrand::f32() / 2.0 + 0.5)
                         );
 
                         let mesh = MaterialMesh2dBundle {
@@ -273,11 +386,13 @@ pub fn fill_objects(
 
                         impulse.impulse -= velocity.linvel / 100000.0;
                         impulse.torque_impulse -= velocity.angvel / 100_000_000_000.0;
-                    },
-                    PhysicsType::Static | PhysicsType::Rigidbody => continue,
+                    }
+                    PhysicsType::Static | PhysicsType::Rigidbody => {
+                        continue;
+                    }
                     _ => {}
                 }
-                
+
                 *world_pixel = object_pixel.clone().unwrap();
 
                 update_dirty_rects(
@@ -298,6 +413,127 @@ pub fn fill_objects(
     }
 }
 
+pub fn unfill_objects(
+    mut dirty_rects_resource: ResMut<DirtyRects>,
+    mut chunk_manager: ResMut<ChunkManager>,
+    mut objects: Query<(&Transform, &mut Object, &Sleeping), Without<Camera>>
+) {
+    let DirtyRects { render: render_rects, .. } = &mut *dirty_rects_resource;
+
+    let clock = chunk_manager.clock();
+
+    for (transform, mut object, sleeping) in objects.iter_mut() {
+        if sleeping.sleeping {
+            continue;
+        }
+
+        let mut angle = get_rotation_angle(transform);
+        let position = transform.translation.xy() * (CHUNK_SIZE as f32);
+
+        let mut angle_modifier = 1.0;
+
+        if angle.abs() > FRAC_PI_2 {
+            angle -= angle.signum() * PI;
+            angle_modifier = -1.0;
+        }
+
+        let (chunk_group_position, mut chunk_group) = build_object_chunk_group(
+            position,
+            &object,
+            &mut chunk_manager
+        );
+
+        let Object { width, height, pixels, .. } = object.as_mut();
+
+        for (index, _) in pixels
+            .iter()
+            .enumerate()
+            .filter(|(_, object_pixel)| object_pixel.is_some()) {
+            let mut pixel_position =
+                Vec2::new(
+                    (((index as u16) % *width) as f32) - (*width as f32) / 2.0 + 0.5,
+                    (((index as u16) / *width) as f32) - (*height as f32) / 2.0 + 0.5
+                ) * angle_modifier;
+
+            pixel_position = transpose_point(pixel_position, angle);
+            let floored_position = (pixel_position + position).round().as_ivec2();
+
+            if
+                let Some(pixel) = chunk_group.get_mut(
+                    floored_position - chunk_group_position * CHUNK_SIZE
+                )
+            {
+                if pixel.material.physics_type == PhysicsType::Rigidbody {
+                    *pixel = Pixel::new(Material::default().into()).with_clock(clock);
+
+                    update_dirty_rects(
+                        render_rects,
+                        floored_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
+                        floored_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
+                    );
+                }
+            }
+        }
+
+        object.placed = false;
+    }
+}
+
+pub fn object_collision_damage(
+    mut commands: Commands,
+    rapier_context: Res<RapierContext>,
+    time: Res<Time>,
+    mut damage_ev: EventWriter<DamageEvent>,
+    mut object_q: Query<(Entity, &Transform, &Collider, &Object, &mut Velocity)>,
+    actor_q: Query<(Entity, &Transform), With<Enemy>>
+) {
+    for (entity, transform, collider, object, mut velocity) in object_q.iter_mut() {
+        if velocity.linvel.length() < 1.0 {
+            continue;
+        }
+
+        // rapier_context.intersections_with_shape(
+        //     transform.translation.xy() + velocity.linvel * time.delta_seconds(),
+        //     0.0,
+        //     &collider,
+        //     QueryFilter::only_dynamic().groups(
+        //         CollisionGroups::new(Group::from_bits_retain(ACTOR_MASK), Group::all())
+        //     ),
+        //     |actor_entity| {
+        //         if actor_q.contains(actor_entity) {
+        //             damage_ev.send(DamageEvent {
+        //                 target: actor_entity,
+        //                 value: velocity.linvel.length(),
+        //                 knockback: velocity.linvel / 2.0,
+        //             });
+
+        //             velocity.linvel *= 0.8;
+        //         }
+
+        //         true
+        //     }
+        // );
+
+        for pair in rapier_context.contact_pairs_with(entity) {
+            let actor_entity = if pair.collider1() == entity {
+                pair.collider2()
+            } else {
+                pair.collider1()
+            };
+
+            if actor_q.contains(actor_entity) {
+                damage_ev.send(DamageEvent {
+                    target: actor_entity,
+                    value: velocity.linvel.length(),
+                    knockback: velocity.linvel / 2.0,
+                });
+                
+                velocity.linvel *= 0.8;
+            }
+        }
+    }
+}
+
 pub fn get_object_by_click(
     mut commands: Commands,
     mut chunk_manager: ResMut<ChunkManager>,
@@ -306,7 +542,7 @@ pub fn get_object_by_click(
     buttons: Res<ButtonInput<MouseButton>>,
     rapier_context: Res<RapierContext>,
     window_q: Query<(Entity, &Window), With<PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>,
     mut object_q: Query<(&Transform, &mut Object)>,
     mut egui_context: EguiContexts,
     mut events: EventWriter<ToastEvent>
@@ -315,7 +551,7 @@ pub fn get_object_by_click(
     let (camera, camera_global_transform) = camera_q.single();
 
     if
-        buttons.just_pressed(MouseButton::Right) &&
+        buttons.just_pressed(MouseButton::Middle) &&
         egui_context
             .try_ctx_for_window_mut(window_entity)
             .map_or(true, |ctx| !ctx.is_pointer_over_area())
@@ -362,7 +598,7 @@ pub fn get_object_by_click(
                     angle_modifier = -1.0;
                 }
 
-                let (chunk_group_position, mut chunk_group) = build_chunk_group(
+                let (chunk_group_position, mut chunk_group) = build_object_chunk_group(
                     position,
                     &object,
                     &mut chunk_manager
@@ -406,95 +642,5 @@ pub fn get_object_by_click(
                 false
             });
         }
-    }
-}
-
-pub fn unfill_objects(
-    mut dirty_rects_resource: ResMut<DirtyRects>,
-    mut chunk_manager: ResMut<ChunkManager>,
-    mut objects: Query<(&Transform, &mut Object, &Sleeping, &Collider), Without<Camera>>
-) {
-    let DirtyRects { render: render_rects, .. } = &mut *dirty_rects_resource;
-
-    let clock = chunk_manager.clock();
-
-    for (transform, mut object, sleeping, collider) in objects.iter_mut() {
-        if sleeping.sleeping {
-            continue;
-        }
-
-        let mut angle = get_rotation_angle(transform);
-        let position = transform.translation.xy() * (CHUNK_SIZE as f32);
-
-        let mut angle_modifier = 1.0;
-
-        if angle.abs() > FRAC_PI_2 {
-            angle -= angle.signum() * PI;
-            angle_modifier = -1.0;
-        }
-
-        let (chunk_group_position, mut chunk_group) = build_chunk_group(
-            position,
-            &object,
-            &mut chunk_manager
-        );
-
-        let Object { width, height, pixels, .. } = object.as_mut();
-
-        for (index, _) in pixels
-            .iter()
-            .enumerate()
-            .filter(|(_, object_pixel)| object_pixel.is_some()) {
-            let mut pixel_position =
-                Vec2::new(
-                    (((index as u16) % *width) as f32) - (*width as f32) / 2.0 + 0.5,
-                    (((index as u16) / *width) as f32) - (*height as f32) / 2.0 + 0.5
-                ) * angle_modifier;
-
-            pixel_position = transpose_point(pixel_position, angle);
-            let floored_position = (pixel_position + position).round().as_ivec2();
-
-            // if
-            //     let Some(world_pixel) = chunk_group.get_mut(
-            //         floored_position - chunk_group_position * CHUNK_SIZE
-            //     )
-            // {
-            //     if world_pixel.is_empty() && w  {
-            //         continue;
-            //     }
-
-            //     *world_pixel = object_pixel.take().unwrap();
-
-            //     update_dirty_rects(
-            //         dirty_rects,
-            //         floored_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
-            //         floored_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
-            //     );
-
-            //     update_dirty_rects(
-            //         render_rects,
-            //         floored_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
-            //         floored_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
-            //     );
-            // }
-
-            if
-                let Some(pixel) = chunk_group.get_mut(
-                    floored_position - chunk_group_position * CHUNK_SIZE
-                )
-            {
-                if pixel.material.physics_type == PhysicsType::Rigidbody {
-                    *pixel = Pixel::new(Material::default().into()).with_clock(clock);
-
-                    update_dirty_rects(
-                        render_rects,
-                        floored_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
-                        floored_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
-                    );
-                }
-            }
-        }
-
-        object.placed = false;
     }
 }

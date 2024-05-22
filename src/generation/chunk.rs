@@ -1,279 +1,454 @@
-// use bevy::{prelude::*, sprite::Anchor, utils::HashMap};
-// use bevy_math::{ivec2, vec2};
-// use bevy_rapier2d::dynamics::RigidBody;
-// use itertools::Itertools;
+use std::{ mem, sync::Arc };
 
-// use crate::{
-//     constants::CHUNK_SIZE,
-//     helpers::to_index,
-//     registries::Registries,
-//     simulation::{
-//         chunk::ChunkData,
-//         chunk_groups::ChunkGroupCustom,
-//         chunk_manager::{ChunkManager, Chunks},
-//         pixel::Pixel,
-//     },
-// };
+use benimator::FrameRate;
+use bevy::{
+    asset::Assets,
+    ecs::{
+        entity::Entity,
+        event::EventReader,
+        query::With,
+        system::{ CommandQueue, Commands, Query, Res, ResMut, RunSystemOnce, SystemState },
+    },
+    hierarchy::{ BuildChildren, Children },
+    prelude::*,
+    render::texture::Image,
+    tasks::{ block_on, futures_lite::future, AsyncComputeTaskPool, Task },
+    transform::{ commands, components::Transform, TransformBundle },
+};
+use bevy_math::{ ivec2, IVec2 };
+use bevy_rapier2d::{ dynamics::GravityScale, geometry::{ Collider, CollisionGroups, Group } };
+use itertools::Itertools;
 
-// use super::tiles::TileGenerator;
+use crate::{
+    actors::{
+        actor::{ Actor, ActorBundle, MovementType },
+        enemy::{ Enemy, Flipped },
+        health::HealthBarOverlay,
+    },
+    animation::{ Animation, AnimationState },
+    assets::{ ChunkMapAssets, SpriteSheets },
+    constants::{ CHUNK_SIZE, PLAYER_LAYER },
+    helpers::to_index,
+    registries::Registries,
+    simulation::{
+        chunk::{ Chunk, ChunkState },
+        chunk_groups::{ self, build_chunk_group },
+        chunk_manager::ChunkManager,
+        materials::MaterialInstance,
+        mesh::{ OBJECT_MASK, TERRAIN_MASK },
+        pixel::Pixel,
+    },
+};
 
-// #[derive(Event)]
-// pub struct ChunkGenerationEvent(pub IVec2);
+use super::{ Noise, PoissonEnemyPosition };
 
-// pub fn generate_chunk(
-//     mut ev_chunkgen: EventReader<ChunkGenerationEvent>,
-//     mut chunk_manager: ResMut<ChunkManager>,
-//     mut commands: Commands,
-//     mut images: ResMut<Assets<Image>>,
-//     mut tile_generator: ResMut<TileGenerator>,
-//     registries: Res<Registries>,
-//     chunks_query: Query<Entity, With<Chunks>>,
-// ) {
-//     let biomes = registries.biomes.lock().unwrap();
-//     let biome = biomes.get("caves").unwrap();
-//     let chunks_entity = chunks_query.single();
+#[derive(Event, Deref)]
+pub struct GenerationEvent(pub IVec2);
 
-//     let materials = registries.materials.lock().unwrap();
-//     let element = materials.get("stone").unwrap();
-//     let mut chunks_to_add = HashMap::new();
+#[derive(Component)]
+pub struct GenerationTask(pub Task<(Vec<Pixel>, Vec<u8>)>);
 
-//     for ev in ev_chunkgen.read() {
-//         let chunk_position = ev.0;
+pub fn process_chunk_generation_events(
+    mut commands: Commands,
+    mut ev_chunkgen: EventReader<GenerationEvent>,
+    chunk_manager: Res<ChunkManager>,
+    images: Res<Assets<Image>>,
+    chunk_map: Res<ChunkMapAssets>,
+    registries: Res<Registries>,
+    noise: Res<Noise>
+) {
+    if !ev_chunkgen.is_empty() {
+        let thread_pool = AsyncComputeTaskPool::get();
+        let image = Arc::new(images.get(chunk_map.texture.clone()).unwrap().clone());
+        let material_1 = Arc::new(registries.materials.get("stone").unwrap().clone());
+        let material_2 = Arc::new(registries.materials.get("dirt").unwrap().clone());
+        let material_3 = Arc::new(registries.materials.get("grass").unwrap().clone());
 
-//         if chunk_manager.chunks.contains_key(&chunk_position)
-//             || chunks_to_add.contains_key(&chunk_position)
-//         {
-//             continue;
-//         }
+        for ev in ev_chunkgen.read() {
+            let position = ev.0;
+            let image = image.clone();
+            let noise = noise.clone();
 
-//         let Some(part) = tile_generator.get_tile(chunk_position, biome) else {
-//             continue;
-//         };
+            let material_1 = material_1.clone();
+            let material_2 = material_2.clone();
+            let material_3 = material_3.clone();
 
-//         let mut noise_data =
-//             vec![vec![0.0; (CHUNK_SIZE.pow(2)) as usize]; tile_generator.scale.pow(2) as usize];
+            commands.entity(chunk_manager.get_chunk_id(&ev.0).unwrap()).insert(
+                GenerationTask(
+                    thread_pool.spawn(async move {
+                        let texture_position = position * CHUNK_SIZE + image.size().as_ivec2() / 2;
 
-//         let mut noise_group = ChunkGroupCustom {
-//             chunks: HashMap::new(),
-//             size: CHUNK_SIZE,
-//         };
+                        let pixels = (0..CHUNK_SIZE.pow(2))
+                            .map(|index| {
+                                let point =
+                                    (position.as_vec2() +
+                                        ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE).as_vec2() /
+                                            (CHUNK_SIZE as f32)) /
+                                    48.0;
 
-//         for (x, y) in (-1..tile_generator.scale + 1).cartesian_product(-1..tile_generator.scale + 1)
-//         {
-//             let position = ivec2(x, y);
+                                let texture_position = (
+                                    texture_position + ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE)
+                                ).clamp(IVec2::ZERO, image.size().as_ivec2() - 1);
 
-//             if position.cmpeq(-IVec2::ONE).any()
-//                 || position.cmpeq(IVec2::ONE * tile_generator.scale).any()
-//             {
-//                 if let Some(chunk) = chunk_manager
-//                     .get_chunk_mut(&(chunk_position + position))
-//                     .or(chunks_to_add.get_mut(&(chunk_position + position)))
-//                 {
-//                     let ptr = chunk.layout.as_mut_ptr();
-//                     noise_group.chunks.insert(position, ptr);
-//                 }
-//             } else {
-//                 let ptr = noise_data[to_index!(position, tile_generator.scale)].as_mut_ptr();
-//                 noise_group.chunks.insert(position, ptr);
-//             }
-//         }
+                                let texture_modifier =
+                                    (
+                                        image.data
+                                            [
 
-//         for (chunk_x, chunk_y) in
-//             (0..tile_generator.scale).cartesian_product(0..tile_generator.scale)
-//         {
-//             let chunk_position = ivec2(chunk_x, chunk_y);
-//             for (x, y) in (0..CHUNK_SIZE).cartesian_product(0..CHUNK_SIZE) {
-//                 let position = ivec2(x, y);
-//                 let converted = position.as_vec2() / CHUNK_SIZE as f32 * biome.tile_size as f32 / tile_generator.scale as f32;
-//                 let in_part_position = ((chunk_position + chunk_position).rem_euclid(IVec2::ONE * tile_generator.scale)).as_vec2()
-//                     * biome.tile_size as f32
-//                     / tile_generator.scale as f32;
+                                                    (
+                                                        (texture_position.y *
+                                                            (image.height() as i32) +
+                                                            texture_position.x) as usize
+                                                    ) * 4
 
-//                 let index = to_index!(
-//                     (converted + in_part_position)
-//                         .floor()
-//                         .as_ivec2()
-//                         .min(IVec2::ONE * (biome.tile_size as i32 - 1)),
-//                         biome.tile_size as i32
-//                 );
-        
-//                 let color = part.data[index];
-//                 let color_no_alpha = &color[0..3];
+                                            ] as f32
+                                    ) / 255.0;
 
-//                 if let Ok(value) = color_no_alpha.iter().all_equal_value() {
-//                     noise_group[position + chunk_position * CHUNK_SIZE] = *value as f32 / 255.0;
-//                 }
-//             }
-//         }
+                                noise(point) * texture_modifier
+                            })
+                            .map(|value| {
+                                if value < 0.4 {
+                                    Pixel::new(material_1.as_ref().clone().into())
+                                } else if value < 0.55 {
+                                    Pixel::new(material_2.as_ref().clone().into())
+                                } else if value < 0.6 {
+                                    Pixel::new(material_3.as_ref().clone().into())
+                                } else {
+                                    Pixel::default()
+                                }
+                            })
+                            .collect_vec();
 
-//         let smoothing_iterations = 2;
+                        let bg_texture = (0..CHUNK_SIZE.pow(2))
+                            .map(|index| {
+                                let point =
+                                    (position.as_vec2() +
+                                        ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE).as_vec2() /
+                                            (CHUNK_SIZE as f32)) /
+                                    48.0;
 
-//         let ca_iterations = 2;
-//         let threshold = 0.2;
+                                let texture_position = (
+                                    texture_position + ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE)
+                                ).clamp(IVec2::ZERO, image.size().as_ivec2() - 1);
 
-//         let mut steps = (0..CHUNK_SIZE)
-//             .cartesian_product(0..CHUNK_SIZE)
-//             .collect_vec();
-//         fastrand::shuffle(&mut steps);
+                                let texture_modifier =
+                                    (
+                                        image.data
+                                            [
 
-//         for _ in 0..smoothing_iterations {
-//             for (chunk_x, chunk_y) in
-//                 (0..tile_generator.scale).cartesian_product(0..tile_generator.scale)
-//             {
-//                 let chunk_position = ivec2(chunk_x, chunk_y);
-//                 fastrand::shuffle(&mut steps);
+                                                    (
+                                                        (texture_position.y *
+                                                            (image.height() as i32) +
+                                                            texture_position.x) as usize
+                                                    ) * 4
 
-//                 for (x, y) in steps.iter() {
-//                     let position = ivec2(*x, *y) + chunk_position * CHUNK_SIZE;
-//                     if noise_group.get(position).is_none() {
-//                         continue;
-//                     };
+                                            ] as f32
+                                    ) / 255.0;
 
-//                     let mut sum = 0.0;
-//                     let mut count = 0;
+                                noise(point) * texture_modifier
+                            })
+                            .map(|value| {
+                                let mut colors = if value < 0.4 {
+                                    MaterialInstance::from(material_1.as_ref()).color
+                                } else if value < 0.55 {
+                                    MaterialInstance::from(material_2.as_ref()).color
+                                } else if value < 0.75 {
+                                    MaterialInstance::from(material_3.as_ref()).color
+                                } else {
+                                    [0; 4]
+                                };
 
-//                     let offsets = (-1..=1)
-//                         .cartesian_product(-1..=1)
-//                         .map(|(x, y)| ivec2(x, y))
-//                         .filter(|offset| noise_group.get(position + *offset).is_some())
-//                         .collect_vec();
+                                let f = 0.6;
 
-//                     for offset in offsets.iter() {
-//                         sum += noise_group[position + *offset];
-//                         count += 1;
-//                     }
+                                let (r, g, b) = (
+                                    colors[0] as f32,
+                                    colors[1] as f32,
+                                    colors[2] as f32,
+                                );
 
-//                     for offset in offsets.iter() {
-//                         let offseted_position = position + *offset;
-//                         if offseted_position.cmpge(IVec2::ZERO).all()
-//                             && offseted_position
-//                                 .cmplt(IVec2::ONE * CHUNK_SIZE * tile_generator.scale)
-//                                 .all()
-//                         {
-//                             noise_group[position + *offset] = sum / count as f32;
-//                         }
-//                     }
-//                 }
-//             }
-//         }
+                                let l = 0.3 * r + 0.6 * g + 0.1 * b;
 
-//         for _ in 0..ca_iterations {
-//             for (chunk_x, chunk_y) in
-//                 (0..tile_generator.scale).cartesian_product(0..tile_generator.scale)
-//             {
-//                 let chunk_position = ivec2(chunk_x, chunk_y);
-//                 fastrand::shuffle(&mut steps);
+                                colors[0] = (((r + f * (l - r)) * 0.8) as u8).saturating_sub(25);
+                                colors[1] = (((g + f * (l - g)) * 0.8) as u8).saturating_sub(25);
+                                colors[2] = (((b + f * (l - b)) * 0.8) as u8).saturating_sub(25);
 
-//                 for (x, y) in steps.iter() {
-//                     let position = ivec2(*x, *y) + chunk_position * CHUNK_SIZE;
+                                colors
+                            })
+                            .flatten()
+                            .collect_vec();
 
-//                     if noise_group.get(position).is_none() {
-//                         continue;
-//                     };
+                        (pixels, bg_texture)
+                    })
+                )
+            );
+        }
+    }
+}
 
-//                     let mut sum = 0.0;
-//                     let mut count = 0;
+pub fn process_chunk_generation_tasks(
+    mut commands: Commands,
+    mut chunk_manager: ResMut<ChunkManager>,
+    mut images: ResMut<Assets<Image>>,
+    mut chunk_q: Query<(Entity, &Transform, &mut GenerationTask), With<Chunk>>,
+    mut awaiting: ResMut<AwaitingNearbyChunks>,
+) {
+    for (entity, transform, mut task) in chunk_q.iter_mut() {
+        let result = block_on(future::poll_once(&mut task.0));
 
-//                     let border_flag = position.cmpeq(IVec2::ZERO).any()
-//                         || position
-//                             .cmpeq(IVec2::ONE * (CHUNK_SIZE * tile_generator.scale - 1))
-//                             .any();
+        if let Some((pixels, bg_texture)) = result {
+            let position = transform.translation.xy().round().as_ivec2();
 
-//                     if border_flag {
-//                         count += 1;
-//                     }
+            let chunk = chunk_manager.get_chunk_data_mut(&position).unwrap();
+            chunk.pixels = pixels;
 
-//                     for (dx, dy) in (-1..=1).cartesian_product(-1..=1) {
-//                         if let Some(value) = noise_group.get(position + ivec2(dx, dy)) {
-//                             if *value > threshold {
-//                                 count += 1;
-//                                 sum += value;
-//                             }
-//                         }
-//                     }
+            images.get_mut(chunk.background.clone()).unwrap().data.copy_from_slice(&bg_texture);
 
-//                     if count <= 4 {
-//                         noise_group[position] = 0.0;
-//                     } else {
-//                         if !border_flag {
-//                             count += 1;
-//                         }
+            commands
+                .entity(entity)
+                .with_children(|parent| {
+                    if let Ok(colliders) = chunk.build_colliders() {
+                        for collider in colliders {
+                            parent.spawn((
+                                collider,
+                                TransformBundle {
+                                    local: Transform::IDENTITY,
+                                    ..Default::default()
+                                },
+                                CollisionGroups::new(
+                                    Group::from_bits_truncate(TERRAIN_MASK),
+                                    Group::from_bits_truncate(OBJECT_MASK)
+                                ),
+                            ));
+                        }
+                    }
+                })
+                .remove::<GenerationTask>();
 
-//                         noise_group[position] = (sum + noise_group[position]) / (count) as f32;
-//                     }
-//                 }
-//             }
-//         }
+            chunk.update_texture(images.get_mut(&chunk.texture.clone()).unwrap());
+            chunk.state = ChunkState::Populating;
+            awaiting.push(position);
+        }
+    }
+}
 
-//         for (index, layout) in noise_data.drain(..).enumerate() {
-//             let chunk_position = ivec2(
-//                 (index as i32).rem_euclid(tile_generator.scale),
-//                 (index as i32).div_euclid(tile_generator.scale),
-//             ) + chunk_position;
+#[derive(Default, Resource, Deref, DerefMut)]
+pub struct AwaitingNearbyChunks(Vec<IVec2>);
 
-//             let mut chunk = ChunkData::default();
-//             for (x, y) in (0..CHUNK_SIZE).cartesian_product(0..CHUNK_SIZE) {
-//                 let position = ivec2(x, y);
-//                 let alpha_value = (layout[to_index!(position, CHUNK_SIZE)] * 255.0_f32)
-//                     .floor()
-//                     .clamp(0.0, 255.0) as u8;
+pub fn populate_chunk(
+    mut commands: Commands,
+    mut chunk_manager: ResMut<ChunkManager>,
+    mut awaiting: ResMut<AwaitingNearbyChunks>,
+    mut enemies_queue: ResMut<PoissonEnemyPosition>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    sprites: Res<SpriteSheets>
+) {
+    awaiting.retain(|position| {
+        let can_proceed = (-1..=1).cartesian_product(-1..=1).all(|(x, y)| {
+            if x == 0 && y == 0 {
+                return true;
+            }
 
-//                 if alpha_value > 10 {
-//                     chunk[position] = Pixel::new(
-//                         element.clone().into(),
-//                     ).with_clock(chunk_manager.clock());
-//                 }
-//             }
+            chunk_manager
+                .get_chunk_data(&(*position + ivec2(x, y)))
+                .map_or(false, |chunk| chunk.state >= ChunkState::Populating)
+        });
 
-//             chunk.layout = layout;
-//             chunks_to_add.insert(chunk_position, chunk);
-//         }
+        if can_proceed {
+            if let Some(mut enemy_positions) = enemies_queue.remove(position) {
+                enemy_positions
+                    .iter_mut()
+                    .filter_map(|enemy_position| {
+                        let local_enemy_position = (*enemy_position * (CHUNK_SIZE as f32))
+                            .as_ivec2()
+                            .rem_euclid(IVec2::splat(CHUNK_SIZE));
+
+                        let Some(chunk_group) = build_chunk_group(
+                            &mut chunk_manager,
+                            *position
+                        ) else {
+                            panic!("wtf");
+                        };
+
+                        let scan_radius = 16;
+                        let mut scan_pos = IVec2::ZERO;
+                        let mut scan_delta_pos = IVec2::new(0, -1);
+
+                        for _ in 0..scan_radius {
+                            let check_scan = scan_pos.abs().cmple(IVec2::splat(scan_radius)).all();
+
+                            let can_fit = (-3..=3).cartesian_product(-3..3).all(|(dx, dy)| {
+                                if
+                                    let Some(pixel) = chunk_group.get(
+                                        local_enemy_position + scan_pos + ivec2(dx, dy)
+                                    )
+                                {
+                                    pixel.is_empty()
+                                } else {
+                                    false
+                                }
+                            });
+
+                            if check_scan && can_fit {
+                                return Some(
+                                    *enemy_position + scan_pos.as_vec2() / (CHUNK_SIZE as f32)
+                                );
+                            }
+
+                            if
+                                scan_pos.x == scan_pos.y ||
+                                (scan_pos.x < 0 && scan_pos.x == -scan_pos.y) ||
+                                (scan_pos.x > 0 && scan_pos.x == 1 - scan_pos.y)
+                            {
+                                mem::swap(&mut scan_delta_pos.x, &mut scan_delta_pos.y);
+                                scan_delta_pos.x *= -1;
+                            }
+
+                            scan_pos.x += scan_delta_pos.x;
+                            scan_pos.y += scan_delta_pos.y;
+                        }
+
+                        None
+                    })
+                    .for_each(|position| {
+                        let texture_atlas_layout = texture_atlas_layouts.add(
+                            TextureAtlasLayout::from_grid(Vec2::splat(17.0), 6, 1, None, None)
+                        );
+
+                        let animation = Animation(
+                            benimator::Animation
+                                ::from_indices(0..=5, FrameRate::from_fps(12.0))
+                                .repeat()
+                        );
+
+                        commands.spawn((
+                            Name::new("Enemy"),
+                            Enemy,
+                            ActorBundle {
+                                actor: Actor {
+                                    position: position * (CHUNK_SIZE as f32),
+                                    hitbox: Rect::from_corners(Vec2::ZERO, Vec2::new(6.0, 6.0)),
+                                    movement_type: MovementType::Floating,
+                                    ..Default::default()
+                                },
+                                collider: Collider::ball(6.0),
+                                sprite: SpriteSheetBundle {
+                                    texture: sprites.bat.clone(),
+                                    atlas: TextureAtlas {
+                                        layout: texture_atlas_layout.clone(),
+                                        ..Default::default()
+                                    },
+                                    transform: Transform {
+                                        translation: position.extend(PLAYER_LAYER + 1.0),
+                                        scale: Vec3::splat(1.0 / (CHUNK_SIZE as f32)),
+                                        ..Default::default()
+                                    },
+                                    sprite: Sprite {
+                                        anchor: bevy::sprite::Anchor::Center,
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                            HealthBarOverlay {
+                                offset: Vec2::new(0.0, 14.0),
+                                width: 12.0,
+                            },
+                            AnimationState::default(),
+                            animation.clone(),
+                            GravityScale(0.05),
+                            Flipped(false),
+                        ));
+                    });
+            }
+
+            chunk_manager.get_chunk_data_mut(position).unwrap().state = ChunkState::Sleeping;
+        }
+
+        !can_proceed
+    });
+}
+
+#[derive(Event, Deref)]
+pub struct NoiseStepEvent(IVec2);
+
+#[derive(Event)]
+pub struct StructureStepEvent(IVec2);
+
+#[derive(Event)]
+pub struct ConversionStepEvent(IVec2);
+
+// fn noise_calculation(
+//     events: EventReader<NoiseStepEvent>,
+//     position: In<IVec2>,
+//     chunk_map: Res<ChunkMapAssets>,
+//     images: Res<Assets<Image>>,
+//     noise: Res<Noise>
+// ) -> GenerationState {
+//     for ev in events {
+//         let thread_pool = AsyncComputeTaskPool::get();
+//         let image = images.get(chunk_map.texture.clone()).unwrap().clone();
+//         let noise = noise.0.clone();
+
+//         let task = thread_pool.spawn(async move {
+//             let texture_position = *position * CHUNK_SIZE + image.size().as_ivec2() / 2;
+
+//             (0..CHUNK_SIZE.pow(2))
+//                 .map(|index| {
+//                     let point =
+//                         (position.as_vec2() +
+//                             ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE).as_vec2() /
+//                                 (CHUNK_SIZE as f32)) /
+//                         48.0;
+
+//                     let texture_position = (
+//                         texture_position + ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE)
+//                     ).clamp(IVec2::ZERO, image.size().as_ivec2() - 1);
+
+//                     let texture_modifier =
+//                         (
+//                             image.data
+//                                 [
+
+//                                         (
+//                                             (texture_position.y * (image.height() as i32) +
+//                                                 texture_position.x) as usize
+//                                         ) * 4
+
+//                                 ] as f32
+//                         ) / 255.0;
+
+//                     noise(point) * texture_modifier
+//                 })
+//                 .collect_vec()
+//         });
 //     }
 
-//     for (position, mut chunk) in chunks_to_add.into_iter() {
-//         let image_handle = images.add(ChunkData::new_image());
-//         let mut entity_command = commands.spawn((
-//             RigidBody::Fixed,
-//             SpriteBundle {
-//                 texture: image_handle.clone(),
-//                 sprite: Sprite {
-//                     custom_size: Some(vec2(1.0, 1.0)),
-//                     anchor: Anchor::BottomLeft,
-//                     flip_y: true,
-//                     ..Default::default()
-//                 },
-//                 transform: Transform::from_translation(Vec3::new(
-//                     position.x as f32,
-//                     position.y as f32,
-//                     0.,
-//                 )),
-//                 ..Default::default()
-//             },
-//         ));
+//     GenerationState::NoiseCalculation(Some(task))
+// }
 
-//         if let Ok(colliders) = chunk.build_colliders() {
-//             entity_command.with_children(|children| {
-//                 for collider in colliders {
-//                     children.spawn((
-//                         collider,
-//                         TransformBundle {
-//                             local: Transform::IDENTITY,
-//                             ..Default::default()
-//                         },
-//                     ));
+// pub fn process_generation_states(
+//     mut commands: Commands,
+//     mut chunk_q: Query<(Entity, &mut GenerationState, &Transform), With<Chunk>>
+// ) {
+//     let thread_pool = AsyncComputeTaskPool::get();
+
+//     for (entity, state, task, transform) in chunk_q.iter_mut() {
+//         match state.as_ref() {
+//             GenerationState::NoiseCalculation => {
+//                 match task {
+//                     Some(task) => {}
+//                     None => {
+//                         commands.run_system_with_input(
+//                             noise_calculation,
+//                             transform.translation.xy().round().as_ivec2()
+//                         );
+//                     }
 //                 }
-//             });
-//         }
-
-//         let id = entity_command.id();
-
-//         commands.entity(chunks_entity).push_children(&[id]);
-
-//         chunk.texture = image_handle.clone();
-//         chunk.entity = Some(id);
-
-//         chunk.update_all(images.get_mut(&image_handle.clone()).unwrap());
-
-//         chunk_manager.chunks.insert(position, chunk);
+//             }
+//             GenerationState::Structure => todo!(),
+//             GenerationState::Conversion => todo!(),
+//             GenerationState::PostProcesing => todo!(),
+//         };
 //     }
 // }
