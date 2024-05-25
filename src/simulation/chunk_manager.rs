@@ -10,8 +10,8 @@ use bevy_rapier2d::dynamics::RigidBody;
 use itertools::{ Either, Itertools };
 
 use crate::{
-    camera::{ TrackingCamera, BACKGROUND_LAYER, LIGHTING_LAYER, TERRAIN_LAYER },
-    constants::{ CHUNK_SIZE, WORLD_HEIGHT, WORLD_WIDTH },
+    camera::{ TrackingCamera, BACKGROUND_RENDER_LAYER, TERRAIN_RENDER_LAYER },
+    constants::{ BACKGROUND_Z, CHUNK_SIZE, TERRAIN_Z },
     generation::chunk::GenerationEvent,
     registries::Registries,
 };
@@ -26,7 +26,7 @@ use super::{
         RenderMessage,
         UpdateMessage,
     },
-    materials::{ update_gas, update_liquid, update_sand, MaterialInstance, PhysicsType },
+    materials::{ update_gas, update_liquid, update_sand, Material, PhysicsType },
     pixel::Pixel,
 };
 
@@ -89,31 +89,7 @@ impl ChunkManager {
             .ok_or("pixel not loaded yet".to_string())
     }
 
-    pub fn get_material(&self, pos: IVec2) -> Result<&MaterialInstance, String> {
-        let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
-
-        self.get_chunk_data(&chunk_position)
-            .filter(
-                |chunk| (chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping)
-            )
-            .map(|chunk| &chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
-            .map(|pixel| &pixel.material)
-            .ok_or("pixel not loaded yet".to_string())
-    }
-
-    pub fn get_material_mut(&mut self, pos: IVec2) -> Result<&mut MaterialInstance, String> {
-        let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
-
-        self.get_chunk_data_mut(&chunk_position)
-            .filter(
-                |chunk| (chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping)
-            )
-            .map(|chunk| &mut chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)])
-            .map(|pixel| &mut pixel.material)
-            .ok_or("pixel not loaded yet".to_string())
-    }
-
-    pub fn set(&mut self, pos: IVec2, material: MaterialInstance) -> Result<(), String> {
+    pub fn set(&mut self, pos: IVec2, pixel: Pixel) -> Result<(), String> {
         let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
 
         if
@@ -124,85 +100,11 @@ impl ChunkManager {
                         chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping
                 )
         {
-            chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material);
+            chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = pixel;
             Ok(())
         } else {
             Err("pixel not loaded yet".to_string())
         }
-    }
-
-    pub fn set_with_condition<F: Fn(Pixel) -> bool>(
-        &mut self,
-        pos: IVec2,
-        material: MaterialInstance,
-        condition: F
-    ) -> Result<bool, String> {
-        let chunk_position = pos.div_euclid(IVec2::ONE * CHUNK_SIZE);
-
-        if
-            let Some(chunk) = self
-                .get_chunk_data_mut(&chunk_position)
-                .filter(
-                    |chunk|
-                        chunk.state == ChunkState::Active || chunk.state == ChunkState::Sleeping
-                )
-        {
-            if condition(chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)].clone()) {
-                chunk[pos.rem_euclid(IVec2::ONE * CHUNK_SIZE)] = Pixel::new(material);
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            Err("pixel not loaded yet".to_string())
-        }
-    }
-
-    pub fn displace(&mut self, pos: IVec2, material: MaterialInstance) -> bool {
-        let mut succeeded = false;
-
-        let scan_w = 32;
-        let scan_h = 32;
-        let mut scan_pos = IVec2::ZERO;
-        let mut scan_delta_pos = IVec2::new(0, -1);
-        let scan_max_i = scan_w.max(scan_h) * scan_w.max(scan_h); // the max is pointless now but could change w or h later
-
-        for _ in 0..scan_max_i {
-            if
-                scan_pos.x >= -scan_w / 2 &&
-                scan_pos.x <= scan_w / 2 &&
-                scan_pos.y >= -scan_h / 2 &&
-                scan_pos.y <= scan_h / 2
-            {
-                if
-                    let Ok(true) = self.set_with_condition(
-                        pos + IVec2::new(scan_pos.x, scan_pos.y),
-                        material.clone(),
-                        |pixel| pixel.material.physics_type == PhysicsType::Air
-                    )
-                {
-                    succeeded = true;
-                    break;
-                }
-            }
-
-            // update scan coordinates
-
-            if
-                scan_pos.x == scan_pos.y ||
-                (scan_pos.x < 0 && scan_pos.x == -scan_pos.y) ||
-                (scan_pos.x > 0 && scan_pos.x == 1 - scan_pos.y)
-            {
-                let temp = scan_delta_pos.x;
-                scan_delta_pos.x = -scan_delta_pos.y;
-                scan_delta_pos.y = temp;
-            }
-
-            scan_pos.x += scan_delta_pos.x;
-            scan_pos.y += scan_delta_pos.y;
-        }
-
-        succeeded
     }
 
     pub fn get_chunk_id(&self, chunk_position: &IVec2) -> Option<Entity> {
@@ -222,18 +124,27 @@ pub fn manager_setup(mut commands: Commands) {
     commands.spawn((Name::new("Terrain"), SpatialBundle::INHERITED_IDENTITY, Terrain));
 }
 
+pub fn chunk_set_parent(
+    mut commands: Commands,
+    chunk_q: Query<Entity, Added<Chunk>>,
+    terrain_q: Query<Entity, With<Terrain>>
+) {
+    let terrain = terrain_q.single();
+
+    for entity in chunk_q.iter() {
+        commands.entity(terrain).add_child(entity);
+    }
+}
+
 pub fn update_loaded_chunks(
     mut commands: Commands,
     mut ev_chunkgen: EventWriter<GenerationEvent>,
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects_resource: ResMut<DirtyRects>,
     mut images: ResMut<Assets<Image>>,
-    camera_q: Query<(&Transform, &OrthographicProjection), With<TrackingCamera>>,
-    terrain_q: Query<Entity, With<Terrain>>
+    camera_q: Query<(&Transform, &OrthographicProjection), With<TrackingCamera>>
 ) {
     let DirtyRects { current, .. } = &mut *dirty_rects_resource;
-    let chunks_entity = terrain_q.single();
-
     let (transform, projection) = camera_q.single();
 
     let area = Rect::from_center_size(transform.translation.xy(), projection.area.size() + 4.0);
@@ -288,11 +199,11 @@ pub fn update_loaded_chunks(
                                     ..Default::default()
                                 },
                                 transform: Transform::from_translation(
-                                    position.as_vec2().extend(0.0)
+                                    position.as_vec2().extend(TERRAIN_Z)
                                 ),
                                 ..Default::default()
                             },
-                            RenderLayers::layer(TERRAIN_LAYER),
+                            RenderLayers::layer(TERRAIN_RENDER_LAYER),
                         ))
                         .with_children(|parent| {
                             parent.spawn((
@@ -304,15 +215,15 @@ pub fn update_loaded_chunks(
                                         flip_y: true,
                                         ..Default::default()
                                     },
-                                    transform: Transform::from_translation(Vec2::ZERO.extend(-1.0)),
+                                    transform: Transform::from_translation(
+                                        Vec2::ZERO.extend(BACKGROUND_Z)
+                                    ),
                                     ..Default::default()
                                 },
-                                RenderLayers::layer(BACKGROUND_LAYER),
+                                RenderLayers::layer(BACKGROUND_RENDER_LAYER),
                             ));
                         })
                         .id();
-
-                    commands.entity(chunks_entity).add_child(entity);
 
                     chunk_manager.chunks.insert(position, (entity, chunk));
                     ev_chunkgen.send(GenerationEvent(position));
@@ -321,6 +232,17 @@ pub fn update_loaded_chunks(
         }
     }
 }
+
+const ADJACENT_DIRECTIONS: [IVec2; 8] = [
+    IVec2::new(-1, -1),
+    IVec2::new(0, -1),
+    IVec2::new(1, -1),
+    IVec2::new(-1, 0),
+    IVec2::new(1, 0),
+    IVec2::new(-1, 1),
+    IVec2::new(0, 1),
+    IVec2::new(1, 1),
+];
 
 #[allow(clippy::too_many_arguments)]
 pub fn chunks_update(
@@ -394,9 +316,11 @@ pub fn chunks_update(
                                 .map(|dirty_rect| (position, dirty_rect))
                         })
                         .filter_map(|(position, dirty_rect)| {
-                            build_chunk_group(&mut chunk_manager, position).map(
-                                |chunk_group| (position, dirty_rect, chunk_group)
-                            )
+                            build_chunk_group(&mut chunk_manager, position).map(|chunk_group| (
+                                position,
+                                dirty_rect,
+                                chunk_group,
+                            ))
                         })
                         .for_each(|(position, dirty_rect, mut chunk_group)| {
                             let reactive_materials = &registries.reactive_materials;
@@ -412,7 +336,7 @@ pub fn chunks_update(
                                     clock,
                                 };
 
-                                let x_range = if fastrand::bool() {
+                                let x_range = if clock % 2 == 0 {
                                     Either::Left(dirty_rect.min.x as i32..dirty_rect.max.x as i32)
                                 } else {
                                     Either::Right(
@@ -439,95 +363,102 @@ pub fn chunks_update(
                                             PhysicsType::Liquid(..) => {
                                                 update_liquid(&mut api);
                                             }
-                                            PhysicsType::Disturbed( .., original_type) => {
-                                                let original_position = api.cell_position;
-                                                update_sand(&mut api);
+                                            PhysicsType::Disturbed(.., original_type) => {
+                                                // let original_position = api.cell_position;
+                                                // update_sand(&mut api);
 
-                                                let original = api.get(0, 0);
-                                                
-                                                if original_position == api.cell_position  {
-                                                    let original_material = MaterialInstance {
-                                                        physics_type: *original_type,
-                                                        ..original.material.clone()
-                                                    };
-                                                    api.update(original.with_material(original_material))
-                                                }
+                                                // let original = api.get(0, 0);
+
+                                                // if original_position == api.cell_position {
+                                                //     let original_material = MaterialInstance {
+                                                //         physics_type: *original_type,
+                                                //         ..original.material.clone()
+                                                //     };
+                                                //     api.update(
+                                                //         original.with_material(original_material)
+                                                //     );
+                                                // }
                                             }
                                             _ => {}
                                         }
 
-                                        let directions = [
-                                            [1, 0],
-                                            [-1, 0],
-                                            [0, 1],
-                                            [0, -1],
-                                        ];
-
                                         {
                                             let mut pixel = api.get(0, 0);
-                                            match pixel.on_fire {
-                                                true => {
-                                                    api.keep_alive(0, 0);
+
+                                            if
+                                                let Some(fire_parameters) =
+                                                    pixel.fire_parameters.as_mut()
+                                            {
+                                                if fire_parameters.try_to_ignite {
                                                     if
-                                                        let Some(fire_parameters) =
-                                                            pixel.material.fire_parameters.as_mut()
-                                                    {
-                                                        for direction in directions.iter() {
-                                                            let mut pixel = api.get(
-                                                                direction[0],
-                                                                direction[1]
+                                                        !fire_parameters.requires_oxygen ||
+                                                        ADJACENT_DIRECTIONS.iter().any(|direction| {
+                                                            let neighbour = api.get(
+                                                                direction.x,
+                                                                direction.y
                                                             );
 
-                                                            if
-                                                                pixel.temperature <
-                                                                fire_parameters.fire_temperature
-                                                            {
-                                                                pixel.temperature +=
-                                                                    (fastrand::f32() *
-                                                                        ((
-                                                                            pixel.temperature.abs_diff(
-                                                                                fire_parameters.fire_temperature
-                                                                            ) as f32
-                                                                        ) /
-                                                                            8.0)) as i32;
-                                                            }
+                                                            neighbour.is_empty()
+                                                        })
+                                                    {
+                                                        if
+                                                            fire_parameters.probability <
+                                                            fastrand::f32()
+                                                        {
+                                                            pixel.on_fire = true;
+                                                        }
+                                                    }
+                                                }
 
+                                                if pixel.on_fire {
+                                                    api.keep_alive(0, 0);
+
+                                                    let Some(fire_parameters) =
+                                                        pixel.fire_parameters.as_mut() else {
+                                                        panic!()
+                                                    };
+
+                                                    let mut has_access_to_air = false;
+
+                                                    for direction in ADJACENT_DIRECTIONS.iter() {
+                                                        let mut pixel = api.get(
+                                                            direction.x,
+                                                            direction.y
+                                                        );
+
+                                                        if pixel.is_empty() {
+                                                            has_access_to_air = true;
+                                                        } else if
+                                                            let Some(fire_parameters) =
+                                                                &mut pixel.fire_parameters
+                                                        {
+                                                            fire_parameters.try_to_ignite = true;
                                                             api.set(
-                                                                direction[0],
-                                                                direction[1],
+                                                                direction.x,
+                                                                direction.y,
                                                                 pixel
                                                             );
                                                         }
+                                                    }
 
-                                                        if fire_parameters.fire_hp <= 0 {
-                                                            api.update(Pixel::default());
-                                                            continue;
-                                                        } else if fastrand::f32() > 0.75 {
-                                                            fire_parameters.fire_hp -= 1;
-                                                        }
-                                                    }
-                                                }
-                                                false => {
                                                     if
-                                                        let Some(fire_parameters) =
-                                                            &mut pixel.material.fire_parameters
+                                                        fire_parameters.requires_oxygen &&
+                                                        !has_access_to_air
                                                     {
-                                                        if
-                                                            pixel.temperature >=
-                                                            fire_parameters.ignition_temperature
-                                                        {
-                                                            pixel.on_fire = true;
-                                                        } else {
-                                                            pixel.temperature -=
-                                                                (30 - pixel.temperature) / 16;
-                                                        }
+                                                        pixel.on_fire = false;
+                                                    } else if fire_parameters.fire_hp <= 0.0 {
+                                                        api.update(Pixel::default());
+                                                        continue;
+                                                    } else if fastrand::f32() > 0.75 {
+                                                        fire_parameters.fire_hp -= 1.0;
                                                     }
+
+                                                    api.update(pixel);
                                                 }
                                             }
-                                            api.update(pixel);
                                         }
 
-                                        let id = &api.get(0, 0).material.id;
+                                        let id = &api.get(0, 0).id;
                                         if reactive_materials.contains(id) {
                                             let material = materials.get(id).unwrap();
                                             if let Some(reactions) = &material.reactions {
@@ -540,32 +471,30 @@ pub fn chunks_update(
 
                                                     if
                                                         let Some(reaction) = reactions.get(
-                                                            &neighbour.material.id
+                                                            &neighbour.id
                                                         )
                                                     {
                                                         if fastrand::f32() < reaction.probability {
                                                             api.set(
                                                                 0,
                                                                 0,
-                                                                Pixel::new(
+                                                                Pixel::from(
                                                                     materials
                                                                         .get(
                                                                             &reaction.output_material_1
                                                                         )
                                                                         .unwrap()
-                                                                        .into()
                                                                 ).with_clock(clock)
                                                             );
                                                             api.set(
                                                                 x,
                                                                 y,
-                                                                Pixel::new(
+                                                                Pixel::from(
                                                                     materials
                                                                         .get(
                                                                             &reaction.output_material_2
                                                                         )
                                                                         .unwrap()
-                                                                        .into()
                                                                 ).with_clock(clock)
                                                             );
 

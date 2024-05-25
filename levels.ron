@@ -1,0 +1,110 @@
+[
+    (
+        terrain_layers: [
+            (
+                material_id: "stone",
+                value: 0.4
+            ),
+            (
+                material_id: "dirt", 
+                value: 0.55, 
+            ),
+            (
+                material_id: "grass", 
+                value: 0.6
+                ) 
+        ],
+        background_layers: [
+            (
+                material_id: "stone",
+                value: 0.4
+            ),
+            (
+                material_id: "dirt", 
+                value: 0.55, 
+            ),
+            (
+                material_id: "grass", 
+                value: 0.75
+            ) 
+        ],
+    
+        texture_path: "layouts/1.png",
+        noise_type: Fractal,
+        powder_id: "sand",
+        liquid_id: "water",
+        enemy_frequency: 0.2,
+    ),
+    (
+        terrain_layers: [
+            (
+                material_id: "stone",
+                value: 0.4
+            ),
+            (
+                material_id: "dirt", 
+                value: 0.55, 
+            ),
+            (
+                material_id: "grass", 
+                value: 0.6
+                ) 
+        ],
+        background_layers: [
+            (
+                material_id: "stone",
+                value: 0.4
+            ),
+            (
+                material_id: "dirt", 
+                value: 0.55, 
+            ),
+            (
+                material_id: "grass", 
+                value: 0.75
+            ) 
+        ],
+    
+        texture_path: "layouts/1.png",
+        noise_type: Billow,
+        powder_id: "sand",
+        liquid_id: "water",
+        enemy_frequency: 0.2,
+    ),
+    (
+        terrain_layers: [
+            (
+                material_id: "icy_stone",
+                value: 0.4
+            ),
+            (
+                material_id: "snow", 
+                value: 0.55, 
+            ),
+            (
+                material_id: "ice", 
+                value: 0.6
+            ) 
+        ],
+        background_layers: [
+            (
+                material_id: "icy_stone",
+                value: 0.4
+            ),
+            (
+                material_id: "snow", 
+                value: 0.55, 
+            ),
+            (
+                material_id: "ice", 
+                value: 0.75
+            )  
+        ],
+    
+        texture_path: "layouts/1.png",
+        noise_type: HybridMulti,
+        powder_id: "sand",
+        liquid_id: "water",
+        enemy_frequency: 0.2,
+    ),
+]

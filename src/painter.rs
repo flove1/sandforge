@@ -14,17 +14,19 @@ use bevy_rapier2d::{
 
 use crate::{
     camera::TrackingCamera,
-    constants::{ CHUNK_SIZE, PARTICLE_LAYER },
+    constants::{ CHUNK_SIZE, PARTICLE_Z },
     has_window,
     helpers::WalkGrid,
     simulation::{
         chunk::Chunk,
         chunk_manager::ChunkManager,
+        colliders::{ ChunkColliderEveny, ACTOR_MASK, OBJECT_MASK, TERRAIN_MASK },
         dirty_rect::{ update_dirty_rects, DirtyRects },
-        materials::{ Material, MaterialInstance, PhysicsType },
-        mesh::{ ChunkColliderEveny, ACTOR_MASK, OBJECT_MASK, TERRAIN_MASK },
+        materials::{ Material, PhysicsType },
         object::{ ExplosionParameters, Object, ObjectBundle },
-        particle::{ Particle, ParticleInstances },
+        particle::{
+            Particle, ParticleBundle, ParticleMovement, ParticleObjectState, ParticleParent
+        }, pixel::Pixel,
     },
     state::AppState,
 };
@@ -109,7 +111,7 @@ impl FromWorld for BrushRes {
 
 #[derive(Resource, Default)]
 pub struct PainterObjectBuffer {
-    pub map: HashMap<IVec2, Material>,
+    pub map: HashMap<IVec2, Pixel>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -125,12 +127,10 @@ fn mouse_system(
     mut contexts: EguiContexts,
     mut mouse_state: ResMut<MouseState>,
     mut object_buffer: ResMut<PainterObjectBuffer>,
-    partcle_q: Query<(Entity, &Mesh2dHandle), With<ParticleInstances>>,
     buttons: Res<ButtonInput<MouseButton>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut chunk_collider_ev: EventWriter<ChunkColliderEveny>
 ) {
-    let (particles, particle_mesh) = partcle_q.get_single().unwrap();
     let (camera, mut camera_transform, camera_global_transform) = camera.single_mut();
     let (window_entity, window) = window_q.single();
 
@@ -144,44 +144,42 @@ fn mouse_system(
         match brush.brush_type {
             BrushType::Particle(rate) => {
                 if fastrand::u8(0..255) <= rate {
-                    let particle = Particle::new(
-                        brush.material.as_ref().unwrap().into(),
-                        position.as_vec2(),
-                        vec2(fastrand::f32() - 0.5, fastrand::f32()) * 4.0
-                    );
+                    let pixel = Pixel::from(brush.material.as_ref().unwrap());
 
-                    let mesh = MaterialMesh2dBundle {
-                        mesh: particle_mesh.clone(),
-                        material: materials.add(
-                            Color::rgba_u8(
-                                particle.material.color[0],
-                                particle.material.color[1],
-                                particle.material.color[2],
-                                particle.material.color[3]
-                            )
+                    commands.spawn(ParticleBundle {
+                        sprite: SpriteBundle {
+                            sprite: Sprite {
+                                color: Color::rgba_u8(
+                                    pixel.color[0],
+                                    pixel.color[1],
+                                    pixel.color[2],
+                                    pixel.color[3]
+                                ),
+                                custom_size: Some(Vec2::ONE / (CHUNK_SIZE as f32)),
+                                ..Default::default()
+                            },
+                            transform: Transform::from_translation(
+                                (position.as_vec2() / (CHUNK_SIZE as f32)).extend(PARTICLE_Z)
+                            ),
+                            ..Default::default()
+                        },
+                        velocity: Velocity::linear(
+                            (vec2(fastrand::f32() - 0.5, fastrand::f32()) / (CHUNK_SIZE as f32)) *
+                                4.0
                         ),
-                        transform: Transform::from_translation(
-                            (particle.pos / (CHUNK_SIZE as f32)).extend(2.0)
-                        ),
+                        particle: Particle::new(pixel),
                         ..Default::default()
-                    };
+                    });
 
-                    let particle_handle = commands.spawn((particle, mesh)).id();
-
-                    commands.entity(particles).add_child(particle_handle);
-
-                    let chunk_position = position.div_euclid(IVec2::ONE * CHUNK_SIZE);
-                    let cell_position = position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2();
-
-                    update_dirty_rects(&mut dirty_rects.current, chunk_position, cell_position);
-                    update_dirty_rects(&mut dirty_rects.render, chunk_position, cell_position);
+                    dirty_rects.request_update(position);
+                    dirty_rects.request_render(position);
                 }
             }
             BrushType::Object => {
-                if brush.material.as_ref().unwrap().matter_type == PhysicsType::Air {
+                if brush.material.as_ref().unwrap().physics_type == PhysicsType::Air {
                     buffer.insert(position, brush.material.as_ref().unwrap().into());
                 } else {
-                    object_buffer.map.insert(position, brush.material.as_ref().unwrap().clone());
+                    object_buffer.map.insert(position, brush.material.as_ref().unwrap().clone().into());
                 }
             }
             _ => {
@@ -243,8 +241,8 @@ fn mouse_system(
     }
 
     let mut affected_chunks = HashSet::new();
-    for (position, material) in buffer {
-        if chunk_manager.set(position, material).is_ok() {
+    for (position, pixel) in buffer {
+        if chunk_manager.set(position, pixel).is_ok() {
             let chunk_position = position.div_euclid(IVec2::ONE * CHUNK_SIZE);
             let cell_position = position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2();
 
@@ -265,7 +263,7 @@ fn mouse_system(
     if buttons.just_released(MouseButton::Left) {
         if brush.brush_type == BrushType::Object {
             let mut rect: Option<IRect> = None;
-            let values = object_buffer.map.drain().collect::<Vec<(IVec2, Material)>>();
+            let values = object_buffer.map.drain().collect::<Vec<(IVec2, Pixel)>>();
 
             values.iter().for_each(|(pos, _)| {
                 let rect = rect.get_or_insert(IRect::new(pos.x, pos.y, pos.x + 1, pos.y + 1));
@@ -278,7 +276,7 @@ fn mouse_system(
             });
 
             if let Some(rect) = rect {
-                let mut pixels: Vec<Option<Material>> =
+                let mut pixels: Vec<Option<Pixel>> =
                     vec![None; (rect.size().x * rect.size().y) as usize];
 
                 values.iter().for_each(|(pos, material)| {
@@ -289,13 +287,7 @@ fn mouse_system(
                     );
                 });
 
-                if
-                    let Ok(object) = Object::from_pixels(
-                        pixels,
-                        rect.size().x as u16,
-                        rect.size().y as u16
-                    )
-                {
+                if let Ok(object) = Object::from_pixels(pixels, rect.size()) {
                     if let Ok(collider) = object.create_collider() {
                         commands.spawn((
                             ObjectBundle {

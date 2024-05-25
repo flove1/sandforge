@@ -1,4 +1,4 @@
-use bevy::{asset::{io::Reader, AssetLoader, AsyncReadExt, LoadContext}, prelude::*, render::texture::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor}, utils::BoxedFuture};
+use bevy::{asset::{io::Reader, AssetLoader, AsyncReadExt, LoadContext}, prelude::*, render::texture::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor}, utils::{BoxedFuture, HashMap}};
 use bevy_asset_loader::asset_collection::AssetCollection;
 use thiserror::Error;
 
@@ -53,17 +53,18 @@ pub struct FontAssets {
 }
 
 #[derive(AssetCollection, Resource)]
-pub struct ChunkMapAssets {
-    #[asset(path = "chunkmap.png")]
-    pub texture: Handle<Image>,
-    #[asset(path = "structure.png")]
-    pub structure: Handle<Image>,
+pub struct ChunkLayoutAssets {    
+    #[asset(path = "layouts", collection(typed, mapped))]
+    pub folder: HashMap<String, Handle<Image>>,
 }
 
 #[derive(AssetCollection, Resource)]
 pub struct SpriteSheets {
     #[asset(path = "player/alchemist.png")]
     pub player: Handle<Image>,
+
+    #[asset(path = "player/heal.png")]
+    pub heal: Handle<Image>,
 
     #[asset(path = "bat.png")]
     pub bat: Handle<Image>,

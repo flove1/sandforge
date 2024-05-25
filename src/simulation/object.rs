@@ -14,7 +14,7 @@ use itertools::Itertools;
 use crate::{
     actors::{ actor::Actor, enemy::Enemy, health::DamageEvent },
     camera::TrackingCamera,
-    constants::CHUNK_SIZE,
+    constants::{ CHUNK_SIZE, PARTICLE_Z },
     gui::{ Cell, Inventory, ToastEvent },
 };
 
@@ -22,10 +22,10 @@ use super::{
     chunk::ChunkState,
     chunk_groups::{ build_chunk_group, ChunkGroupCustom },
     chunk_manager::ChunkManager,
+    colliders::{ douglas_peucker, ChunkColliderEveny, OBJECT_MASK },
     dirty_rect::{ update_dirty_rects, DirtyRects },
-    materials::{ Material, MaterialInstance, PhysicsType },
-    mesh::{ douglas_peucker, ChunkColliderEveny, ACTOR_MASK, OBJECT_MASK },
-    particle::{ Particle, ParticleInstances },
+    materials::{ Material, PhysicsType },
+    particle::{ Particle, ParticleBundle, ParticleParent },
     pixel::Pixel,
 };
 
@@ -65,11 +65,13 @@ impl Default for ObjectBundle {
 
 #[derive(Default, Clone, Component)]
 pub struct Object {
-    pub width: u16,
-    pub height: u16,
+    pub size: IVec2,
     pub pixels: Vec<Option<Pixel>>,
     pub placed: bool,
 }
+
+#[derive(Component)]
+pub struct FallApartOnCollision;
 
 #[derive(Component, Clone)]
 pub struct ExplosionParameters {
@@ -78,29 +80,15 @@ pub struct ExplosionParameters {
 }
 
 impl Object {
-    pub fn from_pixels(
-        pixels: Vec<Option<Material>>,
-        width: u16,
-        height: u16
-    ) -> Result<Self, String> {
-        if pixels.len() != ((width * height) as usize) {
+    pub fn from_pixels(pixels: Vec<Option<Pixel>>, size: IVec2) -> Result<Self, String> {
+        if pixels.len() != ((size.x * size.y) as usize) {
             return Err("incorrect_size".to_string());
         }
 
         Ok(Self {
-            width,
-            height,
+            size,
             placed: false,
-            pixels: pixels
-                .into_iter()
-                .map(|material| {
-                    material.map(|material| {
-                        let mut pixel = Pixel::new(material.into());
-                        pixel.material.physics_type = PhysicsType::Rigidbody;
-                        pixel
-                    })
-                })
-                .collect(),
+            pixels,
         })
     }
 
@@ -111,8 +99,8 @@ impl Object {
             .collect::<Vec<f64>>();
 
         let contour_generator = contour::ContourBuilder::new(
-            self.width as u32,
-            self.height as u32,
+            self.size.x as u32,
+            self.size.y as u32,
             false
         );
 
@@ -133,9 +121,9 @@ impl Object {
                                     .iter()
                                     .map(|point| {
                                         Vec2::new(
-                                            ((point.x as f32) - (self.width as f32) / 2.0) /
+                                            ((point.x as f32) - (self.size.x as f32) / 2.0) /
                                                 (CHUNK_SIZE as f32),
-                                            ((point.y as f32) - (self.height as f32) / 2.0) /
+                                            ((point.y as f32) - (self.size.y as f32) / 2.0) /
                                                 (CHUNK_SIZE as f32)
                                         )
                                     })
@@ -182,18 +170,94 @@ impl Object {
                     })
             })
     }
-}
 
-fn get_rotation_angle(transform: &Transform) -> f32 {
-    transform.rotation.to_axis_angle().1 * transform.rotation.to_axis_angle().0.z
-}
+    pub fn iterate_over_pixels(
+        &mut self,
+        transform: &Transform
+    ) -> impl Iterator<Item = (IVec2, &mut Option<Pixel>)> {
+        let axis_angle = transform.rotation.to_axis_angle();
 
-fn transpose_point(mut point: Vec2, angle: f32) -> Vec2 {
-    point.x = (point.x - point.y * f32::tan(angle / 2.0)).floor();
-    point.y = (point.x * f32::sin(angle) + point.y).floor();
-    point.x = (point.x - point.y * f32::tan(angle / 2.0)).floor();
+        let mut angle = axis_angle.1 * axis_angle.0.z;
+        let object_position = transform.translation.xy() * (CHUNK_SIZE as f32);
 
-    point
+        let size = self.size;
+
+        let angle_modifier = if angle.abs() > FRAC_PI_2 {
+            angle -= angle.signum() * PI;
+            -1.0
+        } else {
+            1.0
+        };
+
+        self.pixels
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, object_pixel)| object_pixel.is_some())
+            .map(move |(index, object_pixel)| {
+                let mut pixel_position =
+                    Vec2::new(
+                        (((index as i32) % size.x) as f32) - (size.x as f32) / 2.0 + 0.5,
+                        (((index as i32) / size.x) as f32) - (size.y as f32) / 2.0 + 0.5
+                    ) * angle_modifier;
+
+                pixel_position.x = (
+                    pixel_position.x -
+                    pixel_position.y * f32::tan(angle / 2.0)
+                ).floor();
+                pixel_position.y = (pixel_position.x * f32::sin(angle) + pixel_position.y).floor();
+                pixel_position.x = (
+                    pixel_position.x -
+                    pixel_position.y * f32::tan(angle / 2.0)
+                ).floor();
+
+                ((pixel_position + object_position).round().as_ivec2(), object_pixel)
+            })
+    }
+
+    pub fn create_chunk_group(
+        &self,
+        transform: &Transform,
+        chunk_manager: &mut ChunkManager
+    ) -> (IVec2, ChunkGroupCustom<Pixel>) {
+        let size = self.size.max_element() as f32;
+        let position = transform.translation.xy() * (CHUNK_SIZE as f32);
+
+        let chunk_group_position = Vec2::new(position.x - size / 2.0, position.y - size / 2.0)
+            .floor()
+            .as_ivec2()
+            .div_euclid(IVec2::ONE * CHUNK_SIZE);
+
+        let max_position = Vec2::new(position.x + size / 2.0, position.y + size / 2.0)
+            .ceil()
+            .as_ivec2()
+            .div_euclid(IVec2::ONE * CHUNK_SIZE);
+
+        let chunk_group_size = (
+            max_position -
+            chunk_group_position +
+            IVec2::ONE
+        ).max_element() as u8;
+
+        let mut chunk_group = ChunkGroupCustom {
+            chunks: HashMap::new(),
+            size: CHUNK_SIZE,
+        };
+
+        for (x, y) in (0..chunk_group_size as i32).cartesian_product(0..chunk_group_size as i32) {
+            if
+                let Some(chunk) = chunk_manager.get_chunk_data_mut(
+                    &(IVec2::new(x, y) + chunk_group_position)
+                )
+            {
+                if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
+                    continue;
+                }
+                chunk_group.chunks.insert(ivec2(x, y), chunk.pixels.as_mut_ptr());
+            }
+        }
+
+        (chunk_group_position, chunk_group)
+    }
 }
 
 pub fn process_explosion(
@@ -234,7 +298,7 @@ pub fn process_explosion(
                         pixel_position - chunk_position * CHUNK_SIZE
                     )
                 {
-                    *pixel = Pixel::new(Material::default().into()).with_clock(clock);
+                    *pixel = Pixel::default().with_clock(clock);
 
                     update_dirty_rects(
                         dirty_rects,
@@ -261,44 +325,83 @@ pub fn process_explosion(
     }
 }
 
-fn build_object_chunk_group(
-    position: Vec2,
-    object: &Object,
-    chunk_manager: &mut ChunkManager
-) -> (IVec2, ChunkGroupCustom<Pixel>) {
-    let size = f32::max(object.width as f32, object.height as f32);
-
-    let chunk_group_position = Vec2::new(position.x - size / 2.0, position.y - size / 2.0)
-        .floor()
-        .as_ivec2()
-        .div_euclid(IVec2::ONE * CHUNK_SIZE);
-
-    let max_position = Vec2::new(position.x + size / 2.0, position.y + size / 2.0)
-        .ceil()
-        .as_ivec2()
-        .div_euclid(IVec2::ONE * CHUNK_SIZE);
-
-    let chunk_group_size = (max_position - chunk_group_position + IVec2::ONE).max_element() as u8;
-
-    let mut chunk_group = ChunkGroupCustom {
-        chunks: HashMap::new(),
-        size: CHUNK_SIZE,
-    };
-
-    for (x, y) in (0..chunk_group_size as i32).cartesian_product(0..chunk_group_size as i32) {
+pub fn process_fall_apart_on_collision(
+    mut commands: Commands,
+    rapier_context: Res<RapierContext>,
+    mut dirty_rects_resource: ResMut<DirtyRects>,
+    mut chunk_manager: ResMut<ChunkManager>,
+    mut object_q: Query<(Entity, &Transform, &mut Object), With<FallApartOnCollision>>
+) {
+    for (entity, transform, mut object) in object_q.iter_mut() {
         if
-            let Some(chunk) = chunk_manager.get_chunk_data_mut(
-                &(IVec2::new(x, y) + chunk_group_position)
-            )
+            rapier_context
+                .contact_pairs_with(entity)
+                .filter(|pair| pair.has_any_active_contacts())
+                .next()
+                .is_some()
         {
-            if !matches!(chunk.state, ChunkState::Active | ChunkState::Sleeping) {
-                continue;
+            let (chunk_group_position, mut chunk_group) = object.create_chunk_group(
+                transform,
+                &mut chunk_manager
+            );
+
+            for (position, object_pixel) in object.iterate_over_pixels(transform) {
+                if
+                    let Some(world_pixel) = chunk_group.get_mut(
+                        position - chunk_group_position * CHUNK_SIZE
+                    )
+                {
+                    {
+                        match world_pixel.physics_type {
+                            PhysicsType::Powder | PhysicsType::Liquid(_) | PhysicsType::Gas => {
+                                let pixel = std::mem::take(world_pixel);
+
+                                commands.spawn(ParticleBundle {
+                                    sprite: SpriteBundle {
+                                        sprite: Sprite {
+                                            color: Color::rgba_u8(
+                                                pixel.color[0],
+                                                pixel.color[1],
+                                                pixel.color[2],
+                                                pixel.color[3]
+                                            ),
+                                            custom_size: Some(Vec2::ONE / (CHUNK_SIZE as f32)),
+                                            ..Default::default()
+                                        },
+                                        transform: Transform::from_translation(
+                                            (position.as_vec2() / (CHUNK_SIZE as f32)).extend(
+                                                PARTICLE_Z
+                                            )
+                                        ),
+                                        ..Default::default()
+                                    },
+                                    velocity: Velocity::linear(
+                                        Vec2::new(
+                                            fastrand::f32() - 0.5,
+                                            fastrand::f32() / 2.0 + 0.5
+                                        ) / (CHUNK_SIZE as f32)
+                                    ),
+                                    particle: Particle::new(pixel),
+                                    ..Default::default()
+                                });
+                            }
+                            PhysicsType::Static | PhysicsType::Rigidbody => {
+                                continue;
+                            }
+                            _ => {}
+                        }
+
+                        *world_pixel = object_pixel.clone().unwrap();
+
+                        dirty_rects_resource.request_update(position);
+                        dirty_rects_resource.request_render(position);
+                    }
+                }
             }
-            chunk_group.chunks.insert(ivec2(x, y), chunk.pixels.as_mut_ptr());
+
+            commands.entity(entity).despawn_recursive();
         }
     }
-
-    (chunk_group_position, chunk_group)
 }
 
 pub fn fill_objects(
@@ -308,80 +411,51 @@ pub fn fill_objects(
     mut objects: Query<
         (&Transform, &mut Object, &Sleeping, &Velocity, &mut ExternalImpulse),
         Without<Camera>
-    >,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    particles: Query<(Entity, &Mesh2dHandle), With<ParticleInstances>>
+    >
 ) {
-    let (particles, particle_mesh) = particles.get_single().unwrap();
-    let DirtyRects { current: dirty_rects, render: render_rects, .. } = &mut *dirty_rects_resource;
-
     for (transform, mut object, sleeping, velocity, mut impulse) in objects.iter_mut() {
         if sleeping.sleeping && object.placed {
             continue;
         }
 
-        let mut angle = get_rotation_angle(transform);
-        let position = transform.translation.xy() * (CHUNK_SIZE as f32);
-
-        let mut angle_modifier = 1.0;
-
-        if angle.abs() > FRAC_PI_2 {
-            angle -= angle.signum() * PI;
-            angle_modifier = -1.0;
-        }
-
-        let (chunk_group_position, mut chunk_group) = build_object_chunk_group(
-            position,
-            &object,
+        let (chunk_group_position, mut chunk_group) = object.create_chunk_group(
+            transform,
             &mut chunk_manager
         );
 
-        let Object { width, height, pixels, .. } = object.as_mut();
-
-        for (index, object_pixel) in pixels
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, object_pixel)| object_pixel.is_some()) {
-            let mut pixel_position =
-                Vec2::new(
-                    (((index as u16) % *width) as f32) - (*width as f32) / 2.0 + 0.5,
-                    (((index as u16) / *width) as f32) - (*height as f32) / 2.0 + 0.5
-                ) * angle_modifier;
-
-            pixel_position = transpose_point(pixel_position, angle);
-            let floored_position = (pixel_position + position).round().as_ivec2();
-
+        for (position, object_pixel) in object.iterate_over_pixels(transform) {
             if
                 let Some(world_pixel) = chunk_group.get_mut(
-                    floored_position - chunk_group_position * CHUNK_SIZE
+                    position - chunk_group_position * CHUNK_SIZE
                 )
             {
-                match world_pixel.material.physics_type {
+                match world_pixel.physics_type {
                     PhysicsType::Powder | PhysicsType::Liquid(_) | PhysicsType::Gas => {
-                        let particle = Particle::new(
-                            std::mem::take(world_pixel).material.clone(),
-                            floored_position.as_vec2(),
-                            Vec2::new(fastrand::f32() - 0.5, fastrand::f32() / 2.0 + 0.5)
-                        );
+                        let pixel = std::mem::take(world_pixel);
 
-                        let mesh = MaterialMesh2dBundle {
-                            mesh: particle_mesh.clone(),
-                            material: materials.add(
-                                Color::rgba_u8(
-                                    particle.material.color[0],
-                                    particle.material.color[1],
-                                    particle.material.color[2],
-                                    particle.material.color[3]
-                                )
+                        commands.spawn(ParticleBundle {
+                            sprite: SpriteBundle {
+                                sprite: Sprite {
+                                    color: Color::rgba_u8(
+                                        pixel.color[0],
+                                        pixel.color[1],
+                                        pixel.color[2],
+                                        pixel.color[3]
+                                    ),
+                                    custom_size: Some(Vec2::ONE / (CHUNK_SIZE as f32)),
+                                    ..Default::default()
+                                },
+                                transform: Transform::from_translation(
+                                    (position.as_vec2() / (CHUNK_SIZE as f32)).extend(PARTICLE_Z)
+                                ),
+                                ..Default::default()
+                            },
+                            velocity: Velocity::linear(
+                                Vec2::new(fastrand::f32() - 0.5, fastrand::f32() / 2.0 + 0.5) /
+                                    (CHUNK_SIZE as f32)
                             ),
-                            transform: Transform::from_translation(
-                                (particle.pos / (CHUNK_SIZE as f32)).extend(-1.0)
-                            ),
+                            particle: Particle::new(pixel),
                             ..Default::default()
-                        };
-
-                        commands.entity(particles).with_children(|parent| {
-                            parent.spawn((particle, mesh));
                         });
 
                         impulse.impulse -= velocity.linvel / 100000.0;
@@ -393,19 +467,10 @@ pub fn fill_objects(
                     _ => {}
                 }
 
-                *world_pixel = object_pixel.clone().unwrap();
+                *world_pixel = object_pixel.clone().unwrap().with_physics(PhysicsType::Rigidbody);
 
-                update_dirty_rects(
-                    dirty_rects,
-                    floored_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
-                    floored_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
-                );
-
-                update_dirty_rects(
-                    render_rects,
-                    floored_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
-                    floored_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
-                );
+                dirty_rects_resource.request_update(position);
+                dirty_rects_resource.request_render(position);
             }
         }
 
@@ -418,8 +483,6 @@ pub fn unfill_objects(
     mut chunk_manager: ResMut<ChunkManager>,
     mut objects: Query<(&Transform, &mut Object, &Sleeping), Without<Camera>>
 ) {
-    let DirtyRects { render: render_rects, .. } = &mut *dirty_rects_resource;
-
     let clock = chunk_manager.clock();
 
     for (transform, mut object, sleeping) in objects.iter_mut() {
@@ -427,50 +490,17 @@ pub fn unfill_objects(
             continue;
         }
 
-        let mut angle = get_rotation_angle(transform);
-        let position = transform.translation.xy() * (CHUNK_SIZE as f32);
-
-        let mut angle_modifier = 1.0;
-
-        if angle.abs() > FRAC_PI_2 {
-            angle -= angle.signum() * PI;
-            angle_modifier = -1.0;
-        }
-
-        let (chunk_group_position, mut chunk_group) = build_object_chunk_group(
-            position,
-            &object,
+        let (chunk_group_position, mut chunk_group) = object.create_chunk_group(
+            transform,
             &mut chunk_manager
         );
 
-        let Object { width, height, pixels, .. } = object.as_mut();
+        for (position, object_pixel) in object.iterate_over_pixels(transform) {
+            if let Some(pixel) = chunk_group.get_mut(position - chunk_group_position * CHUNK_SIZE) {
+                if pixel.physics_type == PhysicsType::Rigidbody {
+                    *pixel = Pixel::default().with_clock(clock);
 
-        for (index, _) in pixels
-            .iter()
-            .enumerate()
-            .filter(|(_, object_pixel)| object_pixel.is_some()) {
-            let mut pixel_position =
-                Vec2::new(
-                    (((index as u16) % *width) as f32) - (*width as f32) / 2.0 + 0.5,
-                    (((index as u16) / *width) as f32) - (*height as f32) / 2.0 + 0.5
-                ) * angle_modifier;
-
-            pixel_position = transpose_point(pixel_position, angle);
-            let floored_position = (pixel_position + position).round().as_ivec2();
-
-            if
-                let Some(pixel) = chunk_group.get_mut(
-                    floored_position - chunk_group_position * CHUNK_SIZE
-                )
-            {
-                if pixel.material.physics_type == PhysicsType::Rigidbody {
-                    *pixel = Pixel::new(Material::default().into()).with_clock(clock);
-
-                    update_dirty_rects(
-                        render_rects,
-                        floored_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
-                        floored_position.rem_euclid(IVec2::ONE * CHUNK_SIZE).as_uvec2()
-                    );
+                    dirty_rects_resource.request_render(position);
                 }
             }
         }
@@ -492,28 +522,6 @@ pub fn object_collision_damage(
             continue;
         }
 
-        // rapier_context.intersections_with_shape(
-        //     transform.translation.xy() + velocity.linvel * time.delta_seconds(),
-        //     0.0,
-        //     &collider,
-        //     QueryFilter::only_dynamic().groups(
-        //         CollisionGroups::new(Group::from_bits_retain(ACTOR_MASK), Group::all())
-        //     ),
-        //     |actor_entity| {
-        //         if actor_q.contains(actor_entity) {
-        //             damage_ev.send(DamageEvent {
-        //                 target: actor_entity,
-        //                 value: velocity.linvel.length(),
-        //                 knockback: velocity.linvel / 2.0,
-        //             });
-
-        //             velocity.linvel *= 0.8;
-        //         }
-
-        //         true
-        //     }
-        // );
-
         for pair in rapier_context.contact_pairs_with(entity) {
             let actor_entity = if pair.collider1() == entity {
                 pair.collider2()
@@ -527,7 +535,7 @@ pub fn object_collision_damage(
                     value: velocity.linvel.length(),
                     knockback: velocity.linvel / 2.0,
                 });
-                
+
                 velocity.linvel *= 0.8;
             }
         }
@@ -547,7 +555,10 @@ pub fn get_object_by_click(
     mut egui_context: EguiContexts,
     mut events: EventWriter<ToastEvent>
 ) {
-    let (window_entity, window) = window_q.single();
+    let Ok((window_entity, window)) = window_q.get_single() else {
+        return;
+    };
+
     let (camera, camera_global_transform) = camera_q.single();
 
     if
@@ -586,55 +597,21 @@ pub fn get_object_by_click(
                     return false;
                 }
 
-                let DirtyRects { render: render_rects, .. } = &mut *dirty_rects_resource;
-
-                let mut angle = get_rotation_angle(transform);
-                let position = transform.translation.xy() * (CHUNK_SIZE as f32);
-
-                let mut angle_modifier = 1.0;
-
-                if angle.abs() > FRAC_PI_2 {
-                    angle -= angle.signum() * PI;
-                    angle_modifier = -1.0;
-                }
-
-                let (chunk_group_position, mut chunk_group) = build_object_chunk_group(
-                    position,
-                    &object,
+                let (chunk_group_position, mut chunk_group) = object.create_chunk_group(
+                    transform,
                     &mut chunk_manager
                 );
 
-                let Object { width, height, pixels, .. } = object.as_mut();
-
-                for (index, _) in pixels
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, object_pixel)| object_pixel.is_some()) {
-                    let pixel_position =
-                        Vec2::new(
-                            (((index as u16) % *width) as f32) - (*width as f32) / 2.0 + 0.5,
-                            (((index as u16) / *width) as f32) - (*height as f32) / 2.0 + 0.5
-                        ) * angle_modifier;
-
-                    let rotated_pixel_position = (transpose_point(pixel_position, angle) + position)
-                        .round()
-                        .as_ivec2();
-
+                for (position, pixel) in object.iterate_over_pixels(transform) {
                     if
                         let Some(pixel) = chunk_group.get_mut(
-                            rotated_pixel_position - chunk_group_position * CHUNK_SIZE
+                            position - chunk_group_position * CHUNK_SIZE
                         )
                     {
-                        if pixel.material.physics_type == PhysicsType::Rigidbody {
-                            *pixel = Pixel::new(Material::default().into());
+                        if pixel.physics_type == PhysicsType::Rigidbody {
+                            *pixel = Pixel::default();
 
-                            update_dirty_rects(
-                                render_rects,
-                                rotated_pixel_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
-                                rotated_pixel_position
-                                    .rem_euclid(IVec2::ONE * CHUNK_SIZE)
-                                    .as_uvec2()
-                            );
+                            dirty_rects_resource.request_render(position);
                         }
                     }
                 }

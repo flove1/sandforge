@@ -1,7 +1,10 @@
 use std::mem;
 
 use bevy::{
-    ecs::reflect, prelude::*, render::view::RenderLayers, sprite::{ MaterialMesh2dBundle, Mesh2dHandle }
+    ecs::reflect,
+    prelude::*,
+    render::view::RenderLayers,
+    sprite::{ MaterialMesh2dBundle, Mesh2dHandle },
 };
 use bevy_math::{ ivec2, vec2 };
 use bevy_rapier2d::{
@@ -24,15 +27,16 @@ use bevy_rapier2d::{
 use itertools::Itertools;
 
 use crate::{
-    camera::ACTOR_LAYER,
-    constants::{ CHUNK_SIZE, PLAYER_LAYER },
+    camera::ACTOR_RENDER_LAYER,
+    constants::{ CHUNK_SIZE, ENEMY_Z, PARTICLE_Z, PLAYER_Z },
     simulation::{
         chunk_groups::build_chunk_group,
         chunk_manager::ChunkManager,
+        colliders::{ ACTOR_MASK, OBJECT_MASK },
+        dirty_rect::DirtyRects,
         materials::{ Material, PhysicsType },
-        mesh::{ ACTOR_MASK, OBJECT_MASK },
         object::{ self, Object },
-        particle::{ Particle, ParticleInstances },
+        particle::{ Particle, ParticleBundle, ParticleParent },
         pixel::Pixel,
     },
 };
@@ -49,33 +53,53 @@ pub struct ActorBundle {
     pub axes: LockedAxes,
     pub read_mass: ReadMassProperties,
     pub mass_properties: ColliderMassProperties,
-    pub collider: Collider,
-    pub collision_groups: CollisionGroups,
     pub sprite: SpriteSheetBundle,
     pub health: Health,
     pub render_layers: RenderLayers,
+    pub collision_groups: CollisionGroups,
+    pub collider: Collider,
+}
+
+#[derive(Bundle, Clone)]
+pub struct ActorColliderBundle {
+    pub collision_groups: CollisionGroups,
+    pub collider: Collider,
+    pub transform: TransformBundle,
 }
 
 impl Default for ActorBundle {
     fn default() -> Self {
         Self {
             axes: LockedAxes::ROTATION_LOCKED,
-            collision_groups: CollisionGroups::new(
-                Group::from_bits_truncate(ACTOR_MASK),
-                Group::from_bits_truncate(OBJECT_MASK)
-            ),
             actor: Actor::default(),
             rb: RigidBody::Dynamic,
             velocity: Velocity::zero(),
             read_mass: ReadMassProperties::default(),
-            collider: Collider::default(),
             sprite: SpriteSheetBundle::default(),
             mass_properties: ColliderMassProperties::default(),
-            render_layers: RenderLayers::layer(ACTOR_LAYER),
+            render_layers: RenderLayers::layer(ACTOR_RENDER_LAYER),
+            collision_groups: CollisionGroups::new(
+                Group::from_bits_truncate(ACTOR_MASK),
+                Group::from_bits_truncate(OBJECT_MASK)
+            ),
+            collider: Collider::default(),
             health: Health {
                 current: 16.0,
                 total: 16.0,
             },
+        }
+    }
+}
+
+impl Default for ActorColliderBundle {
+    fn default() -> Self {
+        Self {
+            collision_groups: CollisionGroups::new(
+                Group::from_bits_truncate(ACTOR_MASK),
+                Group::from_bits_truncate(OBJECT_MASK)
+            ),
+            collider: Collider::default(),
+            transform: TransformBundle::default(),
         }
     }
 }
@@ -91,7 +115,7 @@ bitflags! {
 
 #[derive(Default, Reflect, Component, Clone)]
 pub struct Actor {
-    pub hitbox: Rect,
+    pub size: Vec2,
     pub position: Vec2,
     pub movement_type: MovementType,
     #[reflect(ignore)]
@@ -107,72 +131,64 @@ pub enum MovementType {
 
 pub fn update_actor_translation(mut actor_q: Query<(&mut Transform, &Actor)>) {
     for (mut transform, actor) in actor_q.iter_mut() {
-        transform.translation = (
-            (actor.position + actor.hitbox.size() / 2.0) /
-            (CHUNK_SIZE as f32)
-        ).extend(PLAYER_LAYER);
+        transform.translation.x = ((actor.position + actor.size / 2.0) / (CHUNK_SIZE as f32)).x;
+        transform.translation.y = ((actor.position + actor.size / 2.0) / (CHUNK_SIZE as f32)).y;
     }
 }
 
 /// based on this [article](http://higherorderfun.com/blog/2012/05/20/the-guide-to-implementing-2d-platformers/)
 pub fn update_actors(
     mut commands: Commands,
-    mut actor_q: Query<(Entity, &mut Actor, &Collider, &mut Velocity, &ReadMassProperties)>,
-    particle_q: Query<(Entity, &Mesh2dHandle), With<ParticleInstances>>,
-    mut object_q: Query<
-        (&mut Velocity, &Collider, &ReadMassProperties, &Transform),
-        (With<RigidBody>, Without<Actor>)
-    >,
+    mut actor_q: Query<(Entity, &mut Actor, &mut Velocity, &ReadMassProperties)>,
+    // mut object_q: Query<
+    //     (&mut Velocity, &Collider, &ReadMassProperties, &Transform),
+    //     (With<RigidBody>, Without<Actor>)
+    // >,
+    mut dirty_rects: ResMut<DirtyRects>,
     mut chunk_manager: ResMut<ChunkManager>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut rapier_context: ResMut<RapierContext>,
     time: Res<Time>
 ) {
-    let (particles, particle_mesh) = particle_q.get_single().unwrap();
-
     let mut spawn_particle = |pixel: Pixel, position: Vec2, transferred_velocity: Vec2| {
-        let particle = Particle::new(
-            pixel.material,
-            position,
-            vec2(fastrand::f32() - 0.5, fastrand::f32() / 2.0 + 0.5) + transferred_velocity
-        );
-
-        let mesh = MaterialMesh2dBundle {
-            mesh: particle_mesh.clone(),
-            material: materials.add(
-                Color::rgba_u8(
-                    particle.material.color[0],
-                    particle.material.color[1],
-                    particle.material.color[2],
-                    particle.material.color[3]
-                )
+        commands.spawn(ParticleBundle {
+            sprite: SpriteBundle {
+                sprite: Sprite {
+                    color: Color::rgba_u8(
+                        pixel.color[0],
+                        pixel.color[1],
+                        pixel.color[2],
+                        pixel.color[3]
+                    ),
+                    custom_size: Some(Vec2::ONE / (CHUNK_SIZE as f32)),
+                    ..Default::default()
+                },
+                transform: Transform::from_translation(
+                    (position / (CHUNK_SIZE as f32)).extend(PARTICLE_Z)
+                ),
+                ..Default::default()
+            },
+            velocity: Velocity::linear(
+                (vec2(fastrand::f32() - 0.5, fastrand::f32() / 2.0 + 0.5) + transferred_velocity) /
+                    (CHUNK_SIZE as f32)
             ),
-            transform: Transform::from_translation(
-                (particle.pos / (CHUNK_SIZE as f32)).extend(-1.0)
-            ),
+            particle: Particle::new(pixel),
             ..Default::default()
-        };
-
-        commands.entity(particles).with_children(|parent| {
-            parent.spawn((particle, mesh));
         });
+
+        dirty_rects.request_render(position.as_ivec2());
     };
 
-    for (entity, mut actor, collider, mut velocity, mass) in actor_q.iter_mut() {
+    for (entity, mut actor, mut velocity, mass) in actor_q.iter_mut() {
         let chunk_position = actor.position
             .round()
             .as_ivec2()
             .div_euclid(IVec2::ONE * CHUNK_SIZE);
 
-        let Some(mut chunk_group) = build_chunk_group(
-            &mut chunk_manager,
-            chunk_position
-        ) else {
+        let Some(mut chunk_group) = build_chunk_group(&mut chunk_manager, chunk_position) else {
             continue;
         };
 
-        let width = actor.hitbox.width().round() as u16;
-        let height = actor.hitbox.height().round() as u16;
+        let width = actor.size.x as u16;
+        let height = actor.size.y as u16;
 
         let delta = time.delta_seconds() * 60.0;
 
@@ -211,29 +227,31 @@ pub fn update_actors(
             (0..width as i32)
                 .cartesian_product(0..height as i32)
                 .filter_map(|(x, y)| {
-                    let point = actor.position.round().as_ivec2() + ivec2(x, y) - chunk_position * CHUNK_SIZE;
-
-                    if let Some(pixel) = chunk_group.get(
+                    let point =
                         actor.position.round().as_ivec2() +
-                            ivec2(x, y) -
-                            chunk_position * CHUNK_SIZE
-                    ) {
-                        if matches!(pixel.material.physics_type, PhysicsType::Powder) {
-                            Some(pixel)
-                        }             
-                        else {
-                            None
-                        }           
+                        ivec2(x, y) -
+                        chunk_position * CHUNK_SIZE;
 
+                    if
+                        let Some(pixel) = chunk_group.get(
+                            actor.position.round().as_ivec2() +
+                                ivec2(x, y) -
+                                chunk_position * CHUNK_SIZE
+                        )
+                    {
+                        if matches!(pixel.physics_type, PhysicsType::Powder) {
+                            Some(pixel)
+                        } else {
+                            None
+                        }
                     } else {
                         dbg!(point);
                         None
                     }
-                }
-                )
+                })
                 // .filter(|pixel| matches!(pixel.material.physics_type, PhysicsType::Powder))
                 .map(|_| 1.0 / ((width * height) as f32))
-                .sum::<f32>() > 0.75
+                .sum::<f32>() > 0.9
         {
             actor.flags.insert(ActorFlags::SUBMERGED);
         } else {
@@ -331,11 +349,12 @@ pub fn update_actors(
                                     chunk_position * CHUNK_SIZE
                             )
                             .map_or(false, |pixel| {
-                                match pixel.material.physics_type {
+                                match pixel.physics_type {
                                     PhysicsType::Static => true,
                                     PhysicsType::Powder => {
                                         if
-                                            (velocity.linvel.y.abs() < 2.0 && y < 3) ||
+                                            (velocity.linvel.x.abs() + velocity.linvel.y.abs() <
+                                                1.5 && y < 3) ||
                                             actor.flags.contains(ActorFlags::SUBMERGED)
                                         {
                                             return true;
@@ -365,11 +384,12 @@ pub fn update_actors(
                                     chunk_position * CHUNK_SIZE
                             )
                             .map_or(false, |pixel| {
-                                match pixel.material.physics_type {
+                                match pixel.physics_type {
                                     PhysicsType::Static => true,
                                     PhysicsType::Powder => {
                                         if
-                                            (velocity.linvel.y.abs() < 2.0 && y < 3) ||
+                                            (velocity.linvel.x.abs() + velocity.linvel.y.abs() <
+                                                1.5 && y < 3) ||
                                             actor.flags.contains(ActorFlags::SUBMERGED)
                                         {
                                             return true;
@@ -418,7 +438,7 @@ pub fn update_actors(
                                         )
                                         .map_or(false, |pixel|
                                             matches!(
-                                                pixel.material.physics_type,
+                                                pixel.physics_type,
                                                 PhysicsType::Static | PhysicsType::Powder
                                             )
                                         )
@@ -485,7 +505,7 @@ pub fn update_actors(
 
             if
                 let Some(y) = (0..(velocity.linvel.y * delta).abs().ceil() as i32).find(|y| {
-                    (0..(width as i32)).any(|x| {
+                    (0..width as i32).any(|x| {
                         chunk_group
                             .get_mut(
                                 initial_position +
@@ -494,11 +514,12 @@ pub fn update_actors(
                                     chunk_position * CHUNK_SIZE
                             )
                             .map_or(false, |pixel| {
-                                match pixel.material.physics_type {
+                                match pixel.physics_type {
                                     PhysicsType::Static | PhysicsType::Rigidbody => true,
                                     PhysicsType::Powder => {
                                         if
-                                            (velocity.linvel.y.abs() < 2.0 &&
+                                            (velocity.linvel.x.abs() + velocity.linvel.y.abs() <
+                                                1.5 &&
                                                 matches!(
                                                     actor.movement_type,
                                                     MovementType::Walking
@@ -546,7 +567,7 @@ pub fn update_actors(
                             .get(position + ivec2(x, y) - chunk_position * CHUNK_SIZE)
                             .map_or(false, |pixel|
                                 matches!(
-                                    pixel.material.physics_type,
+                                    pixel.physics_type,
                                     PhysicsType::Rigidbody |
                                         PhysicsType::Static |
                                         PhysicsType::Powder
@@ -586,8 +607,7 @@ pub fn update_actors(
             MovementType::Walking => {
                 if !actor.flags.contains(ActorFlags::INFLUENCED) {
                     velocity.linvel.x *= 0.85;
-                } 
-                else {
+                } else {
                     velocity.linvel.x *= 0.975;
                 }
                 // velocity.linvel.y -= 0.98 * time.delta_seconds() * 6.0;
@@ -607,9 +627,9 @@ pub fn update_actors(
 pub fn render_actor_gizmos(mut gizmos: Gizmos, actors: Query<&Actor>) {
     for actor in actors.iter() {
         gizmos.rect_2d(
-            (actor.position + actor.hitbox.center()) / (CHUNK_SIZE as f32),
+            (actor.position + actor.size) / (CHUNK_SIZE as f32),
             0.0,
-            actor.hitbox.size() / (CHUNK_SIZE as f32),
+            actor.size / (CHUNK_SIZE as f32),
             Color::Rgba {
                 red: 0.0,
                 green: 1.0,

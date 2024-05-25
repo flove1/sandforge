@@ -5,8 +5,11 @@ use bevy_rapier2d::geometry::{Collider, CollisionGroups, Group};
 use super::{chunk::Chunk, chunk_manager::ChunkManager};
 
 pub const TERRAIN_MASK: u32 = 1 << 0;
-pub const ACTOR_MASK: u32 = 1 << 1;
-pub const OBJECT_MASK: u32 = 1 << 2;
+pub const PLAYER_MASK: u32 = 1 << 1;
+pub const ACTOR_MASK: u32 = 1 << 3;
+pub const ENEMY_MASK: u32 = 1 << 4;
+pub const HITBOX_MASK: u32 = 1 << 5;
+pub const OBJECT_MASK: u32 = 1 << 6;
 
 pub fn douglas_peucker(vertices: &[Vec2], epsilon: f32) -> Vec<Vec2> {
     let mut d_squared_max = 0.0;

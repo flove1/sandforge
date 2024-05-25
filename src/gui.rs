@@ -9,6 +9,7 @@ use bevy_egui::{
 use bevy::{
     diagnostic::{ DiagnosticsStore, FrameTimeDiagnosticsPlugin },
     prelude::*,
+    transform::commands,
     window::PrimaryWindow,
 };
 use bevy_math::{ ivec2, vec2 };
@@ -19,11 +20,19 @@ use bevy_rapier2d::{
 use egui_notify::{ ToastLevel, Toasts };
 
 use crate::{
-    assets::{ FontBytes, FontAssets }, camera::TrackingCamera, constants::CHUNK_SIZE, has_window, painter::{ BrushRes, BrushShape, BrushType, PainterObjectBuffer }, registries::Registries, simulation::{
+    actors::{ health::Health, player::{ Player, PlayerMaterials, PlayerSelectedMaterial } },
+    assets::{ process_assets, FontAssets, FontBytes },
+    camera::TrackingCamera,
+    constants::CHUNK_SIZE,
+    has_window,
+    painter::{ BrushRes, BrushShape, BrushType, PainterObjectBuffer },
+    registries::Registries,
+    simulation::{
         chunk_manager::ChunkManager,
         materials::{ Material, PhysicsType },
         object::{ get_object_by_click, Object, ObjectBundle },
-    }, state::AppState
+    },
+    state::AppState,
 };
 
 pub struct GuiPlugin;
@@ -33,19 +42,27 @@ impl Plugin for GuiPlugin {
         app.add_event::<ToastEvent>()
             .init_resource::<Inventory>()
             .init_resource::<ToastsRes>()
-            .add_systems(OnEnter(AppState::WorldInitilialization), setup_egui)
+            .add_systems(
+                OnExit(AppState::LoadingAssets),
+                (setup_egui, setup_user_interface).after(process_assets)
+            )
             .add_systems(
                 Update,
                 (
                     ui_info_system,
-                    // ui_selected_cell_system,
+                    ui_selected_cell_system,
                     ui_painter_system,
-                    ui_inventory_system,
+                    // ui_inventory_system,
                     show_toasts,
-                    get_object_by_click.run_if(has_window),
+                    get_object_by_click,
                 )
+                    .run_if(has_window)
                     .run_if(egui_has_primary_context)
                     .run_if(in_state(AppState::Game))
+            )
+            .add_systems(
+                Update,
+                (synchonize_health_value, synchonize_materials).run_if(in_state(AppState::Game))
             );
     }
 }
@@ -59,6 +76,169 @@ pub struct ToastEvent {
 
 #[derive(Default, Resource)]
 pub struct ToastsRes(Toasts);
+
+#[derive(Component)]
+pub struct UIHealthBar;
+
+#[derive(Component)]
+pub struct UIMaterials;
+
+#[derive(Component)]
+pub struct UIMaterialName;
+
+fn synchonize_materials(
+    registries: Res<Registries>,
+    selected_material: Res<PlayerSelectedMaterial>,
+    mut stored_materials: ResMut<PlayerMaterials>,
+    mut style_q: Query<(&mut Style, &mut BackgroundColor), With<UIMaterials>>
+) {
+    let (mut style, mut color) = style_q.single_mut();
+
+    if selected_material.is_changed() || stored_materials.is_changed() {
+        let id = selected_material.0.clone();
+        let value = stored_materials.entry(selected_material.0.clone()).or_insert(0.0);
+
+        style.height = Val::Percent(value.clamp(0.0, 100.0));
+        let material_color = registries.materials.get(&id).unwrap().color;
+        color.0 = Color::rgba_u8(
+            material_color[0],
+            material_color[1],
+            material_color[2],
+            material_color[3]
+        );
+    }
+}
+
+fn synchonize_health_value(
+    player_q: Query<&Health, With<Player>>,
+    mut health_bar: Query<&mut Style, With<UIHealthBar>>
+) {
+    let health = player_q.single();
+    let mut style = health_bar.single_mut();
+
+    style.width = Val::Percent((health.current.max(0.0) / health.total) * 100.0);
+}
+
+fn setup_user_interface(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let image = asset_server.load("health_border.png");
+
+    let slicer = TextureSlicer {
+        border: BorderRect::square(10.0),
+        center_scale_mode: SliceScaleMode::Stretch,
+        sides_scale_mode: SliceScaleMode::Stretch,
+        max_corner_scale: 1.0,
+    };
+
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                width: Val::Percent(100.0),
+                height: Val::Auto,
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(20.0),
+                margin: UiRect::all(Val::Px(20.0)),
+                ..default()
+            },
+            ..default()
+        })
+        .with_children(|parent| {
+            parent.spawn(NodeBundle::default()).with_children(|parent| {
+                parent
+                    .spawn((
+                        ImageBundle {
+                            style: Style {
+                                width: Val::Px(160.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Start,
+                                align_items: AlignItems::Center,
+                                padding: UiRect::all(Val::Px(12.0)),
+                                ..default()
+                            },
+                            image: image.clone().into(),
+                            ..default()
+                        },
+                        ImageScaleMode::Sliced(slicer.clone()),
+                    ))
+                    .with_children(|parent| {
+                        parent.spawn((
+                            UIHealthBar,
+                            NodeBundle {
+                                style: Style {
+                                    width: Val::Percent(100.0),
+                                    height: Val::Percent(100.0),
+                                    position_type: PositionType::Relative,
+                                    ..default()
+                                },
+                                background_color: Color::WHITE.into(),
+                                ..default()
+                            },
+                        ));
+                    });
+            });
+
+            parent
+                .spawn((
+                    NodeBundle {
+                        style: Style {
+                            height: Val::Auto,
+                            flex_direction: FlexDirection::Column,
+                            justify_content: JustifyContent::Center,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ))
+                .with_children(|parent| {
+                    parent
+                        .spawn((
+                            ImageBundle {
+                                style: Style {
+                                    width: Val::Px(32.0),
+                                    height: Val::Px(160.0),
+                                    justify_self: JustifySelf::Center,
+                                    align_items: AlignItems::End,
+                                    padding: UiRect::all(Val::Px(12.0)),
+                                    ..default()
+                                },
+                                image: image.clone().into(),
+                                ..default()
+                            },
+                            ImageScaleMode::Sliced(slicer.clone()),
+                        ))
+                        .with_children(|parent| {
+                            parent.spawn((
+                                UIMaterials,
+                                NodeBundle {
+                                    style: Style {
+                                        width: Val::Percent(100.0),
+                                        height: Val::Percent(50.0),
+                                        max_height: Val::Percent(100.0),
+                                        ..default()
+                                    },
+                                    background_color: Color::rgb_u8(0xf2, 0xf1, 0xa3).into(),
+                                    ..default()
+                                },
+                            ));
+                        });
+
+                    parent.spawn((
+                        UIMaterialName,
+                        TextBundle {
+                            text: Text::from_section("sand", TextStyle {
+                                font_size: 18.0,
+                                color: Color::WHITE,
+                                ..Default::default()
+                            }),
+                            style: Style {
+                                justify_self: JustifySelf::Center,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    ));
+                });
+        });
+}
 
 fn setup_egui(
     mut contexts: EguiContexts,
@@ -93,11 +273,16 @@ fn setup_egui(
 }
 
 pub fn show_toasts(
-    mut contexts: EguiContexts,
     mut toasts: ResMut<ToastsRes>,
-    mut events: EventReader<ToastEvent>
+    mut events: EventReader<ToastEvent>,
+    mut egui_ctx_q: Query<&mut EguiContext, With<PrimaryWindow>>
 ) {
-    let ctx = contexts.ctx_mut();
+    let Ok(mut egui_ctx) = egui_ctx_q.get_single_mut() else {
+        return;
+    };
+
+    let ctx = egui_ctx.get_mut();
+
     let toasts = &mut toasts.0;
 
     for event in events.read() {
@@ -113,8 +298,15 @@ pub fn egui_has_primary_context(query: Query<&EguiContext, With<PrimaryWindow>>)
     !query.is_empty()
 }
 
-fn ui_info_system(mut contexts: EguiContexts, diagnostics: Res<DiagnosticsStore>) {
-    let ctx = contexts.ctx_mut();
+fn ui_info_system(
+    diagnostics: Res<DiagnosticsStore>,
+    mut egui_ctx_q: Query<&mut EguiContext, With<PrimaryWindow>>
+) {
+    let Ok(mut egui_ctx) = egui_ctx_q.get_single_mut() else {
+        return;
+    };
+
+    let ctx = egui_ctx.get_mut();
 
     egui::Window
         ::new("Info")
@@ -150,13 +342,17 @@ fn ui_info_system(mut contexts: EguiContexts, diagnostics: Res<DiagnosticsStore>
 }
 
 fn ui_selected_cell_system(
-    mut contexts: EguiContexts,
     q_window: Query<&Window, With<PrimaryWindow>>,
     mut q_camera: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>,
     registries: Res<Registries>,
-    chunk_manager: Res<ChunkManager>
+    chunk_manager: Res<ChunkManager>,
+    mut egui_ctx_q: Query<&mut EguiContext, With<PrimaryWindow>>
 ) {
-    let ctx = contexts.ctx_mut();
+    let Ok(mut egui_ctx) = egui_ctx_q.get_single_mut() else {
+        return;
+    };
+
+    let ctx = egui_ctx.get_mut();
 
     egui::Window
         ::new("Selected pixel")
@@ -211,7 +407,7 @@ fn ui_selected_cell_system(
                 egui::Color32::WHITE,
                 format!(
                     "Material name: {}",
-                    registries.materials.get(&pixel.material.id.to_string()).unwrap().id
+                    registries.materials.get(&pixel.id.to_string()).unwrap().id
                 )
             );
 
@@ -244,62 +440,48 @@ fn ui_selected_cell_system(
 
             ui.colored_label(
                 egui::Color32::WHITE,
-                format!("Physics type: {}", pixel.material.physics_type.to_string())
+                format!("Physics type: {}", pixel.physics_type.to_string())
             );
 
-            match pixel.material.physics_type {
-                PhysicsType::Liquid(parameters) => {
-                    ui.separator();
+            // if let Some(fire_parameters) = &pixel.material.fire_parameters {
+            //     ui.separator();
 
-                    ui.colored_label(
-                        egui::Color32::WHITE,
-                        format!("Volume: {}", parameters.volume)
-                    );
+            //     ui.colored_label(
+            //         egui::Color32::WHITE,
+            //         format!("temperature: {}", pixel.temperature)
+            //     );
 
-                    ui.colored_label(
-                        egui::Color32::WHITE,
-                        format!("Density: {}", parameters.density)
-                    );
-                }
-                PhysicsType::Powder => {}
-                _ => {}
-            }
+            //     ui.colored_label(egui::Color32::WHITE, format!("burning: {}", pixel.on_fire));
 
-            if let Some(fire_parameters) = &pixel.material.fire_parameters {
-                ui.separator();
+            //     ui.colored_label(
+            //         egui::Color32::WHITE,
+            //         format!("fire_hp: {}", fire_parameters.fire_hp)
+            //     );
 
-                ui.colored_label(
-                    egui::Color32::WHITE,
-                    format!("temperature: {}", pixel.temperature)
-                );
+            //     ui.colored_label(
+            //         egui::Color32::WHITE,
+            //         format!("fire temperature: {}", fire_parameters.fire_temperature)
+            //     );
 
-                ui.colored_label(egui::Color32::WHITE, format!("burning: {}", pixel.on_fire));
-
-                ui.colored_label(
-                    egui::Color32::WHITE,
-                    format!("fire_hp: {}", fire_parameters.fire_hp)
-                );
-
-                ui.colored_label(
-                    egui::Color32::WHITE,
-                    format!("fire temperature: {}", fire_parameters.fire_temperature)
-                );
-
-                ui.colored_label(
-                    egui::Color32::WHITE,
-                    format!("ignition temperature: {}", fire_parameters.ignition_temperature)
-                );
-            }
+            //     ui.colored_label(
+            //         egui::Color32::WHITE,
+            //         format!("ignition temperature: {}", fire_parameters.ignition_temperature)
+            //     );
+            // }
         });
 }
 
 fn ui_painter_system(
-    mut contexts: EguiContexts,
     brush: Option<ResMut<BrushRes>>,
     object_buffer: Option<ResMut<PainterObjectBuffer>>,
-    registries: Res<Registries>
+    registries: Res<Registries>,
+    mut egui_ctx_q: Query<&mut EguiContext, With<PrimaryWindow>>
 ) {
-    let ctx = contexts.ctx_mut();
+    let Ok(mut egui_ctx) = egui_ctx_q.get_single_mut() else {
+        return;
+    };
+
+    let ctx = egui_ctx.get_mut();
 
     egui::Window
         ::new("Elements")
@@ -314,10 +496,7 @@ fn ui_painter_system(
             let mut brush = brush.unwrap();
             ui.set_max_width(ctx.pixels_per_point() * 80.0);
 
-            let mut elements = registries.materials
-                .values()
-                .cloned()
-                .collect::<Vec<Material>>();
+            let mut elements = registries.materials.values().cloned().collect::<Vec<Material>>();
 
             elements.sort_by(|a, b| a.id.to_lowercase().cmp(&b.id.to_lowercase()));
 
@@ -532,15 +711,20 @@ fn bilinear_filtering(image: &[[u8; 4]], position: Vec2, width: i32, height: i32
 
 fn ui_inventory_system(
     mut commands: Commands,
-    mut contexts: EguiContexts,
     mut inventory: ResMut<Inventory>,
     mut events: EventWriter<ToastEvent>,
     window_q: Query<(Entity, &Window), With<PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>
+    camera_q: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>,
+    mut egui_ctx_q: Query<&mut EguiContext, With<PrimaryWindow>>
 ) {
+    let Ok(mut egui_ctx) = egui_ctx_q.get_single_mut() else {
+        return;
+    };
+
+    let ctx = egui_ctx.get_mut();
+
     let (_window_entity, window) = window_q.single();
     let (camera, camera_global_transform) = camera_q.single();
-    let ctx = contexts.ctx_mut();
 
     egui::Window
         ::new("inventory")
@@ -548,7 +732,7 @@ fn ui_inventory_system(
         .title_bar(false)
         .anchor(egui::Align2::LEFT_BOTTOM, [
             ctx.pixels_per_point() * 8.0,
-            - ctx.pixels_per_point() * 8.0,
+            -ctx.pixels_per_point() * 8.0,
         ])
         .show(ctx, |ui| {
             egui::Grid
@@ -641,16 +825,13 @@ fn ui_inventory_system(
 
                                 let cell = cell_option.as_mut().unwrap();
                                 ui.dnd_drag_source(cell.id, index, |ui| {
-                                    let texture_size = u16::max(
-                                        cell.object.width,
-                                        cell.object.height
-                                    ) as usize;
+                                    let texture_size = cell.object.size.max_element() as usize;
 
                                     let texture = cell.texture.get_or_insert_with(|| {
                                         let x_offset =
-                                            (texture_size - (cell.object.width as usize)) / 2;
+                                            (texture_size - (cell.object.size.x as usize)) / 2;
                                         let y_offset =
-                                            (texture_size - (cell.object.height as usize)) / 2;
+                                            (texture_size - (cell.object.size.y as usize)) / 2;
 
                                         let mut colors = vec![0; texture_size.pow(2) * 4 as usize];
 
@@ -660,11 +841,11 @@ fn ui_inventory_system(
                                             .filter(|(_, pixel)| pixel.is_some())
                                             .map(|(index, pixel)| (index, pixel.as_ref().unwrap()))
                                             .for_each(|(pixel_index, pixel)| {
-                                                let y = pixel_index / (cell.object.width as usize);
-                                                let x = pixel_index % (cell.object.width as usize);
+                                                let y = pixel_index / (cell.object.size.x as usize);
+                                                let x = pixel_index % (cell.object.size.x as usize);
 
                                                 let index =
-                                                    (((cell.object.height as usize) -
+                                                    (((cell.object.size.y as usize) -
                                                         (y + 1) +
                                                         y_offset) *
                                                         texture_size +

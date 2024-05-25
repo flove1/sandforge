@@ -13,6 +13,7 @@ use self::{
     health::{
         create_health_bars,
         process_damage_events,
+        tick_iframes,
         update_health_bar_translation,
         update_health_bars,
         DamageEvent,
@@ -21,7 +22,7 @@ use self::{
     },
     pathfinding::{ gizmos_path, pathfind },
     player::{
-        player_dash, player_hook, player_jump, player_jump_extend, player_kick, player_run, player_setup, player_shoot, update_player_rotation, update_rope_position, PlayerActions
+        player_collect_sand, player_dash, player_hook, player_jump, player_jump_extend, player_kick, player_prune_empty_materials, player_run, player_setup, player_shoot, player_switch_material, update_player_rotation, update_rope_position, PlayerActions, PlayerMaterials, PlayerSelectedMaterial, PlayerTrackingParticles
     },
 };
 
@@ -35,15 +36,25 @@ pub mod health;
 pub struct ActorsPlugin;
 impl Plugin for ActorsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<DamageEvent>()
+        app.init_resource::<PlayerTrackingParticles>()
+            .init_resource::<PlayerMaterials>()
+            .init_resource::<PlayerSelectedMaterial>()
+            .add_event::<DamageEvent>()
             .add_plugins(InputManagerPlugin::<PlayerActions>::default())
             .add_systems(OnEnter(AppState::WorldInitilialization), enemy_despawn)
             .add_systems(OnExit(AppState::WorldInitilialization), player_setup)
             .add_systems(
                 Update,
-                (create_health_bars, player_jump, player_kick, player_dash, player_hook, player_shoot).run_if(
-                    in_state(AppState::Game)
-                )
+                (
+                    create_health_bars,
+                    player_jump,
+                    player_kick,
+                    player_dash,
+                    player_hook,
+                    player_shoot,
+                    player_collect_sand,
+                    (player_prune_empty_materials, player_switch_material).chain(),
+                ).run_if(in_state(AppState::Game))
             )
             .add_systems(PreUpdate, pathfind.run_if(in_state(AppState::Game)))
             .add_systems(
@@ -70,6 +81,7 @@ impl Plugin for ActorsPlugin {
                     damage_flash,
                     death,
                     update_health_bars,
+                    tick_iframes,
                 )
                     .chain()
                     .run_if(in_state(AppState::Game))

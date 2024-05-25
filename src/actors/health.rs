@@ -3,7 +3,7 @@ use bevy_rapier2d::dynamics::Velocity;
 
 use crate::constants::CHUNK_SIZE;
 
-use super::{ effects::{DamageFlash, Death}, enemy::Enemy, player:: Player  };
+use super::{ effects::{ DamageFlash, Death }, enemy::Enemy, player::Player };
 
 #[derive(Reflect, Component, Clone)]
 pub struct Health {
@@ -87,7 +87,7 @@ pub fn update_health_bars(
     for (parent, mut transform) in health_bar_fill_q.iter_mut() {
         let bar = health_bar_q.get(parent.get()).unwrap();
         let Ok((health, overlay_settings)) = actor_q.get(bar.subject) else {
-            continue
+            continue;
         };
 
         let percent = (health.current as f32).max(0.0) / (health.total as f32);
@@ -105,8 +105,7 @@ pub fn update_health_bar_translation(
     for (entity, bar, mut transform) in health_bar_q.iter_mut() {
         if let Ok(transform_parent) = parent_q.get(bar.subject.clone()) {
             transform.translation = transform_parent.translation;
-        }
-        else {
+        } else {
             commands.entity(entity).despawn_recursive();
         }
     }
@@ -119,26 +118,53 @@ pub struct DamageEvent {
     pub knockback: Vec2,
 }
 
+#[derive(Component, Deref, DerefMut)]
+pub struct IFrames(pub Timer);
+
+pub fn tick_iframes(
+    mut commands: Commands,
+    mut iframe_q: Query<(Entity, &mut IFrames)>,
+    time: Res<Time>
+) {
+    for (entity, mut iframe) in iframe_q.iter_mut() {
+        iframe.tick(time.delta());
+
+        if iframe.finished() {
+            commands.entity(entity).remove::<IFrames>();
+        }
+    }
+}
+
 pub fn process_damage_events(
     mut commands: Commands,
     mut damage_ev: EventReader<DamageEvent>,
-    mut player_q: Query<(&mut Health, &mut Velocity), (With<Player>, Without<Enemy>)>,
-    mut enemy_q: Query<(&mut Health, &mut Velocity, Option<&Death>), With<Enemy>>
+    mut player_q: Query<(&mut Health, &mut Velocity), (With<Player>, Without<Enemy>, Without<IFrames>)>,
+    mut enemy_q: Query<
+        (&mut Health, &mut Velocity, Option<&Death>),
+        (With<Enemy>, Without<IFrames>, Without<Death>)
+    >
 ) {
     for ev in damage_ev.read() {
         if let Ok((mut health, mut velocity)) = player_q.get_mut(ev.target) {
+            health.current -= ev.value;
+            velocity.linvel += ev.knockback;
+
+            if health.current > 0.0 {
+                commands.entity(ev.target).insert(DamageFlash::default());
+            }
+
+            commands.entity(ev.target).insert(IFrames(Timer::from_seconds(0.5, TimerMode::Once)));
         } else if let Ok((mut health, mut velocity, death)) = enemy_q.get_mut(ev.target) {
             health.current -= ev.value;
             velocity.linvel += ev.knockback;
 
             if health.current > 0.25 {
                 commands.entity(ev.target).insert(DamageFlash::default());
-            }
-            else if death.is_none() {
+            } else if death.is_none() {
                 commands.entity(ev.target).insert(Death::default());
             }
-            
+
+            commands.entity(ev.target).insert(IFrames(Timer::from_seconds(0.5, TimerMode::Once)));
         }
     }
 }
-

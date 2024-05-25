@@ -14,33 +14,36 @@ use bevy::{
     render::texture::Image,
     tasks::{ block_on, futures_lite::future, AsyncComputeTaskPool, Task },
     transform::{ commands, components::Transform, TransformBundle },
+    utils::petgraph::matrix_graph::Zero,
 };
 use bevy_math::{ ivec2, IVec2 };
-use bevy_rapier2d::{ dynamics::GravityScale, geometry::{ Collider, CollisionGroups, Group } };
+use bevy_rapier2d::{
+    dynamics::GravityScale,
+    geometry::{ Collider, CollisionGroups, Group, Sensor },
+};
 use itertools::Itertools;
 
 use crate::{
     actors::{
-        actor::{ Actor, ActorBundle, MovementType },
+        actor::{ Actor, ActorBundle, ActorColliderBundle, MovementType },
         enemy::{ Enemy, Flipped },
         health::HealthBarOverlay,
     },
     animation::{ Animation, AnimationState },
-    assets::{ ChunkMapAssets, SpriteSheets },
-    constants::{ CHUNK_SIZE, PLAYER_LAYER },
+    assets::{ ChunkLayoutAssets, SpriteSheets },
+    constants::{ CHUNK_SIZE, ENEMY_Z, PLAYER_Z },
     helpers::to_index,
     registries::Registries,
     simulation::{
         chunk::{ Chunk, ChunkState },
         chunk_groups::{ self, build_chunk_group },
         chunk_manager::ChunkManager,
-        materials::MaterialInstance,
-        mesh::{ OBJECT_MASK, TERRAIN_MASK },
+        colliders::{ ENEMY_MASK, HITBOX_MASK, OBJECT_MASK, PLAYER_MASK, TERRAIN_MASK },
         pixel::Pixel,
     },
 };
 
-use super::{ Noise, PoissonEnemyPosition };
+use super::{ LevelData, Noise, PoissonEnemyPosition };
 
 #[derive(Event, Deref)]
 pub struct GenerationEvent(pub IVec2);
@@ -53,25 +56,39 @@ pub fn process_chunk_generation_events(
     mut ev_chunkgen: EventReader<GenerationEvent>,
     chunk_manager: Res<ChunkManager>,
     images: Res<Assets<Image>>,
-    chunk_map: Res<ChunkMapAssets>,
     registries: Res<Registries>,
-    noise: Res<Noise>
+    noise: Res<Noise>,
+    level_data: Res<LevelData>
 ) {
     if !ev_chunkgen.is_empty() {
         let thread_pool = AsyncComputeTaskPool::get();
-        let image = Arc::new(images.get(chunk_map.texture.clone()).unwrap().clone());
-        let material_1 = Arc::new(registries.materials.get("stone").unwrap().clone());
-        let material_2 = Arc::new(registries.materials.get("dirt").unwrap().clone());
-        let material_3 = Arc::new(registries.materials.get("grass").unwrap().clone());
+        let image = Arc::new(images.get(level_data.1.clone()).unwrap().clone());
+        
+        let powder = Arc::new(registries.materials.get(&level_data.0.powder_id).unwrap().clone());
+        let liquid = Arc::new(registries.materials.get(&level_data.0.liquid_id).unwrap().clone());
+
+        let terrain_layers = level_data.0.terrain_layers.iter().map(|level| {
+            (level.value, Arc::new(registries.materials.get(&level.material_id).unwrap().clone()))
+        }).collect_vec();
+
+        let background_layers = level_data.0.background_layers.iter().map(|level| {
+            (level.value, Arc::new(registries.materials.get(&level.material_id).unwrap().clone()))
+        }).collect_vec();
 
         for ev in ev_chunkgen.read() {
             let position = ev.0;
             let image = image.clone();
-            let noise = noise.clone();
 
-            let material_1 = material_1.clone();
-            let material_2 = material_2.clone();
-            let material_3 = material_3.clone();
+            let Noise {
+                terrain_noise,
+                sand_noise,
+                liquid_noise,
+            } = noise.clone();
+
+            let powder = powder.clone();
+            let liquid = liquid.clone();
+            let terrain_layers = terrain_layers.clone();
+            let background_layers = background_layers.clone();
 
             commands.entity(chunk_manager.get_chunk_id(&ev.0).unwrap()).insert(
                 GenerationTask(
@@ -81,10 +98,9 @@ pub fn process_chunk_generation_events(
                         let pixels = (0..CHUNK_SIZE.pow(2))
                             .map(|index| {
                                 let point =
-                                    (position.as_vec2() +
-                                        ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE).as_vec2() /
-                                            (CHUNK_SIZE as f32)) /
-                                    48.0;
+                                    position.as_vec2() +
+                                    ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE).as_vec2() /
+                                        (CHUNK_SIZE as f32);
 
                                 let texture_position = (
                                     texture_position + ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE)
@@ -104,28 +120,38 @@ pub fn process_chunk_generation_events(
                                             ] as f32
                                     ) / 255.0;
 
-                                noise(point) * texture_modifier
-                            })
-                            .map(|value| {
-                                if value < 0.4 {
-                                    Pixel::new(material_1.as_ref().clone().into())
-                                } else if value < 0.55 {
-                                    Pixel::new(material_2.as_ref().clone().into())
-                                } else if value < 0.6 {
-                                    Pixel::new(material_3.as_ref().clone().into())
-                                } else {
-                                    Pixel::default()
+                                let value = terrain_noise(point) * texture_modifier;
+                                let powder_value = sand_noise(point);
+                                let liquid_value = liquid_noise(point);
+
+                                if value < terrain_layers.last().unwrap().0 && !powder_value.is_zero() && liquid_value < 0.8 {
+                                    return Pixel::from(powder.as_ref().clone());
                                 }
+
+                                if value < terrain_layers[0].0 {
+                                    if value < 0.1 && liquid_value > 0.8 {
+                                        return Pixel::from(liquid.as_ref().clone())
+                                    } else {
+                                        return Pixel::from(terrain_layers[0].1.as_ref().clone());
+                                    }
+                                }
+
+                                for layer in terrain_layers.iter() {
+                                    if value < layer.0 {
+                                        return Pixel::from(layer.1.as_ref().clone());
+                                    }
+                                }
+
+                                return Pixel::default();
                             })
                             .collect_vec();
 
                         let bg_texture = (0..CHUNK_SIZE.pow(2))
                             .map(|index| {
                                 let point =
-                                    (position.as_vec2() +
-                                        ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE).as_vec2() /
-                                            (CHUNK_SIZE as f32)) /
-                                    48.0;
+                                    position.as_vec2() +
+                                    ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE).as_vec2() /
+                                        (CHUNK_SIZE as f32);
 
                                 let texture_position = (
                                     texture_position + ivec2(index % CHUNK_SIZE, index / CHUNK_SIZE)
@@ -145,34 +171,34 @@ pub fn process_chunk_generation_events(
                                             ] as f32
                                     ) / 255.0;
 
-                                noise(point) * texture_modifier
+                                let value = terrain_noise(point) * texture_modifier;
+
+                                for layer in background_layers.iter() {
+                                    if value < layer.0 {
+                                        return Pixel::from(layer.1.as_ref().clone());
+                                    }
+                                }
+
+                                return Pixel::default();
                             })
-                            .map(|value| {
-                                let mut colors = if value < 0.4 {
-                                    MaterialInstance::from(material_1.as_ref()).color
-                                } else if value < 0.55 {
-                                    MaterialInstance::from(material_2.as_ref()).color
-                                } else if value < 0.75 {
-                                    MaterialInstance::from(material_3.as_ref()).color
-                                } else {
-                                    [0; 4]
-                                };
+                            .map(|pixel| {
+                                let mut color = pixel.get_color();
 
                                 let f = 0.6;
 
                                 let (r, g, b) = (
-                                    colors[0] as f32,
-                                    colors[1] as f32,
-                                    colors[2] as f32,
+                                    color[0] as f32,
+                                    color[1] as f32,
+                                    color[2] as f32,
                                 );
 
                                 let l = 0.3 * r + 0.6 * g + 0.1 * b;
 
-                                colors[0] = (((r + f * (l - r)) * 0.8) as u8).saturating_sub(25);
-                                colors[1] = (((g + f * (l - g)) * 0.8) as u8).saturating_sub(25);
-                                colors[2] = (((b + f * (l - b)) * 0.8) as u8).saturating_sub(25);
+                                color[0] = (((r + f * (l - r)) * 0.8) as u8).saturating_sub(25);
+                                color[1] = (((g + f * (l - g)) * 0.8) as u8).saturating_sub(25);
+                                color[2] = (((b + f * (l - b)) * 0.8) as u8).saturating_sub(25);
 
-                                colors
+                                color
                             })
                             .flatten()
                             .collect_vec();
@@ -190,7 +216,7 @@ pub fn process_chunk_generation_tasks(
     mut chunk_manager: ResMut<ChunkManager>,
     mut images: ResMut<Assets<Image>>,
     mut chunk_q: Query<(Entity, &Transform, &mut GenerationTask), With<Chunk>>,
-    mut awaiting: ResMut<AwaitingNearbyChunks>,
+    mut awaiting: ResMut<AwaitingNearbyChunks>
 ) {
     for (entity, transform, mut task) in chunk_q.iter_mut() {
         let result = block_on(future::poll_once(&mut task.0));
@@ -320,45 +346,59 @@ pub fn populate_chunk(
                                 .repeat()
                         );
 
-                        commands.spawn((
-                            Name::new("Enemy"),
-                            Enemy,
-                            ActorBundle {
-                                actor: Actor {
-                                    position: position * (CHUNK_SIZE as f32),
-                                    hitbox: Rect::from_corners(Vec2::ZERO, Vec2::new(6.0, 6.0)),
-                                    movement_type: MovementType::Floating,
+                        commands
+                            .spawn((
+                                Name::new("Enemy"),
+                                Enemy,
+                                ActorBundle {
+                                    actor: Actor {
+                                        position: position * (CHUNK_SIZE as f32),
+                                        size: Vec2::new(6.0, 6.0),
+                                        movement_type: MovementType::Floating,
+                                        ..Default::default()
+                                    },
+                                    collider: Collider::ball(6.0),
+                                    sprite: SpriteSheetBundle {
+                                        texture: sprites.bat.clone(),
+                                        atlas: TextureAtlas {
+                                            layout: texture_atlas_layout.clone(),
+                                            ..Default::default()
+                                        },
+                                        transform: Transform {
+                                            translation: position.extend(ENEMY_Z),
+                                            scale: Vec3::splat(1.0 / (CHUNK_SIZE as f32)),
+                                            ..Default::default()
+                                        },
+                                        sprite: Sprite {
+                                            anchor: bevy::sprite::Anchor::Center,
+                                            ..Default::default()
+                                        },
+                                        ..Default::default()
+                                    },
                                     ..Default::default()
                                 },
-                                collider: Collider::ball(6.0),
-                                sprite: SpriteSheetBundle {
-                                    texture: sprites.bat.clone(),
-                                    atlas: TextureAtlas {
-                                        layout: texture_atlas_layout.clone(),
-                                        ..Default::default()
-                                    },
-                                    transform: Transform {
-                                        translation: position.extend(PLAYER_LAYER + 1.0),
-                                        scale: Vec3::splat(1.0 / (CHUNK_SIZE as f32)),
-                                        ..Default::default()
-                                    },
-                                    sprite: Sprite {
-                                        anchor: bevy::sprite::Anchor::Center,
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
+                                HealthBarOverlay {
+                                    offset: Vec2::new(0.0, 14.0),
+                                    width: 12.0,
                                 },
-                                ..Default::default()
-                            },
-                            HealthBarOverlay {
-                                offset: Vec2::new(0.0, 14.0),
-                                width: 12.0,
-                            },
-                            AnimationState::default(),
-                            animation.clone(),
-                            GravityScale(0.05),
-                            Flipped(false),
-                        ));
+                                AnimationState::default(),
+                                animation.clone(),
+                                GravityScale(0.05),
+                                Flipped(false),
+                            ))
+                            .with_children(|parent| {
+                                parent.spawn((
+                                    Sensor,
+                                    ActorColliderBundle {
+                                        collider: Collider::ball(6.0),
+                                        collision_groups: CollisionGroups::new(
+                                            Group::from_bits_retain(ENEMY_MASK | HITBOX_MASK),
+                                            Group::from_bits_retain(PLAYER_MASK)
+                                        ),
+                                        ..Default::default()
+                                    },
+                                ));
+                            });
                     });
             }
 

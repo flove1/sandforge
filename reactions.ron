@@ -1,0 +1,25 @@
+[]
+
+// - {
+//     probability: 0.5,
+//     input_material_1: lava,
+//     input_material_2: water,
+//     output_material_1: stone,
+//     output_material_2: stone,
+//   }
+
+// - {
+//     probability: 0.0005,
+//     input_material_1: steam,
+//     input_material_2: steam,
+//     output_material_1: water,
+//     output_material_2: air,
+//   }
+
+// - {
+//     probability: 0.02,
+//     input_material_1: water,
+//     input_material_2: dirt,
+//     output_material_1: water,
+//     output_material_2: grass,
+//   }

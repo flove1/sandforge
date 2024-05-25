@@ -1,17 +1,12 @@
-use std::sync::{ Arc, Mutex };
-
 use bevy::{ prelude::*, utils::{ HashMap, HashSet } };
-use bevy_egui::egui::mutex::RwLock;
-use serde_yaml::Value;
-
-use crate::{
-    simulation::materials::{ FireParameters, Material, PhysicsType, Reaction },
-};
+use ron::Value;
+use crate::{ generation::level::Level, simulation::materials::{ Material, Reaction } };
 
 #[derive(Resource)]
 pub struct Registries {
     pub reactive_materials: HashSet<String>,
     pub materials: HashMap<String, Material>,
+    pub levels: Vec<Level>,
 }
 
 impl FromWorld for Registries {
@@ -20,54 +15,20 @@ impl FromWorld for Registries {
         let mut reactive_materials = HashSet::new();
 
         materials.insert("air".to_string(), Material::default());
-        materials.insert("grass".to_string(), Material {
-            id: "grass".to_string(),
-            matter_type: PhysicsType::Static,
-            color: [0x7d, 0xaa, 0x4d, 0xff],
-            color_offset: 10,
-            fire_parameters: Some(FireParameters {
-                fire_temperature: 125,
-                ignition_temperature: 75,
-                fire_hp: 25,
-            }),
-            ..Default::default()
-        });
-        materials.insert("dirt".to_string(), Material {
-            id: "dirt".to_string(),
-            matter_type: PhysicsType::Static,
-            color: [0x6d, 0x5f, 0x3d, 0xff],
-            color_offset: 10,
-            fire_parameters: None,
-            ..Default::default()
-        });
-        materials.insert("stone".to_string(), Material {
-            id: "stone".to_string(),
-            matter_type: PhysicsType::Static,
-            color: [0x77, 0x77, 0x77, 0xff],
-            color_offset: 25,
-            fire_parameters: None,
-            ..Default::default()
-        });
 
-        let parsed_yaml: Value = serde_yaml
-            ::from_str(&std::fs::read_to_string("materials.yaml").unwrap())
-            .unwrap();
-
-        parsed_yaml
-            .as_sequence()
+        ron::de
+            ::from_str::<Vec<Material>>(&std::fs::read_to_string("materials.ron").unwrap())
             .unwrap()
-            .iter()
-            .filter_map(|item| serde_yaml::from_value(item.clone()).ok())
-            .for_each(|material: Material| {
+            .into_iter()
+            .for_each(|material| {
                 materials.insert(material.id.clone(), material);
             });
 
-        parsed_yaml
-            .as_sequence()
+        ron::de
+            ::from_str::<Vec<Reaction>>(&std::fs::read_to_string("reactions.ron").unwrap())
             .unwrap()
-            .iter()
-            .filter_map(|item| serde_yaml::from_value(item.clone()).ok())
-            .for_each(|reaction: Reaction| {
+            .into_iter()
+            .for_each(|reaction| {
                 reactive_materials.insert(reaction.input_material_1.clone());
 
                 materials.entry(reaction.input_material_1.clone()).and_modify(|material| {
@@ -77,9 +38,14 @@ impl FromWorld for Registries {
                 });
             });
 
+        let levels = ron::de
+            ::from_str::<Vec<Level>>(&std::fs::read_to_string("levels.ron").unwrap())
+            .unwrap();
+
         Self {
-            materials: materials,
-            reactive_materials: reactive_materials,
+            materials,
+            reactive_materials,
+            levels,
         }
     }
 }

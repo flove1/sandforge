@@ -1,0 +1,110 @@
+[
+    (
+        id: "grass",
+        physics_type: Static,
+        color: (0x7d, 0xaa, 0x4d, 0xff),
+        color_offset: 10,
+        fire_parameters: Some((
+            probability: 0.5,
+            fire_hp: 25,
+            requires_oxygen: true,
+        )),
+    ),
+    (
+        id: "dirt",
+        physics_type: Static,
+        color: (0x6d, 0x5f, 0x3d, 0xff),
+        color_offset: 10,
+    ),
+    (
+        id: "stone",
+        physics_type: Static,
+        color: (0x77, 0x77, 0x77, 0xff),
+        color_offset: 25,
+    ),
+    (
+        id: "icy_stone",
+        physics_type: Static,
+        color: (0x3E, 0x53, 0x62, 0xff),
+        color_offset: 25,
+    ),
+    (
+        id: "ice",
+        physics_type: Static,
+        color: (0x8A, 0x9B, 0xFF, 0x90),
+        color_offset: 15,
+    ),
+    (
+        id: "snow",
+        physics_type: Static,
+        color: (0xA6, 0xC2, 0xD8, 0xFF),
+        color_offset: 10,
+    ),
+    (
+        id: "sand",
+        color: (0xf2, 0xf1, 0xa3, 0xff),
+        color_offset: 40,
+        physics_type: Powder,
+    ),
+    (
+        id: "water",
+        color: (0x47, 0x7C, 0xB8, 0xff),
+        color_offset: 0,
+        physics_type: Liquid(( 
+            flow_rate: 4 
+        )),
+    ),
+    (
+        id: "lava",
+        color: (0xEA, 0x5C, 0x0F, 0xEE),
+        color_offset: 0,
+        physics_type: Liquid(( 
+            flow_rate: 1 
+        )),
+        //  fire_parameters: !FireParameters (
+        //    fire_temperature: 150,
+        //    ignition_temperature: 45,
+        //    fire_hp: 15,
+        //  )
+    ),
+    (
+        id: "coal",
+        color: (0x09, 0x09, 0x09, 0xff),
+        color_offset: 25,
+        physics_type: Powder,
+        fire_parameters: Some((
+            probability: 0.9,
+            fire_hp: 100,
+            requires_oxygen: true,
+        )),
+    ),
+    (
+        id: "wood",
+        color: (0x6a, 0x4b, 0x35, 0xff),
+        color_offset: 50,
+        physics_type: Static,
+        fire_parameters: Some ((
+            probability: 0.75,
+            fire_hp: 50,
+            requires_oxygen: true,
+        )),
+    ),
+    (
+        id: "steam",
+        color: (0x80, 0x80, 0x80, 0x99),
+        color_offset: 0,
+        physics_type: Gas,
+    ),
+    (
+        id: "burning_gas",
+        color: (0xff, 0x5a, 0x00, 0x99),
+        color_offset: 0,
+        physics_type: Gas,
+        fire_parameters: Some((
+            probability: 0.0,
+            fire_hp: 10,
+            requires_oxygen: false,
+            auto_start: true,
+        )),
+    )
+]

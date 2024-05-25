@@ -20,7 +20,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     color = max(color, damp_factor * textureSample(t, ts, in.uv + vec2<f32>(step_offset, -step_offset) / dimensions).rgb * damp_diagonal);
     color = max(color, damp_factor * textureSample(t, ts, in.uv + vec2<f32>(0.0, -step_offset) / dimensions).rgb);
     color = max(color, damp_factor * textureSample(t, ts, in.uv + vec2<f32>(-step_offset, -step_offset) / dimensions).rgb * damp_diagonal);
-    color = max(color, vec3<f32>(0.1, 0.1, 0.1));
+    color = max(color, vec3<f32>(0.025, 0.025, 0.025));
 
     return vec4<f32>(color, 1.0);
 }

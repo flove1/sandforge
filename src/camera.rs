@@ -126,11 +126,10 @@ pub fn update_camera(
     camera_transform.translation = camera_tracking.position.extend(4.0);
 }
 
-pub const BACKGROUND_LAYER: u8 = 1;
-pub const TERRAIN_LAYER: u8 = 2;
-pub const ACTOR_LAYER: u8 = 3;
-pub const LIGHTING_LAYER: u8 = 4;
-pub const PROCESSED_TERRAIN_LAYER: u8 = 5;
+pub const BACKGROUND_RENDER_LAYER: u8 = 1;
+pub const TERRAIN_RENDER_LAYER: u8 = 2;
+pub const ACTOR_RENDER_LAYER: u8 = 3;
+pub const PARTICLE_RENDER_LAYER: u8 = 4;
 
 #[derive(Default, Resource, ExtractResource, Clone)]
 pub struct LightingTexture {
@@ -178,7 +177,7 @@ fn setup_camera(
         .spawn((
             Camera2dBundle {
                 projection: OrthographicProjection {
-                    scale: 0.5 / (CHUNK_SIZE as f32),
+                    scale: 0.375 / (CHUNK_SIZE as f32),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -187,7 +186,7 @@ fn setup_camera(
             Visibility::Visible,
             TrackingCamera::default(),
             LightApply,
-            RenderLayers::from_layers(&[BACKGROUND_LAYER, TERRAIN_LAYER, ACTOR_LAYER]),
+            RenderLayers::from_layers(&[BACKGROUND_RENDER_LAYER, TERRAIN_RENDER_LAYER, ACTOR_RENDER_LAYER, PARTICLE_RENDER_LAYER]),
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -200,14 +199,14 @@ fn setup_camera(
                         ..Default::default()
                     },
                     projection: OrthographicProjection {
-                        scale: (0.5 / (CHUNK_SIZE as f32) / lighting.scale) * 1.25,
+                        scale: (0.375 / (CHUNK_SIZE as f32) / lighting.scale) * 1.25,
                         ..Default::default()
                     },
                     ..Default::default()
                 },
                 LightMask,
                 LightPropagationSettings { offset: 2.0, passes: 8 },
-                RenderLayers::from_layers(&[BACKGROUND_LAYER, TERRAIN_LAYER]),
+                RenderLayers::from_layers(&[BACKGROUND_RENDER_LAYER, TERRAIN_RENDER_LAYER]),
             ));
 
             parent.spawn((
@@ -219,7 +218,7 @@ fn setup_camera(
                         ..Default::default()
                     },
                     projection: OrthographicProjection {
-                        scale: (0.5 / (CHUNK_SIZE as f32)),
+                        scale: (0.375 / (CHUNK_SIZE as f32)),
                         ..Default::default()
                     },
                     ..Default::default()

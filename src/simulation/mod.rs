@@ -8,20 +8,39 @@ use noise::{ Fbm, MultiFractal, Perlin, RidgedMulti };
 use bevy_rapier2d::render::{ RapierDebugRenderPlugin, DebugRenderMode };
 
 use crate::{
-    constants::CHUNK_SIZE, generation::{ chunk::{ populate_chunk, process_chunk_generation_events, process_chunk_generation_tasks, GenerationEvent }, GenerationPlugin }, registries::Registries, state::AppState
+    constants::CHUNK_SIZE,
+    generation::{
+        chunk::{
+            populate_chunk,
+            process_chunk_generation_events,
+            process_chunk_generation_tasks,
+            GenerationEvent,
+        },
+        GenerationPlugin,
+    },
+    registries::Registries,
+    state::AppState,
 };
 
 use self::{
-    chunk_manager::{ chunks_update, manager_setup, update_loaded_chunks, ChunkManager, Terrain },
+    chunk_manager::{
+        chunk_set_parent,
+        chunks_update,
+        manager_setup,
+        update_loaded_chunks,
+        ChunkManager,
+        Terrain,
+    },
+    colliders::{ process_chunk_collider_events, ChunkColliderEveny },
     dirty_rect::{ dirty_rects_gizmos, DirtyRects },
-    mesh::{ process_chunk_collider_events, ChunkColliderEveny },
-    object::{ fill_objects, object_collision_damage, process_explosion, unfill_objects, Object },
+    object::{ fill_objects, object_collision_damage, process_explosion, process_fall_apart_on_collision, unfill_objects, Object },
     particle::{
+        particle_modify_velocity,
+        particle_set_parent,
         particle_setup,
         particles_update,
-        update_partcile_meshes,
         Particle,
-        ParticleInstances,
+        ParticleParent,
     },
 };
 
@@ -29,9 +48,8 @@ pub mod chunk;
 pub mod chunk_groups;
 pub mod chunk_manager;
 pub mod dirty_rect;
-pub mod material_placer;
 pub mod materials;
-pub mod mesh;
+pub mod colliders;
 pub mod object;
 pub mod particle;
 pub mod pixel;
@@ -48,24 +66,31 @@ impl Plugin for SimulationPlugin {
             .add_systems(Startup, (manager_setup, particle_setup))
             .add_systems(
                 PreUpdate,
-                (update_loaded_chunks, process_chunk_generation_events, process_chunk_generation_tasks, populate_chunk)
+                (
+                    update_loaded_chunks,
+                    process_chunk_generation_events,
+                    process_chunk_generation_tasks,
+                    populate_chunk,
+                )
                     .chain()
-                    .run_if(
-                        in_state(AppState::Game)
-                    )
+                    .run_if(in_state(AppState::Game))
             )
             .add_systems(
                 Update,
                 (
-                    particles_update.run_if(
-                        |chunk_manager: Res<ChunkManager>| chunk_manager.clock() % 4 == 0
-                    ),
-                    chunks_update.run_if(on_timer(Duration::from_millis(10))),
-                ).run_if(in_state(AppState::Game))
+                    (particle_set_parent, particle_modify_velocity, particles_update)
+                        .chain()
+                        .run_if(|chunk_manager: Res<ChunkManager>| chunk_manager.clock() % 4 == 0),
+                    (chunk_set_parent, chunks_update)
+                        .chain()
+                        .run_if(on_timer(Duration::from_millis(10))),
+                )
+                    .chain()
+                    .run_if(in_state(AppState::Game))
             )
             .add_systems(
                 PostUpdate,
-                (render_dirty_rect_updates, update_partcile_meshes, process_chunk_collider_events).run_if(
+                (render_dirty_rect_updates, process_chunk_collider_events).run_if(
                     in_state(AppState::Game)
                 )
             )
@@ -73,9 +98,8 @@ impl Plugin for SimulationPlugin {
                 FixedUpdate,
                 (
                     unfill_objects.before(PhysicsSet::SyncBackend),
-                    process_explosion.after(PhysicsSet::Writeback),
+                    (object_collision_damage, process_explosion, process_fall_apart_on_collision).after(PhysicsSet::Writeback),
                     fill_objects,
-                    object_collision_damage,
                 )
                     .chain()
                     .run_if(in_state(AppState::Game))
@@ -95,32 +119,35 @@ impl Plugin for SimulationPlugin {
             FixedUpdate,
             (PhysicsSet::SyncBackend, PhysicsSet::StepSimulation, PhysicsSet::Writeback)
                 .chain()
-                .before(TransformSystem::TransformPropagate).run_if(in_state(AppState::Game))
+                .before(TransformSystem::TransformPropagate)
+                .run_if(in_state(AppState::Game))
         );
 
         app.add_systems(PostUpdate, sync_removals);
 
         app.add_systems(FixedUpdate, (
-            RapierPhysicsPlugin::<NoUserData>::get_systems(PhysicsSet::SyncBackend).in_set(
-                PhysicsSet::SyncBackend
-            ),
-            RapierPhysicsPlugin::<NoUserData>::get_systems(PhysicsSet::StepSimulation).in_set(
-                PhysicsSet::StepSimulation
-            ),
-            RapierPhysicsPlugin::<NoUserData>::get_systems(PhysicsSet::Writeback).in_set(PhysicsSet::Writeback),
+            RapierPhysicsPlugin::<NoUserData>
+                ::get_systems(PhysicsSet::SyncBackend)
+                .in_set(PhysicsSet::SyncBackend),
+            RapierPhysicsPlugin::<NoUserData>
+                ::get_systems(PhysicsSet::StepSimulation)
+                .in_set(PhysicsSet::StepSimulation),
+            RapierPhysicsPlugin::<NoUserData>
+                ::get_systems(PhysicsSet::Writeback)
+                .in_set(PhysicsSet::Writeback),
         ));
 
-        #[cfg(feature = "debug-render")]
-        app.add_plugins(RapierDebugRenderPlugin {
-            mode: DebugRenderMode::COLLIDER_SHAPES | DebugRenderMode::JOINTS,
-            ..Default::default()
-        }).add_systems(PostUpdate, dirty_rects_gizmos.run_if(in_state(AppState::Game)));
+        // #[cfg(feature = "debug-render")]
+        // app.add_plugins(RapierDebugRenderPlugin {
+        //     mode: DebugRenderMode::COLLIDER_SHAPES | DebugRenderMode::JOINTS,
+        //     ..Default::default()
+        // }).add_systems(PostUpdate, dirty_rects_gizmos.run_if(in_state(AppState::Game)));
     }
 }
 
 pub fn reset_world(
     mut commands: Commands,
-    particles_instances: Query<Entity, With<ParticleInstances>>,
+    particles_instances: Query<Entity, With<ParticleParent>>,
     mut chunk_manager: ResMut<ChunkManager>,
     chunks: Query<Entity, With<Terrain>>,
     objects: Query<Entity, With<Object>>

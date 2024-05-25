@@ -1210,7 +1210,7 @@ dependencies = [
  "ahash 0.8.7",
  "bevy_utils_proc_macros",
  "getrandom 0.2.10",
- "hashbrown 0.14.0",
+ "hashbrown 0.14.5",
  "nonmax",
  "petgraph",
  "smallvec",
@@ -1923,7 +1923,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd72493923899c6f10c641bdbdeddc7183d6396641d99c1a0d1597f37f92e28"
 dependencies = [
  "cfg-if",
- "hashbrown 0.14.0",
+ "hashbrown 0.14.5",
  "lock_api",
  "once_cell",
  "parking_lot_core",
@@ -2647,9 +2647,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.14.0"
+version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c6201b9ff9fd90a5a3bac2e56a830d0caa509576f0e503818ee82c181b3437a"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash 0.8.7",
  "allocator-api2",
@@ -2740,12 +2740,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.0.0"
+version = "2.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5477fe2230a79769d8dc68e0eabf5437907c0457a5614a9e8dddb67f65eb65d"
+checksum = "168fb715dda47215e360912c096649d23d58bf392ac62f73919e831745e40f26"
 dependencies = [
  "equivalent",
- "hashbrown 0.14.0",
+ "hashbrown 0.14.5",
 ]
 
 [[package]]
@@ -4300,6 +4300,7 @@ dependencies = [
  "fast_poisson",
  "fastrand",
  "flurry",
+ "indexmap",
  "itertools 0.12.0",
  "lazy_static",
  "leafwing-input-manager",
@@ -4309,6 +4310,7 @@ dependencies = [
  "poly2tri-rs",
  "rand 0.8.5",
  "rayon",
+ "ron",
  "rustc-hash",
  "scoped_threadpool",
  "seldom_state",

@@ -3,17 +3,20 @@ use std::mem;
 use async_channel::Sender;
 use bevy::{
     prelude::*,
-    render::{ mesh::PrimitiveTopology, render_asset::RenderAssetUsages, view::NoFrustumCulling },
+    render::{ mesh::PrimitiveTopology, render_asset::RenderAssetUsages, view::{NoFrustumCulling, RenderLayers} },
     sprite::Mesh2dHandle,
     tasks::ComputeTaskPool,
+    transform,
     utils::HashMap,
 };
+use bevy_egui::egui::vec2;
 use bevy_math::ivec2;
+use bevy_rapier2d::dynamics::Velocity;
 use bytemuck::{ Pod, Zeroable };
 use itertools::Itertools;
 use serde::{ Deserialize, Serialize };
 
-use crate::constants::{ CHUNK_SIZE, PARTICLE_LAYER };
+use crate::{ camera::PARTICLE_RENDER_LAYER, constants::{ CHUNK_SIZE, PARTICLE_Z }, helpers::WalkGrid };
 
 use super::{
     chunk::ChunkState,
@@ -26,135 +29,61 @@ use super::{
         RenderMessage,
         UpdateMessage,
     },
-    materials::{ MaterialInstance, PhysicsType },
+    materials::{ Material, PhysicsType },
     pixel::Pixel,
 };
 
-#[derive(Component, Default)]
-pub struct ParticleInstances;
+#[derive(Bundle)]
+pub struct ParticleBundle {
+    pub sprite: SpriteBundle,
+    pub velocity: Velocity,
+    pub movement: ParticleMovement,
+    pub state: ParticleObjectState,
+    pub particle: Particle,
+    pub render_layers: RenderLayers
+}
 
-#[derive(Reflect, Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub enum InObjectState {
+impl Default for ParticleBundle {
+    fn default() -> Self {
+        Self {
+            sprite: SpriteBundle::default(),
+            velocity: Velocity::default(),
+            movement: ParticleMovement::Fall,
+            state: ParticleObjectState::FirstFrame,
+            particle: Particle::default(),
+            render_layers: RenderLayers::layer(PARTICLE_RENDER_LAYER)
+        }
+    }
+}
+
+#[derive(Component, Default)]
+pub struct ParticleParent;
+
+#[derive(Component, Reflect, Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub enum ParticleMovement {
+    Fall,
+    Follow(Entity),
+}
+
+#[derive(Component, Reflect, Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub enum ParticleObjectState {
     FirstFrame,
     Inside,
     Outside,
 }
 
-#[derive(Component, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Component, Debug, Clone)]
 pub struct Particle {
     pub active: bool,
-    pub material: MaterialInstance,
-    pub pos: Vec2,
-    pub vel: Vec2,
-    pub in_object_state: InObjectState,
-}
-
-#[derive(Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct ParticleRenderInstance {
-    pub pos: Vec3,
-    pub color: [f32; 4],
-}
-
-impl From<&Particle> for ParticleRenderInstance {
-    fn from(val: &Particle) -> Self {
-        ParticleRenderInstance {
-            pos: val.pos.extend(PARTICLE_LAYER),
-            color: [
-                (val.material.color[0] as f32) / 255.0,
-                (val.material.color[1] as f32) / 255.0,
-                (val.material.color[2] as f32) / 255.0,
-                (val.material.color[3] as f32) / 255.0,
-            ],
-        }
-    }
+    pub pixel: Pixel,
 }
 
 impl Particle {
-    pub fn new(material: MaterialInstance, pos: Vec2, vel: Vec2) -> Self {
+    pub fn new(pixel: Pixel) -> Self {
         Self {
             active: true,
-            material,
-            pos,
-            vel,
-            in_object_state: InObjectState::FirstFrame,
+            pixel,
         }
-    }
-
-    pub fn try_to_place(&mut self, api: &mut ParticleApi) -> Result<(), &'static str> {
-        let lx = self.pos.x;
-        let ly = self.pos.y;
-
-        self.vel.y -= 0.2;
-
-        let dx = self.vel.x;
-        let dy = self.vel.y;
-
-        let steps = ((dx.abs() + dy.abs()).sqrt() as u32) + 1;
-        for s in 0..steps {
-            let thru = ((s + 1) as f32) / (steps as f32);
-
-            self.pos.x = lx + dx * thru;
-            self.pos.y = ly + dy * thru;
-
-            let Some(pixel) = api.get(self.pos.x as i32, self.pos.y as i32) else {
-                continue;
-            };
-
-            if pixel.material.physics_type == PhysicsType::Air {
-                self.in_object_state = InObjectState::Outside;
-                continue;
-            }
-
-            let is_object = matches!(
-                pixel.material.physics_type,
-                PhysicsType::Rigidbody | PhysicsType::Actor
-            );
-
-            match self.in_object_state {
-                InObjectState::FirstFrame => {
-                    if is_object {
-                        self.in_object_state = InObjectState::Inside;
-                    } else {
-                        self.in_object_state = InObjectState::Outside;
-                    }
-                }
-                InObjectState::Inside => {
-                    if !is_object {
-                        self.in_object_state = InObjectState::Outside;
-                    }
-                }
-                InObjectState::Outside => {}
-            }
-
-            if !is_object || self.in_object_state == InObjectState::Outside {
-                match api.get_material(lx as i32, ly as i32) {
-                    Some(material) if material.physics_type != PhysicsType::Air => {
-                        let succeeded = api.displace(
-                            IVec2::new(self.pos.x as i32, self.pos.y as i32),
-                            self.material.clone()
-                        );
-
-                        if succeeded {
-                            return Ok(());
-                        }
-
-                        // upwarp if completely blocked
-                        self.vel.y = 1.0;
-                        self.pos.y += 16.0;
-
-                        break;
-                    }
-                    _ => {
-                        if api.set(lx as i32, ly as i32, Pixel::new(self.material.clone())).is_ok() {
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-        }
-
-        Err("not collided or not fitting position")
     }
 }
 
@@ -170,12 +99,6 @@ impl<'a> ParticleApi<'a> {
         let cell_position = ivec2(x, y) - self.chunk_position * CHUNK_SIZE;
 
         self.chunk_group.get(cell_position).cloned()
-    }
-
-    pub fn get_material(&self, x: i32, y: i32) -> Option<MaterialInstance> {
-        let cell_position = ivec2(x, y) - self.chunk_position * CHUNK_SIZE;
-
-        self.chunk_group.get(cell_position).map(|pixel| pixel.material.clone())
     }
 
     pub fn set(&mut self, x: i32, y: i32, pixel: Pixel) -> Result<(), String> {
@@ -212,15 +135,15 @@ impl<'a> ParticleApi<'a> {
         &mut self,
         x: i32,
         y: i32,
-        material: MaterialInstance,
+        pixel: Pixel,
         condition: F
     ) -> Result<(), String> {
         let cell_position = ivec2(x, y) - self.chunk_position * CHUNK_SIZE;
 
         match self.chunk_group.get_mut(cell_position) {
-            Some(pixel) => {
-                if condition(pixel.clone()) {
-                    *pixel = Pixel::new(material);
+            Some(initial_pixel) => {
+                if condition(initial_pixel.clone()) {
+                    *initial_pixel = pixel;
 
                     self.update_send
                         .try_send(UpdateMessage {
@@ -253,7 +176,7 @@ impl<'a> ParticleApi<'a> {
     }
 
     // TODO: rewrite
-    pub fn displace(&mut self, pos: IVec2, material: MaterialInstance) -> bool {
+    pub fn displace(&mut self, pos: IVec2, pixel: Pixel) -> bool {
         let scan_radius = 16;
         let mut scan_pos = IVec2::ZERO;
         let mut scan_delta_pos = IVec2::new(0, -1);
@@ -267,8 +190,8 @@ impl<'a> ParticleApi<'a> {
                     .set_with_condition(
                         pos.x + scan_pos.x,
                         pos.y + scan_pos.y,
-                        material.clone(),
-                        |pixel| pixel.material.physics_type == PhysicsType::Air
+                        pixel.clone(),
+                        |pixel| pixel.is_empty()
                     )
                     .is_ok()
             {
@@ -292,33 +215,83 @@ impl<'a> ParticleApi<'a> {
     }
 }
 //
-pub fn particle_setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    let mut rect = Mesh::new(PrimitiveTopology::TriangleStrip, RenderAssetUsages::RENDER_WORLD);
-
-    let vertices = vec![
-        [0.0, 0.0, 0.0],
-        [1.0 / (CHUNK_SIZE as f32), 0.0, 0.0],
-        [0.0, 1.0 / (CHUNK_SIZE as f32), 0.0],
-        [1.0 / (CHUNK_SIZE as f32), 1.0 / (CHUNK_SIZE as f32), 0.0]
-    ];
-
-    rect.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-
+pub fn particle_setup(mut commands: Commands) {
     commands.spawn((
-        Name::new("Particle instances"),
-        Mesh2dHandle(meshes.add(rect)),
+        Name::new("Particles"),
         SpatialBundle::INHERITED_IDENTITY,
-        NoFrustumCulling,
-        ParticleInstances,
+        ParticleParent,
     ));
+}
+
+pub fn particle_set_parent(
+    mut commands: Commands,
+    particle_q: Query<Entity, Added<Particle>>,
+    particle_parent_q: Query<Entity, With<ParticleParent>>
+) {
+    let particle_parent = particle_parent_q.single();
+
+    for entity in particle_q.iter() {
+        commands.entity(particle_parent).add_child(entity);
+    }
+}
+
+pub fn particle_modify_velocity(
+    mut particle_q: Query<
+        (&Particle, &Transform, &mut Velocity, &mut ParticleMovement),
+        With<Particle>
+    >,
+    transform_q: Query<&GlobalTransform, Without<Particle>>,
+    time: Res<Time>
+) {
+    for (_, transform, mut velocity, mut movement) in particle_q
+        .iter_mut()
+        .filter(|(particle, ..)| particle.active) {
+        match *movement {
+            ParticleMovement::Fall => {
+                velocity.linvel.y -= (0.2 / (CHUNK_SIZE as f32)) * time.delta_seconds() * 100.0;
+            }
+            ParticleMovement::Follow(target_entity) => {
+                let Ok(target_transform) = transform_q.get(target_entity) else {
+                    *movement = ParticleMovement::Fall;
+                    continue;
+                };
+
+                let distance = target_transform.translation().xy() - transform.translation.xy();
+
+                if distance.length() * CHUNK_SIZE as f32 > 24.0 {
+                    *movement = ParticleMovement::Fall;
+                    continue;
+                }
+
+                let angle = distance.normalize_or_zero().to_angle();
+                let magnitude = distance.length_recip().sqrt();
+
+                velocity.linvel = (
+                    (Vec2::new(angle.cos(), angle.sin()) * magnitude +
+                        (Vec2::new(fastrand::f32(), fastrand::f32()) / 2.0 - 0.5)) /
+                    (CHUNK_SIZE as f32)
+                ).clamp(-Vec2::ONE, Vec2::ONE);
+            }
+        }
+    }
 }
 
 pub fn particles_update(
     mut commands: Commands,
     mut chunk_manager: ResMut<ChunkManager>,
     mut dirty_rects_resource: ResMut<DirtyRects>,
-    mut particles: Query<(Entity, &mut Particle)>,
-    particles_instances: Query<Entity, With<ParticleInstances>>
+    mut particles: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Velocity,
+            &mut Particle,
+            &mut ParticleObjectState,
+            &mut ParticleMovement,
+        )
+    >,
+    transform_q: Query<&GlobalTransform, Without<Particle>>,
+    particles_instances: Query<Entity, With<ParticleParent>>
 ) {
     let particles_instances = particles_instances.single();
 
@@ -356,7 +329,6 @@ pub fn particles_update(
         scope.spawn(async move {
             while let Ok(entity) = particle_recv.recv().await {
                 commands.entity(particles_instances).remove_children(&[entity]);
-
                 commands.entity(entity).despawn();
             }
         });
@@ -364,6 +336,7 @@ pub fn particles_update(
         let update_send = &update_send;
         let render_send = &render_send;
         let particle_send = &particle_send;
+        let transform_q = &transform_q;
 
         let mut particles_maps = [
             HashMap::default(),
@@ -372,8 +345,10 @@ pub fn particles_update(
             HashMap::default(),
         ];
 
-        for (entity, particle) in particles.iter_mut().filter(|(_, particle)| particle.active) {
-            let chunk_position = particle.pos.as_ivec2().div_euclid(IVec2::ONE * CHUNK_SIZE);
+        for (entity, transform, velocity, particle, object_state, movement) in particles
+            .iter_mut()
+            .filter(|(_, transform, _, particle, ..)| particle.active) {
+            let chunk_position = transform.translation.xy().as_ivec2();
 
             (
                 unsafe {
@@ -384,7 +359,7 @@ pub fn particles_update(
             )
                 .entry(chunk_position)
                 .or_insert_with(Vec::new)
-                .push((entity, particle));
+                .push((entity, transform, velocity, particle, object_state, movement));
         }
 
         particles_maps.into_iter().for_each(|map| {
@@ -408,11 +383,131 @@ pub fn particles_update(
 
                             particles
                                 .into_iter()
-                                .filter_map(|(entity, mut particle)|
-                                    particle
-                                        .try_to_place(&mut api)
-                                        .ok()
-                                        .map(|_| entity)
+                                .filter_map(
+                                    |(
+                                        entity,
+                                        mut transform,
+                                        mut velocity,
+                                        particle,
+                                        mut object_state,
+                                        mut movement,
+                                    )| {
+                                        let initial = transform.translation.xy();
+                                        let delta = velocity.linvel;
+
+                                        for position in WalkGrid::new(
+                                            (initial * (CHUNK_SIZE as f32)).as_ivec2(),
+                                            ((initial + delta) * (CHUNK_SIZE as f32)).as_ivec2()
+                                        ) {
+                                            let Some(pixel) = api.get(
+                                                position.x as i32,
+                                                position.y as i32
+                                            ) else {
+                                                continue;
+                                            };
+
+                                            match *movement {
+                                                ParticleMovement::Fall => {
+                                                    if
+                                                        pixel.is_empty()
+                                                    {
+                                                        *object_state =
+                                                            ParticleObjectState::Outside;
+                                                        continue;
+                                                    }
+
+                                                    let is_object = matches!(
+                                                        pixel.physics_type,
+                                                        PhysicsType::Rigidbody
+                                                    );
+
+                                                    match *object_state {
+                                                        ParticleObjectState::FirstFrame => {
+                                                            if is_object {
+                                                                *object_state =
+                                                                    ParticleObjectState::Inside;
+                                                            } else {
+                                                                *object_state =
+                                                                    ParticleObjectState::Outside;
+                                                            }
+                                                        }
+                                                        ParticleObjectState::Inside => {
+                                                            if !is_object {
+                                                                *object_state =
+                                                                    ParticleObjectState::Outside;
+                                                            }
+                                                        }
+                                                        ParticleObjectState::Outside => {}
+                                                    }
+
+                                                    if
+                                                        !is_object ||
+                                                        *object_state ==
+                                                            ParticleObjectState::Outside
+                                                    {
+                                                        match pixel.physics_type {
+                                                            PhysicsType::Air | PhysicsType::Gas => {
+                                                                if
+                                                                    api
+                                                                        .set(
+                                                                            position.x as i32,
+                                                                            position.y as i32,
+                                                                            particle.pixel.clone()
+                                                                        )
+                                                                        .is_ok()
+                                                                {
+                                                                    return Some(entity);
+                                                                }
+                                                            }
+                                                            _ => {
+                                                                let succeeded = api.displace(
+                                                                    IVec2::new(
+                                                                        position.x as i32,
+                                                                        position.y as i32
+                                                                    ),
+                                                                    particle.pixel.clone()
+                                                                );
+
+                                                                if succeeded {
+                                                                    return Some(entity);
+                                                                }
+
+                                                                // upwarp if completely blocked
+                                                                velocity.linvel.y =
+                                                                    1.0 / (CHUNK_SIZE as f32);
+                                                                transform.translation.y +=
+                                                                    4.0 / (CHUNK_SIZE as f32);
+
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                ParticleMovement::Follow(target_entity) => {
+                                                    let Ok(target_transform) =
+                                                        transform_q.get(target_entity) else {
+                                                        *movement = ParticleMovement::Fall;
+                                                        break;
+                                                    };
+
+                                                    if
+                                                        (
+                                                            position.as_vec2() / (CHUNK_SIZE as f32)
+                                                        ).distance(
+                                                            target_transform.translation().xy()
+                                                        ) < 4.0 / (CHUNK_SIZE as f32)
+                                                    {
+                                                        return Some(entity);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        transform.translation.x += delta.x;
+                                        transform.translation.y += delta.y;
+
+                                        None
+                                    }
                                 )
                                 .for_each(|entity| {
                                     particle_send.try_send(entity).unwrap();
@@ -426,13 +521,6 @@ pub fn particles_update(
         render_send.close();
         particle_send.close();
     });
-}
-
-pub fn update_partcile_meshes(mut particles: Query<(&mut Particle, &mut Transform)>) {
-    for (particle, mut transform) in particles.iter_mut() {
-        transform.translation.x = particle.pos.x / (CHUNK_SIZE as f32);
-        transform.translation.y = particle.pos.y / (CHUNK_SIZE as f32);
-    }
 }
 
 // #[allow(clippy::too_many_arguments)]

@@ -1,6 +1,6 @@
 use async_channel::Sender;
 use bevy::{
-    asset::{Assets, Handle},
+    asset::{ Assets, Handle },
     ecs::{ bundle::Bundle, component::Component, entity::Entity },
     render::{
         render_asset::RenderAssetUsages,
@@ -18,7 +18,7 @@ use super::{
     chunk_groups::ChunkGroup,
     dirty_rect::{ RenderMessage, UpdateMessage },
     materials::{ Material, PhysicsType },
-    mesh::douglas_peucker,
+    colliders::douglas_peucker,
     pixel::{ Pixel, WALL },
 };
 
@@ -123,7 +123,7 @@ impl ChunkData {
         let values = self.pixels
             .iter()
             .map(|pixel| {
-                if pixel.material.physics_type == PhysicsType::Static { 1.0 } else { 0.0 }
+                if pixel.physics_type == PhysicsType::Static { 1.0 } else { 0.0 }
             })
             .collect::<Vec<f64>>();
 
@@ -203,10 +203,6 @@ impl ChunkData {
                 } else {
                     let mut color = pixel.get_color();
 
-                    if let PhysicsType::Liquid(parameters) = pixel.material.physics_type {
-                        color[3] = (f32::clamp(parameters.volume * 5.0, 0.1, 1.0) * 255.0) as u8;
-                    }
-
                     // if let SimulationType::Displaced(dx, dy) = pixel.simulation {
                     //     color[0] = f32::sqrt(dx.powi(2) + dy.powi(2)) as u8 * 16;
                     //     color[1] = 0;
@@ -221,12 +217,12 @@ impl ChunkData {
 }
 
 pub struct ChunkApi<'a> {
-    pub(super) chunk_position: IVec2,
-    pub(super) cell_position: IVec2,
-    pub(super) chunk_group: &'a mut ChunkGroup<Pixel>,
-    pub(super) update_send: &'a Sender<UpdateMessage>,
-    pub(super) render_send: &'a Sender<RenderMessage>,
-    pub(super) clock: u8,
+    pub chunk_position: IVec2,
+    pub cell_position: IVec2,
+    pub chunk_group: &'a mut ChunkGroup<Pixel>,
+    pub update_send: &'a Sender<UpdateMessage>,
+    pub render_send: &'a Sender<RenderMessage>,
+    pub clock: u8,
 }
 
 impl<'a> ChunkApi<'a> {
@@ -252,7 +248,7 @@ impl<'a> ChunkApi<'a> {
         let cell_position = self.cell_position + ivec2(dx, dy);
 
         match self.chunk_group.get(cell_position) {
-            Some(pixel) => pixel.material.physics_type.clone(),
+            Some(pixel) => pixel.physics_type.clone(),
             None => PhysicsType::Static,
         }
     }
@@ -266,11 +262,11 @@ impl<'a> ChunkApi<'a> {
         }
     }
 
-    pub fn match_element(&self, dx: i32, dy: i32, material: &Material) -> bool {
+    pub fn match_element(&self, dx: i32, dy: i32, other: String) -> bool {
         let cell_position = self.cell_position + ivec2(dx, dy);
 
         match self.chunk_group.get(cell_position) {
-            Some(pixel) => pixel.material.id == material.id,
+            Some(pixel) => pixel.id == other,
             None => false,
         }
     }
@@ -338,6 +334,10 @@ impl<'a> ChunkApi<'a> {
                 self.cell_position.div_euclid(IVec2::ONE * CHUNK_SIZE),
             })
             .unwrap();
+    }
+
+    pub fn iteration_direction(&mut self) -> i32 {
+        if self.clock % 2 == 0 { 1 } else { -1 }
     }
 
     pub fn rand_int(&mut self, n: i32) -> i32 {

@@ -15,10 +15,10 @@ mod postprocessing;
 
 use actors::ActorsPlugin;
 use animation::{ Animation, AnimationPlugin, AnimationState };
-use assets::{ process_assets, ChunkMapAssets, FontBytes, FontAssetLoader, FontAssets, SpriteSheets };
+use assets::{ process_assets, ChunkLayoutAssets, FontBytes, FontAssetLoader, FontAssets, SpriteSheets };
 use benimator::FrameRate;
 use bevy::{
-    audio::AudioPlugin, core_pipeline::CorePipelinePlugin, diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, render::{ pipelined_rendering::PipelinedRenderingPlugin, settings::WgpuSettings, RenderPlugin }, sprite::SpritePlugin, text::TextPlugin, window::PrimaryWindow, winit::{ UpdateMode, WinitSettings }
+    audio::AudioPlugin, diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, render::{ settings::WgpuSettings, RenderPlugin }, window::PrimaryWindow, winit::{ UpdateMode, WinitSettings }
 };
 use bevy_asset_loader::loading_state::{
     config::ConfigureLoadingState,
@@ -28,10 +28,9 @@ use bevy_asset_loader::loading_state::{
 use bevy_egui::EguiPlugin;
 
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
-use bevy_rapier2d::{
-    plugin::{ NoUserData, RapierConfiguration, RapierPhysicsPlugin },
-    render::{ DebugRenderMode, RapierDebugRenderPlugin },
-};
+use bevy_rapier2d::
+    plugin::{ NoUserData, RapierConfiguration, RapierPhysicsPlugin }
+;
 use camera::CameraPlugin;
 use constants::CHUNK_SIZE;
 use generation::chunk::GenerationTask;
@@ -39,7 +38,6 @@ use gui::GuiPlugin;
 
 use painter::PainterPlugin;
 use postprocessing::PostProcessPlugin;
-// use postprocessing::blur::PostProcessPlugin;
 use seldom_state::StateMachinePlugin;
 use simulation::SimulationPlugin;
 use state::AppState;
@@ -94,7 +92,7 @@ fn main() {
         .add_loading_state(
             LoadingState::new(AppState::LoadingAssets)
                 .load_collection::<FontAssets>()
-                .load_collection::<ChunkMapAssets>()
+                .load_collection::<ChunkLayoutAssets>()
                 .load_collection::<SpriteSheets>()
                 .continue_to_state(AppState::WorldInitilialization)
         )
@@ -102,23 +100,22 @@ fn main() {
         .add_systems(OnEnter(AppState::WorldInitilialization), (splash_setup, add_splash_content).chain())
         .add_systems(
             Update,
-            (countdown, check_generation_tasks)
-                .chain()
+            countdown
                 .run_if(in_state(AppState::WorldInitilialization))
         )
-        .add_systems(OnExit(AppState::WorldInitilialization), despawn_screen::<OnSplashScreen>)
+        .add_systems(OnExit(AppState::WorldInitilialization), despawn_screen::<SplashScreen>)
         .run();
 }
 
 #[derive(Component)]
-struct OnSplashScreen;
+struct SplashScreen;
 
 #[derive(Resource, Deref, DerefMut)]
 struct SplashTimer(Timer);
 
 fn splash_setup(mut commands: Commands) {
     commands.spawn((
-        OnSplashScreen,
+        SplashScreen,
         NodeBundle {
             style: Style {
                 align_items: AlignItems::Center,
@@ -137,7 +134,7 @@ fn add_splash_content(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    splash_q: Query<Entity, With<OnSplashScreen>>
+    splash_q: Query<Entity, With<SplashScreen>>
 ) {
     let icon = asset_server.load("loading.png");
     let texture_atlas_layout = texture_atlas_layouts.add(
@@ -170,16 +167,6 @@ fn add_splash_content(
 
 fn countdown(mut timer: ResMut<SplashTimer>, time: Res<Time>) {
     timer.tick(time.delta());
-}
-
-fn check_generation_tasks(
-    mut game_state: ResMut<NextState<AppState>>,
-    timer: Res<SplashTimer>,
-    tasks_q: Query<&GenerationTask>
-) {
-    if timer.finished() && tasks_q.is_empty() {
-        game_state.set(AppState::Game);
-    }
 }
 
 pub fn has_window(query: Query<&Window, With<PrimaryWindow>>) -> bool {

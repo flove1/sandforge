@@ -31,7 +31,7 @@ pub fn raycast(start: IVec2, end: IVec2, chunk_manager: &ChunkManager) -> Option
 
         if let Some(pixel) = chunk_ptr.map(|ptr| 
             unsafe { &*ptr.add(to_index!(point.rem_euclid(IVec2::splat(CHUNK_SIZE)), CHUNK_SIZE)) }
-        ).filter(|pixel| !matches!(pixel.material.physics_type, PhysicsType::Air | PhysicsType::Gas | PhysicsType::Liquid(..))) {
+        ).filter(|pixel| !matches!(pixel.physics_type, PhysicsType::Air | PhysicsType::Gas | PhysicsType::Liquid(..))) {
             return Some((point, pixel.clone()))
         }
     }

@@ -14,12 +14,12 @@ use bevy_math::{ ivec2, vec2 };
 use itertools::Itertools;
 
 use crate::{
-    constants::{ CHUNK_SIZE, WORLD_HEIGHT, WORLD_WIDTH },
+    constants::CHUNK_SIZE,
     simulation::{
         chunk_groups::{ build_chunk_group, ChunkGroup},
         chunk_manager::ChunkManager,
         materials::PhysicsType,
-        mesh::douglas_peucker,
+        colliders::douglas_peucker,
         pixel::Pixel,
     },
 };
@@ -58,7 +58,7 @@ fn is_empty(position: IVec2, size: IVec2, chunk_group: &ChunkGroup<Pixel>) -> bo
                 .get(position + ivec2(x, y))
                 .map_or(false, |pixel|
                     matches!(
-                        pixel.material.physics_type,
+                        pixel.physics_type,
                         PhysicsType::Air | PhysicsType::Gas | PhysicsType::Liquid(..)
                     )
                 )
@@ -198,7 +198,7 @@ pub fn pathfind(
 
         
         if path.map_or(true, |path| time.elapsed_seconds_f64() - path.created_at > 0.1) {
-            let size = actor.hitbox.size().as_ivec2();
+            let size = actor.size.as_ivec2();
             let created_at = time.elapsed_seconds_f64();
             let Some(chunk_group) = build_chunk_group(&mut chunk_manager, chunk_position) else {
                 continue;

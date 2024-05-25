@@ -1,10 +1,12 @@
 use std::f32::consts::PI;
+use std::mem;
 use std::process::id;
 use std::time::Duration;
 
 use benimator::FrameRate;
 use bevy::input::mouse::MouseWheel;
 
+use bevy::utils::HashMap;
 use bevy::{
     prelude::*,
     render::{ mesh::{ Indices, PrimitiveTopology }, render_asset::RenderAssetUsages },
@@ -13,12 +15,15 @@ use bevy::{
 };
 use bevy_egui::EguiContexts;
 use bevy_math::{ ivec2, vec2, vec3 };
+use bevy_rapier2d::geometry::Sensor;
 use bevy_rapier2d::{
     dynamics::{ GravityScale, ImpulseJoint, SpringJointBuilder, Velocity },
     geometry::{ Collider, ColliderMassProperties, CollisionGroups, Group },
 };
 use bevy_rapier2d::{ na::ComplexField, pipeline::QueryFilter, plugin::RapierContext };
+use indexmap::IndexMap;
 use itertools::Itertools;
+use leafwing_input_manager::buttonlike::MouseWheelDirection;
 use leafwing_input_manager::{
     action_state::ActionState,
     axislike::VirtualAxis,
@@ -28,18 +33,25 @@ use leafwing_input_manager::{
 };
 use seldom_state::{ prelude::{ AnyState, StateMachine }, trigger::IntoTrigger };
 
-use crate::registries::{self, Registries};
-use crate::simulation::materials::{Material, MaterialInstance};
-use crate::simulation::object::{Object, ObjectBundle};
+use crate::constants::{ PARTICLE_Z, PLAYER_Z };
+use crate::registries::{ self, Registries };
+use crate::simulation::chunk::ChunkApi;
+use crate::simulation::chunk_groups::build_chunk_group;
+use crate::simulation::colliders::{ ENEMY_MASK, HITBOX_MASK, PLAYER_MASK };
+use crate::simulation::dirty_rect::DirtyRects;
+use crate::simulation::materials::{ Material, PhysicsType };
+use crate::simulation::object::{ FallApartOnCollision, Object, ObjectBundle };
+use crate::simulation::particle::{ Particle, ParticleBundle, ParticleMovement };
+use crate::simulation::pixel::Pixel;
 use crate::{
     animation::{ Animation, AnimationState, DespawnOnFinish },
     assets::SpriteSheets,
     camera::TrackingCamera,
-    constants::{ CHUNK_SIZE, PLAYER_LAYER },
+    constants::{ CHUNK_SIZE },
     simulation::chunk_manager::ChunkManager,
 };
 
-use super::actor::{ update_actors, Actor, ActorBundle, ActorFlags, MovementType };
+use super::actor::{ Actor, ActorBundle, ActorColliderBundle, ActorFlags, MovementType };
 use super::enemy::Enemy;
 use super::health::DamageEvent;
 
@@ -57,7 +69,10 @@ pub enum PlayerActions {
     Dash,
     Hook,
     Shoot,
+    Collect,
     Interaction,
+    SelectMaterialNext,
+    SelectMaterialPrevious,
 }
 
 #[derive(Component, Clone)]
@@ -109,7 +124,7 @@ pub fn player_setup(
     sprites: Res<SpriteSheets>
 ) {
     if let Ok(mut actor) = player_q.get_single_mut() {
-        actor.position = vec2(-actor.hitbox.width() / 2.0, 0.0);
+        actor.position = vec2(-actor.size.x / 2.0, 0.0);
         return;
     }
 
@@ -159,7 +174,7 @@ pub fn player_setup(
             ActorBundle {
                 actor: Actor {
                     position: vec2(-5.0, 0.0),
-                    hitbox: Rect::from_corners(Vec2::ZERO, Vec2::new(10.0, 17.0)),
+                    size: Vec2::new(10.0, 17.0),
                     movement_type: MovementType::Walking,
                     ..Default::default()
                 },
@@ -180,7 +195,7 @@ pub fn player_setup(
                         index: 0,
                     },
                     transform: Transform {
-                        translation: vec3(0.0, 0.0, PLAYER_LAYER),
+                        translation: vec3(0.0, 0.0, PLAYER_Z),
                         scale: Vec3::splat(1.0 / (CHUNK_SIZE as f32)),
                         ..Default::default()
                     },
@@ -227,17 +242,22 @@ pub fn player_setup(
                 .trans::<AnyState, _>(
                     move |
                         player_q: Query<
-                            (&Actor, &Velocity, Option<&DashAnimation>, Option<&FallAnimation>),
+                            (
+                                &PlayerFlags,
+                                &Actor,
+                                &Velocity,
+                                Option<&DashAnimation>,
+                                Option<&FallAnimation>,
+                            ),
                             With<Player>
                         >
                     | {
-                        let (actor, velocity, dashing, falling) = player_q.single();
+                        let (flags, actor, velocity, dashing, falling) = player_q.single();
 
                         match
-                            !dashing.is_some() &&
-                            !falling.is_some() &&
-                            !actor.flags.contains(ActorFlags::GROUNDED) &&
-                            velocity.linvel.y < -1.5
+                            ((dashing.is_none() && falling.is_none() && velocity.linvel.y < -1.5) ||
+                                flags.contains(PlayerFlags::HOOKED)) &&
+                            !actor.flags.contains(ActorFlags::GROUNDED)
                         {
                             true => Ok(()),
                             false => Err(()),
@@ -246,7 +266,8 @@ pub fn player_setup(
                     FallAnimation
                 )
                 .trans::<FallAnimation, _>(move |player_q: Query<&Actor, With<Player>>| {
-                    match player_q.single().flags.contains(ActorFlags::GROUNDED) {
+                    let actor = player_q.single();
+                    match actor.flags.contains(ActorFlags::GROUNDED) {
                         true => Ok(()),
                         false => Err(()),
                     }
@@ -334,9 +355,45 @@ pub fn player_setup(
                     .insert(PlayerActions::Hook, MouseButton::Right)
                     .insert(PlayerActions::Interaction, KeyCode::KeyE)
                     .insert(PlayerActions::Shoot, KeyCode::KeyR)
+                    .insert(PlayerActions::Collect, KeyCode::KeyG)
+                    .insert(PlayerActions::SelectMaterialNext, MouseWheelDirection::Up)
+                    .insert(PlayerActions::SelectMaterialPrevious, MouseWheelDirection::Down)
+                    // .insert(PlayerActions::SelectMaterial, MouseWheelDirection::)
                     .build()
             ),
-        ));
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Sensor,
+                ColliderMassProperties::Mass(0.0),
+                ActorColliderBundle {
+                    collider: Collider::capsule_y(17.0 / 2.0 - 10.0 / 2.0 - 2.5, 10.0 / 2.0 + 4.0),
+                    collision_groups: CollisionGroups::new(
+                        Group::from_bits_retain(PLAYER_MASK | HITBOX_MASK),
+                        Group::from_bits_retain(ENEMY_MASK)
+                    ),
+                    ..Default::default()
+                },
+            ));
+
+            parent.spawn((
+                SpriteSheetBundle {
+                    texture: sprites.heal.clone(),
+                    atlas: TextureAtlas {
+                        layout: texture_atlas_layouts.add(
+                            TextureAtlasLayout::from_grid(Vec2::new(48.0, 48.0), 22, 1, None, None)
+                        ),
+                        index: 0,
+                    },
+                    ..Default::default()
+                },
+
+                AnimationState::default(),
+                Animation(
+                    benimator::Animation::from_indices(0..=21, FrameRate::from_fps(8.0)).repeat()
+                ),
+            ));
+        });
 }
 
 pub const RUN_SPEED: f32 = 1.5;
@@ -461,7 +518,7 @@ pub fn player_kick(
         ),
         (With<Player>, Without<Enemy>)
     >,
-    mut enemy_q: Query<(&mut Velocity, &Transform), With<Enemy>>,
+    mut enemy_q: Query<&Transform, With<Enemy>>,
     mut damage_ev: EventWriter<DamageEvent>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     time: Res<Time>,
@@ -501,12 +558,20 @@ pub fn player_kick(
                 hitbox_position,
                 0.0,
                 &Collider::cuboid(hitbox_size.x / 2.0, hitbox_size.y / 2.0),
-                QueryFilter::new().groups(CollisionGroups::new(Group::all(), Group::all())),
+                QueryFilter::new()
+                    .exclude_solids()
+                    .groups(
+                        CollisionGroups::new(
+                            Group::from_bits_retain(PLAYER_MASK),
+                            Group::from_bits_retain(ENEMY_MASK | HITBOX_MASK)
+                        )
+                    ),
                 |enemy_entity| {
-                    if
-                        let Ok((mut enemy_velocity, enemy_transform)) =
-                            enemy_q.get_mut(enemy_entity)
-                    {
+                    let enemy_entity = rapier_context
+                        .collider_parent(enemy_entity)
+                        .unwrap_or(enemy_entity);
+
+                    if let Ok(enemy_transform) = enemy_q.get_mut(enemy_entity) {
                         damage_ev.send(DamageEvent {
                             target: enemy_entity,
                             value: 4.0 * velocity.linvel.length(),
@@ -516,7 +581,8 @@ pub fn player_kick(
                                     -4.0,
                                     4.0
                                 )
-                            ) + velocity.linvel / 2.0,
+                            ) +
+                            velocity.linvel / 2.0,
                         });
                     }
                     true
@@ -544,7 +610,7 @@ pub fn player_kick(
                                 index: 0,
                             },
                             transform: Transform {
-                                translation: vec3(16.0, 0.0, PLAYER_LAYER),
+                                translation: vec3(16.0, 0.0, PLAYER_Z),
                                 scale: Vec3::splat(0.5),
                                 ..Default::default()
                             },
@@ -607,35 +673,35 @@ pub fn player_dash(
         mut dash_duration,
     ) = player_q.single_mut();
 
-    if let Some(duration) = dash_duration.as_mut() {
-        duration.tick(time.delta());
+    if let Some(timer) = dash_duration.as_mut() {
+        timer.tick(time.delta());
 
         flags.remove(PlayerFlags::DASHING);
 
-        if duration.0.finished() {
+        if timer.finished() {
             commands.entity(entity).remove::<DashDuration>();
         }
     }
 
-    if let Some(buffer) = dash_buffer.as_mut() {
-        buffer.tick(time.delta());
+    if let Some(timer) = dash_buffer.as_mut() {
+        timer.tick(time.delta());
 
-        if buffer.0.finished() {
+        if timer.finished() {
             commands.entity(entity).remove::<DashBuffer>();
         }
     }
 
-    if
-        dash_cooldown.as_mut().map_or(true, |cooldown| {
-            cooldown.0.tick(time.delta());
+    let can_dash = dash_cooldown.as_mut().map_or(true, |cooldown| {
+        cooldown.0.tick(time.delta());
 
-            if cooldown.0.finished() {
-                commands.entity(entity).remove::<DashCooldown>();
-            }
+        if cooldown.0.finished() {
+            commands.entity(entity).remove::<DashCooldown>();
+        }
 
-            cooldown.0.finished()
-        })
-    {
+        cooldown.0.finished()
+    });
+
+    if can_dash {
         if action_state.just_pressed(&PlayerActions::Dash) || dash_buffer.is_some() {
             velocity.linvel.x += (transform.rotation.y + 0.5) * 2.0 * 6.0;
             velocity.linvel.y = 1.0;
@@ -649,15 +715,12 @@ pub fn player_dash(
                 .insert(DashDuration(Timer::new(Duration::from_millis(50), TimerMode::Once)))
                 .insert(DashCooldown(Timer::new(Duration::from_millis(500), TimerMode::Once)));
         }
-    } else if action_state.just_pressed(&PlayerActions::Kick) {
+    } else if action_state.just_pressed(&PlayerActions::Dash) {
         commands
             .entity(entity)
             .insert(DashBuffer(Timer::new(Duration::from_millis(100), TimerMode::Once)));
     }
 }
-
-#[derive(Component)]
-pub struct Hooked;
 
 #[derive(Component)]
 pub struct Rope {
@@ -903,31 +966,30 @@ pub fn player_shoot(
         With<Player>
     >,
     time: Res<Time>,
-    registries: Res<Registries>,
-    rapier_context: Res<RapierContext>,
+    registries: Res<Registries>
 ) {
     let (entity, transform, action_state, mut shoot_cooldown, mut shoot_buffer) =
         player_q.single_mut();
 
-    if let Some(shoot) = shoot_buffer.as_mut() {
-        shoot.tick(time.delta());
+    if let Some(timer) = shoot_buffer.as_mut() {
+        timer.tick(time.delta());
 
-        if shoot.0.finished() {
+        if timer.finished() {
             commands.entity(entity).remove::<ShootBuffer>();
         }
     }
 
-    if
-        shoot_cooldown.as_mut().map_or(true, |shoot_cooldown| {
-            shoot_cooldown.0.tick(time.delta());
+    let can_shoot = shoot_cooldown.as_mut().map_or(true, |shoot_cooldown| {
+        shoot_cooldown.0.tick(time.delta());
 
-            if shoot_cooldown.0.finished() {
-                commands.entity(entity).remove::<ShootCooldown>();
-            }
+        if shoot_cooldown.0.finished() {
+            commands.entity(entity).remove::<ShootCooldown>();
+        }
 
-            shoot_cooldown.0.finished()
-        })
-    {
+        shoot_cooldown.0.finished()
+    });
+
+    if can_shoot {
         if action_state.just_pressed(&PlayerActions::Shoot) || shoot_buffer.is_some() {
             let rotation_modifier = (transform.rotation.y + 0.5) * 2.0;
             let hitbox_position =
@@ -935,35 +997,30 @@ pub fn player_shoot(
                 (vec2(16.0, 0.0) / (CHUNK_SIZE as f32)) * rotation_modifier;
 
             let size: i32 = 9;
-            
+
             let sand = registries.materials.get("sand").unwrap();
             let mut pixels = vec![None; size.pow(2) as usize];
 
-            for (x, y) in (0 .. size).cartesian_product(0 .. size) {
-                if (ivec2(x, y).as_vec2() - size as f32 / 2.0).length_squared() > (size as f32 / 2.0).powi(2) {
+            for (x, y) in (0..size).cartesian_product(0..size) {
+                if
+                    (ivec2(x, y).as_vec2() - (size as f32) / 2.0).length_squared() >
+                    ((size as f32) / 2.0).powi(2)
+                {
                     continue;
                 }
 
-                pixels[(y * size + x) as usize] = Some(sand.clone());
+                pixels[(y * size + x) as usize] = Some(Pixel::from(sand));
             }
 
-
-            if
-                let Ok(object) = Object::from_pixels(
-                    pixels,
-                    size as u16,
-                    size as u16
-                )
-            {
+            if let Ok(object) = Object::from_pixels(pixels, IVec2::splat(size)) {
                 if let Ok(collider) = object.create_collider() {
                     commands.spawn((
+                        FallApartOnCollision,
                         ObjectBundle {
                             object,
                             collider,
                             transform: TransformBundle {
-                                local: Transform::from_translation(
-                                    hitbox_position.extend(0.0)
-                                ),
+                                local: Transform::from_translation(hitbox_position.extend(0.0)),
                                 ..Default::default()
                             },
                             velocity: Velocity::linear(Vec2::new(4.0 * rotation_modifier, 0.2)),
@@ -986,12 +1043,153 @@ pub fn player_shoot(
     }
 }
 
+#[derive(Default, Resource, Deref, DerefMut)]
+pub struct PlayerMaterials(IndexMap<String, f32>);
+
+#[derive(Resource, Reflect, Deref, DerefMut)]
+pub struct PlayerSelectedMaterial(pub String);
+
+impl Default for PlayerSelectedMaterial {
+    fn default() -> Self {
+        Self("sand".to_string())
+    }
+}
+
+#[derive(Default, Resource, Deref, DerefMut)]
+pub struct PlayerTrackingParticles(Vec<(String, Entity)>);
+
+pub fn player_collect_sand(
+    mut commands: Commands,
+    player_q: Query<(Entity, &Transform, &ActionState<PlayerActions>), With<Player>>,
+    mut chunk_manager: ResMut<ChunkManager>,
+    mut tracked_particles: ResMut<PlayerTrackingParticles>,
+    mut dirty_rects: ResMut<DirtyRects>,
+    particle_q: Query<&Particle>,
+    mut player_materials: ResMut<PlayerMaterials>
+) {
+    let (entity, transform, action_state) = player_q.single();
+
+    tracked_particles.retain_mut(|(id, entity)| {
+        if !particle_q.contains(*entity) {
+            *player_materials.entry(id.clone()).or_insert(0.0) += 1.0 / 16.0;
+
+            return false;
+        }
+
+        true
+    });
+
+    if action_state.pressed(&PlayerActions::Collect) {
+        let chunk_position = transform.translation.xy().floor().as_ivec2();
+        let player_position = (transform.translation.xy().fract() * (CHUNK_SIZE as f32)).as_ivec2();
+
+        let Some(mut chunk_group) = build_chunk_group(&mut chunk_manager, chunk_position) else {
+            return;
+        };
+
+        let radius = 16;
+        for x in -radius..=radius {
+            for y in -radius..=radius {
+                let position = ivec2(x, y);
+
+                if position.length_squared() > radius.pow(2) {
+                    continue;
+                }
+
+                let Some(pixel) = chunk_group.get_mut(player_position + position) else {
+                    continue;
+                };
+
+                if
+                    matches!(
+                        pixel.physics_type,
+                        PhysicsType::Powder | PhysicsType::Liquid(..) | PhysicsType::Gas
+                    )
+                {
+                    let pixel = mem::take(pixel);
+
+                    tracked_particles.push((
+                        pixel.id.clone(),
+                        commands
+                            .spawn(ParticleBundle {
+                                sprite: SpriteBundle {
+                                    sprite: Sprite {
+                                        color: Color::rgba_u8(
+                                            pixel.color[0],
+                                            pixel.color[1],
+                                            pixel.color[2],
+                                            pixel.color[3]
+                                        ),
+                                        custom_size: Some(Vec2::ONE / (CHUNK_SIZE as f32)),
+                                        ..Default::default()
+                                    },
+                                    transform: Transform::from_translation(
+                                        (
+                                            transform.translation.xy() +
+                                            vec2(x as f32, y as f32) / (CHUNK_SIZE as f32)
+                                        ).extend(PARTICLE_Z)
+                                    ),
+                                    ..Default::default()
+                                },
+                                movement: ParticleMovement::Follow(entity),
+                                particle: Particle::new(pixel),
+                                ..Default::default()
+                            })
+                            .id(),
+                    ));
+
+                    dirty_rects.request_update(
+                        player_position + position + chunk_position * CHUNK_SIZE
+                    );
+                    dirty_rects.request_render(
+                        player_position + position + chunk_position * CHUNK_SIZE
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub fn player_switch_material(
+    player_q: Query<&ActionState<PlayerActions>, With<Player>>,
+    mut selected_material: ResMut<PlayerSelectedMaterial>,
+    player_materials: Res<PlayerMaterials>
+) {
+    let action_state = player_q.single();
+    let index = player_materials.get_index_of(&selected_material.0).unwrap_or(0);
+
+    if action_state.just_pressed(&PlayerActions::SelectMaterialNext) {
+        selected_material.0 = player_materials
+            .get_index(((index as i32) - 1).rem_euclid(player_materials.len() as i32) as usize)
+            .unwrap()
+            .0.clone();
+    } else if action_state.just_pressed(&PlayerActions::SelectMaterialPrevious) {
+        selected_material.0 = player_materials
+            .get_index(((index as i32) + 1).rem_euclid(player_materials.len() as i32) as usize)
+            .unwrap()
+            .0.clone();
+    }
+}
+
+pub fn player_prune_empty_materials(
+    selected_material: Res<PlayerSelectedMaterial>,
+    mut player_materials: ResMut<PlayerMaterials>
+) {
+    player_materials.retain(|id, value| {
+        if *value < 1.0 / 16.0 && &selected_material.0 != id {
+            return false;
+        }
+
+        true
+    });
+}
+
 pub fn update_player_rotation(
     mut player_q: Query<(&mut Transform, &Velocity), With<Player>>,
     window_q: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>
 ) {
-    let (mut transform, velocity) = player_q.get_single_mut().unwrap();
+    let (mut transform, velocity) = player_q.single_mut();
     let (camera, camera_global_transform) = camera_q.single();
 
     if
@@ -1012,43 +1210,44 @@ pub fn update_player_rotation(
     }
 }
 
-pub fn raycast_from_player(
-    mut gizmos: Gizmos,
-    mut player_q: Query<&mut Transform, With<Player>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>,
-    window_q: Query<&Window, With<PrimaryWindow>>,
-    chunk_manager: Res<ChunkManager>
-) {
-    let transform = player_q.single_mut();
-    let (camera, camera_transform) = camera_q.single();
+// pub fn raycast_from_player(
+//     mut gizmos: Gizmos,
+//     mut player_q: Query<&mut Transform, With<Player>>,
+//     camera_q: Query<(&Camera, &GlobalTransform), With<TrackingCamera>>,
+//     window_q: Query<&Window, With<PrimaryWindow>>,
+//     chunk_manager: Res<ChunkManager>
+// ) {
+//     let transform = player_q.single_mut();
+//     let (camera, camera_transform) = camera_q.single();
 
-    if let Some(cursor_position) = window_q.single().cursor_position() {
-        let player_position = (transform.translation.xy() * (CHUNK_SIZE as f32)).round().as_ivec2();
+//     if let Some(cursor_position) = window_q.single().cursor_position() {
+//         let player_position = (transform.translation.xy() * (CHUNK_SIZE as f32)).round().as_ivec2();
 
-        let pixel_position = (
-            camera
-                .viewport_to_world(camera_transform, cursor_position)
-                .map(|ray| ray.origin.truncate())
-                .unwrap() * (CHUNK_SIZE as f32)
-        )
-            .round()
-            .as_ivec2();
+//         let pixel_position = (
+//             camera
+//                 .viewport_to_world(camera_transform, cursor_position)
+//                 .map(|ray| ray.origin.truncate())
+//                 .unwrap() * (CHUNK_SIZE as f32)
+//         )
+//             .round()
+//             .as_ivec2();
 
-        // if let Some((point, _)) = raycast(player_position, pixel_position, &chunk_manager) {
-        //     gizmos.line_2d(
-        //         transform.translation.xy(),
-        //         point.as_vec2() / (CHUNK_SIZE as f32),
-        //         Color::RED
-        //     );
-        // } else {
-        //     gizmos.line_2d(
-        //         transform.translation.xy(),
-        //         pixel_position.as_vec2() / (CHUNK_SIZE as f32),
-        //         Color::BLUE
-        //     );
-        // }
-    }
-}
+//         // if let Some((point, _)) = raycast(player_position, pixel_position, &chunk_manager) {
+//         //     gizmos.line_2d(
+//         //         transform.translation.xy(),
+//         //         point.as_vec2() / (CHUNK_SIZE as f32),
+//         //         Color::RED
+//         //     );
+//         // } else {
+//         //     gizmos.line_2d(
+//         //         transform.translation.xy(),
+//         //         pixel_position.as_vec2() / (CHUNK_SIZE as f32),
+//         //         Color::BLUE
+//         //     );
+//         // }
+//     }
+// }
+
 // pub fn get_object_by_click(
 //     mut dirty_rects_resource: ResMut<DirtyRects>,
 //     buttons: Res<ButtonInput<MouseButton>>,
