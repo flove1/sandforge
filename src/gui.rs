@@ -717,12 +717,29 @@ fn setup_main_menu(
                                         .with_children(|parent| {
                                             parent.spawn(TextBundle {
                                                 style: Style {
+                                                    height: Val::Auto,
+                                                    align_self: AlignSelf::Center,
+                                                    justify_self: JustifySelf::Center,
+                                                    ..Default::default()
+                                                },
+                                                text: Text::from_section(
+                                                    "  Game Controls ",
+                                                    TextStyle {
+                                                        font_size: 24.0,
+                                                        color: Color::WHITE,
+                                                        ..Default::default()
+                                                    }
+                                                ).with_justify(JustifyText::Center),
+                                                ..Default::default()
+                                            });
+                                            parent.spawn(TextBundle {
+                                                style: Style {
                                                     width: Val::Percent(100.0),
                                                     height: Val::Auto,
                                                     ..Default::default()
                                                 },
                                                 text: Text::from_section(
-                                                    "\nBelow are the controls for various actions you can perform:\n\nMovement\n* Run: Use the A and D keys to move left and right, respectively.\n* Crouch: Press the S key to crouch.\n\nActions\n* Jump: Press the Spacebar to make your character jump.\n* Attack: Press the F key to perform an attack.\n* Dash: Use the Q key to dash forward quickly.\n* Hook: Click the right mouse button to use the hook.\n* Interaction: Press the E key to interact with objects or characters in the game.\n* Shoot: Use the R key to shoot.\n* Collect: Press the G key to collect items.\n\nMaterial Selection\n* Select Material Next: Scroll the mouse wheel up to cycle to the next material.\n* Select Material Previous: Scroll the mouse wheel down to cycle to the previous material.",
+                                                    "Movement\n\n- Run: Use the A and D keys to move left and right, respectively.\n- Crouch: Press the S key to crouch.\n\nActions\n\n- Jump: Press the Spacebar to make your character jump.\n- Attack: Press the F key to perform an attack.\n- Dash: Use the Q key to dash forward quickly.\n- Hook: Click the right mouse button to use the hook.\n- Shoot: Use the R key to shoot.\n- Collect: Press the G key to collect materials.\n\nMaterial Selection\n\n- Next Material: Scroll the mouse wheel up to cycle to the next material.\n- Previous Material: Scroll the mouse wheel down to cycle to the previous material.",
                                                     TextStyle {
                                                         font_size: 18.0,
                                                         color: Color::WHITE,
