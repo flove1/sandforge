@@ -1,49 +1,38 @@
 use std::mem;
 
-use bevy::{
-    ecs::reflect,
-    prelude::*,
-    render::view::RenderLayers,
-    sprite::{ MaterialMesh2dBundle, Mesh2dHandle },
-};
+use bevy::{ prelude::*, render::view::RenderLayers };
 use bevy_math::{ ivec2, vec2 };
 use bevy_rapier2d::{
-    control::{ KinematicCharacterController, MoveShapeOptions },
     dynamics::{
-        AdditionalMassProperties,
+        Damping,
+        ExternalImpulse,
+        GravityScale,
         LockedAxes,
-        MassProperties,
         ReadMassProperties,
         RigidBody,
         Velocity,
     },
-    geometry::{ Collider, ColliderMassProperties, CollisionGroups, Group },
-    math::Real,
-    na::ComplexField,
-    pipeline::QueryFilter,
-    plugin::RapierContext,
-    rapier::geometry::ColliderBuilder,
+    geometry::{ Collider, ColliderMassProperties, CollisionGroups, Group, Sensor },
 };
 use itertools::Itertools;
 
 use crate::{
     camera::ACTOR_RENDER_LAYER,
-    constants::{ CHUNK_SIZE, ENEMY_Z, PARTICLE_Z, PLAYER_Z },
+    constants::{ CHUNK_SIZE, PARTICLE_Z },
     simulation::{
         chunk_groups::build_chunk_group,
         chunk_manager::ChunkManager,
-        colliders::{ ACTOR_MASK, OBJECT_MASK },
+        colliders::{ ACTOR_MASK, HITBOX_MASK, OBJECT_MASK },
         dirty_rect::DirtyRects,
-        materials::{ Material, PhysicsType },
-        object::{ self, Object },
-        particle::{ Particle, ParticleBundle, ParticleParent },
+        materials::{ ContactEffect, PhysicsType },
+        particle::{ Particle, ParticleBundle },
         pixel::Pixel,
     },
 };
 
 use bitflags::bitflags;
 
-use super::health::Health;
+use super::health::{ DamageEvent, Health };
 
 #[derive(Bundle, Clone)]
 pub struct ActorBundle {
@@ -58,13 +47,24 @@ pub struct ActorBundle {
     pub render_layers: RenderLayers,
     pub collision_groups: CollisionGroups,
     pub collider: Collider,
+    pub storred_rotation: StorredRotation,
+    pub damping: Damping,
+    pub impulse: ExternalImpulse,
+    pub gravity: GravityScale,
 }
 
 #[derive(Bundle, Clone)]
-pub struct ActorColliderBundle {
+pub struct ActorHitboxBundle {
     pub collision_groups: CollisionGroups,
     pub collider: Collider,
     pub transform: TransformBundle,
+    pub sensor: Sensor,
+}
+
+#[derive(Component)]
+pub struct AttackParameters {
+    pub value: f32,
+    pub knockback_strength: f32,
 }
 
 impl Default for ActorBundle {
@@ -87,19 +87,24 @@ impl Default for ActorBundle {
                 current: 16.0,
                 total: 16.0,
             },
+            storred_rotation: StorredRotation::default(),
+            damping: Damping::default(),
+            impulse: ExternalImpulse::default(),
+            gravity: GravityScale(3.0),
         }
     }
 }
 
-impl Default for ActorColliderBundle {
+impl Default for ActorHitboxBundle {
     fn default() -> Self {
         Self {
             collision_groups: CollisionGroups::new(
-                Group::from_bits_truncate(ACTOR_MASK),
+                Group::from_bits_truncate(HITBOX_MASK),
                 Group::from_bits_truncate(OBJECT_MASK)
             ),
             collider: Collider::default(),
             transform: TransformBundle::default(),
+            sensor: Sensor,
         }
     }
 }
@@ -122,11 +127,18 @@ pub struct Actor {
     pub flags: ActorFlags,
 }
 
-#[derive(Default, Reflect, Clone, PartialEq, Eq)]
+// since rapier automatically manages transforms it is required to manually store it
+#[derive(Default, Clone, Component, Deref, DerefMut)]
+pub struct StorredRotation(pub Quat);
+
+#[derive(Default, Reflect, Clone)]
 pub enum MovementType {
     #[default]
-    Walking,
     Floating,
+    Walking {
+        speed: f32,
+        jump_height: f32,
+    },
 }
 
 pub fn update_actor_translation(mut actor_q: Query<(&mut Transform, &Actor)>) {
@@ -139,13 +151,10 @@ pub fn update_actor_translation(mut actor_q: Query<(&mut Transform, &Actor)>) {
 /// based on this [article](http://higherorderfun.com/blog/2012/05/20/the-guide-to-implementing-2d-platformers/)
 pub fn update_actors(
     mut commands: Commands,
-    mut actor_q: Query<(Entity, &mut Actor, &mut Velocity, &ReadMassProperties)>,
-    // mut object_q: Query<
-    //     (&mut Velocity, &Collider, &ReadMassProperties, &Transform),
-    //     (With<RigidBody>, Without<Actor>)
-    // >,
+    mut actor_q: Query<(Entity, &mut Actor, &mut Velocity, &mut Health, &mut ExternalImpulse)>,
     mut dirty_rects: ResMut<DirtyRects>,
     mut chunk_manager: ResMut<ChunkManager>,
+    mut damage_ev: EventWriter<DamageEvent>,
     time: Res<Time>
 ) {
     let mut spawn_particle = |pixel: Pixel, position: Vec2, transferred_velocity: Vec2| {
@@ -177,7 +186,7 @@ pub fn update_actors(
         dirty_rects.request_render(position.as_ivec2());
     };
 
-    for (entity, mut actor, mut velocity, mass) in actor_q.iter_mut() {
+    for (entity, mut actor, mut velocity, mut health, mut impulse) in actor_q.iter_mut() {
         let chunk_position = actor.position
             .round()
             .as_ivec2()
@@ -192,64 +201,47 @@ pub fn update_actors(
 
         let delta = time.delta_seconds() * 60.0;
 
-        let mut n = 0;
-
-        let mut avg_in_x = 0.0;
-        let mut avg_in_y = 0.0;
-        // for (x, y) in (1..(width as i32) - 1).cartesian_product(1..(height as i32) - 1) {
-        //     let point = ivec2(x, y);
-        //     let pixel = chunk_group.get(
-        //         actor.position.ceil().as_ivec2() + point - chunk_position * CHUNK_SIZE
-        //     );
-
-        //     if
-        //         pixel.map_or(false, |pixel|
-        //             matches!(
-        //                 pixel.material.physics_type,
-        //                 PhysicsType::Static | PhysicsType::Rigidbody
-        //             )
-        //         )
-        //     {
-        //         n += 1;
-        //         avg_in_x += (x as f32) - (width as f32) / 2.0;
-        //         avg_in_y += (y as f32) - (height as f32) / 2.0;
-        //     }
-        // }
-
-        // if n > 0 {
-        //     actor.position.x +=
-        //         f32::from(if avg_in_x == 0.0 { 0.0 } else { -avg_in_x.signum() }) * 0.9;
-        //     actor.position.y +=
-        //         f32::from(if avg_in_y == 0.0 { 0.0 } else { -avg_in_y.signum() }) * 0.9;
-        // }
-
+        let mut in_liquid = false;
         if
             (0..width as i32)
                 .cartesian_product(0..height as i32)
-                .filter_map(|(x, y)| {
-                    let point =
+                .map(
+                    |(x, y)|
                         actor.position.round().as_ivec2() +
                         ivec2(x, y) -
-                        chunk_position * CHUNK_SIZE;
+                        chunk_position * CHUNK_SIZE
+                )
+                .filter(|position| {
+                    let Some(pixel) = chunk_group.get_mut(*position) else {
+                        return false;
+                    };
 
-                    if
-                        let Some(pixel) = chunk_group.get(
-                            actor.position.round().as_ivec2() +
-                                ivec2(x, y) -
-                                chunk_position * CHUNK_SIZE
-                        )
-                    {
-                        if matches!(pixel.physics_type, PhysicsType::Powder) {
-                            Some(pixel)
-                        } else {
-                            None
+                    if let Some(ContactEffect::Heal(value)) = pixel.material.contact {
+                        if health.total > health.current {
+                            health.current = (health.current + value).min(health.total);
+                            *pixel = Pixel::default();
                         }
-                    } else {
-                        dbg!(point);
-                        None
                     }
+
+                    if let Some(ContactEffect::Damage(value)) = pixel.material.contact {
+                        if health.current > 0.0 {
+                            damage_ev.send(DamageEvent {
+                                value,
+                                target: entity,
+                                knockback: Vec2::ZERO,
+                                ignore_iframes: true,
+                                play_sound: false,
+                            });
+                            *pixel = Pixel::default();
+                        }
+                    }
+
+                    if matches!(pixel.physics_type, PhysicsType::Liquid(..)) {
+                        in_liquid = true;
+                    }
+
+                    matches!(pixel.physics_type, PhysicsType::Powder | PhysicsType::Static)
                 })
-                // .filter(|pixel| matches!(pixel.material.physics_type, PhysicsType::Powder))
                 .map(|_| 1.0 / ((width * height) as f32))
                 .sum::<f32>() > 0.9
         {
@@ -258,71 +250,22 @@ pub fn update_actors(
             actor.flags.remove(ActorFlags::SUBMERGED);
         }
 
-        // rapier_context.move_shape(
-        //     velocity.linvel * 2.0 / CHUNK_SIZE as f32,
-        //     &collider,
-        //     (actor.position + actor.hitbox.size() / 2.0) / CHUNK_SIZE as f32,
-        //     0.0,
-        //     mass.unwrap().mass,
-        //     &MoveShapeOptions::default(),
-        //     QueryFilter::only_dynamic(),
-        //     |collision| {
-        //         dbg!("q");
-        //         // collision.
+        if actor.flags.contains(ActorFlags::SUBMERGED) {
+            damage_ev.send(DamageEvent {
+                value: 1.0,
+                target: entity,
+                knockback: Vec2::ZERO,
+                ignore_iframes: false,
+                play_sound: true,
+            });
+        }
 
-        //     }
-        // );
+        if in_liquid {
+            let change = velocity.linvel / (CHUNK_SIZE as f32) / 16.0;
 
-        // rapier_context.intersections_with_shape(
-        //     (actor.position + actor.hitbox.size() / 2.0 + velocity.linvel * 2.0) /
-        //         (CHUNK_SIZE as f32),
-        //     0.0,
-        //     &collider,
-        //     QueryFilter::only_dynamic().exclude_collider(entity),
-
-        //     |object_entity| {
-        //         let (mut object_velocity, object_collider, object_mass, object_transform) = object_q
-        //             .get_mut(object_entity)
-        //             .unwrap();
-
-        //         // rapier_context
-        //         //     .contact_pair(entity, object_entity)
-        //         //     .unwrap()
-        //         //     .find_deepest_contact()
-        //         //     .unwrap()
-        //         //     .1.impulse();
-
-        //         let sum_mass = object_mass.mass + mass.mass;
-        //         let avg_vel =
-        //             ((object_velocity.linvel * object_mass.mass) / sum_mass +
-        //                 (velocity.linvel * mass.mass) / sum_mass) /
-        //             2.0;
-        //         object_velocity.linvel = avg_vel;
-        //         velocity.linvel = avg_vel;
-
-        //         true
-        //     }
-        // );
-
-        // rapier_context.move_shape(
-        //     velocity.linvel / (CHUNK_SIZE as f32),
-        //     collider,
-        //     actor.position / (CHUNK_SIZE as f32),
-        //     0.0,
-        //     1.0,
-        //     &(MoveShapeOptions {
-        //         up: todo!(),
-        //         offset: todo!(),
-        //         slide: todo!(),
-        //         autostep: todo!(),
-        //         max_slope_climb_angle: todo!(),
-        //         min_slope_slide_angle: todo!(),
-        //         apply_impulse_to_dynamic_bodies: todo!(),
-        //         snap_to_ground: todo!(),
-        //     }),
-        //     QueryFilter::only_dynamic(),
-        //     |event| {}
-        // );
+            impulse.impulse.x -= change.x * 4.0;
+            impulse.impulse.y -= change.y;
+        }
 
         {
             let direction = velocity.linvel.x.signum() as i32;
@@ -354,7 +297,7 @@ pub fn update_actors(
                                     PhysicsType::Powder => {
                                         if
                                             (velocity.linvel.x.abs() + velocity.linvel.y.abs() <
-                                                1.5 && y < 3) ||
+                                                1.5 && y <= 3) ||
                                             actor.flags.contains(ActorFlags::SUBMERGED)
                                         {
                                             return true;
@@ -405,6 +348,7 @@ pub fn update_actors(
                                             velocity.linvel * 0.75
                                         );
 
+                                        // velocity.linvel.x *= 0.97;
                                         false
                                     }
                                     _ => false,
@@ -449,38 +393,16 @@ pub fn update_actors(
                             return true;
                         }
 
-                        if dy.abs() > 1 {
-                            velocity.linvel.x =
-                                velocity.linvel.x.signum() *
-                                (velocity.linvel.x.abs() - (dy.abs() as f32) * 0.25).max(0.1);
-                        }
-                        last_elevation += dy;
-                    }
-                    // else if velocity.linvel.y.abs() < 0.5 {
-                    //     // try to snap to ground
-                    //     let close_to_ground = (1..=4).find(|dy| {
-                    //         (0..width as i32).any(|body_x| {
-                    //             chunk_group
-                    //                 .get(
-                    //                     start_position +
-                    //                         ivec2(x * direction + body_x, last_elevation - dy) -
-                    //                         chunk_position * CHUNK_SIZE
-                    //                 )
-                    //                 .map_or(false, |pixel|
-                    //                     matches!(
-                    //                         pixel.material.physics_type,
-                    //                         PhysicsType::Rigidbody |
-                    //                             PhysicsType::Static |
-                    //                             PhysicsType::Powder
-                    //                     )
-                    //                 )
-                    //         })
-                    //     });
+                        if velocity.linvel.x.abs() > 0.0 {
+                            if dy.abs() > 1 {
+                                velocity.linvel.x =
+                                    velocity.linvel.x.signum() *
+                                    (velocity.linvel.x.abs() - (dy.abs() as f32) * 0.25).max(0.1);
+                            }
 
-                    //     if let Some(dy) = close_to_ground {
-                    //         last_elevation -= dy - 1;
-                    //     }
-                    // }
+                            last_elevation += dy;
+                        }
+                    }
 
                     false
                 })
@@ -515,14 +437,14 @@ pub fn update_actors(
                             )
                             .map_or(false, |pixel| {
                                 match pixel.physics_type {
-                                    PhysicsType::Static | PhysicsType::Rigidbody => true,
+                                    PhysicsType::Static | PhysicsType::Rigidbody { .. } => true,
                                     PhysicsType::Powder => {
                                         if
                                             (velocity.linvel.x.abs() + velocity.linvel.y.abs() <
                                                 1.5 &&
                                                 matches!(
                                                     actor.movement_type,
-                                                    MovementType::Walking
+                                                    MovementType::Walking { .. }
                                                 )) ||
                                             actor.flags.contains(ActorFlags::SUBMERGED)
                                         {
@@ -539,7 +461,7 @@ pub fn update_actors(
                                             velocity.linvel * 0.75
                                         );
 
-                                        velocity.linvel.y *= 0.99;
+                                        velocity.linvel.y *= 0.95;
                                         false
                                     }
                                     _ => false,
@@ -556,66 +478,38 @@ pub fn update_actors(
             }
         }
 
-        if actor.movement_type == MovementType::Walking {
-            let position = actor.position.round().as_ivec2();
-            if
-                (-2..=-1)
-                    .rev()
-                    .cartesian_product(-1..(width as i32) + 1)
-                    .any(|(y, x)| {
-                        chunk_group
-                            .get(position + ivec2(x, y) - chunk_position * CHUNK_SIZE)
-                            .map_or(false, |pixel|
-                                matches!(
-                                    pixel.physics_type,
-                                    PhysicsType::Rigidbody |
-                                        PhysicsType::Static |
-                                        PhysicsType::Powder
-                                )
+        let position = actor.position.round().as_ivec2();
+        if
+            (-2..=-1)
+                .rev()
+                .cartesian_product(-1..(width as i32) + 1)
+                .any(|(y, x)| {
+                    chunk_group
+                        .get(position + ivec2(x, y) - chunk_position * CHUNK_SIZE)
+                        .map_or(false, |pixel|
+                            matches!(
+                                pixel.physics_type,
+                                PhysicsType::Rigidbody { .. } | PhysicsType::Static | PhysicsType::Powder
                             )
-                    })
-            {
-                if velocity.linvel.y.is_sign_negative() {
-                    // velocity.linvel.y = -0.98;
-                }
-                actor.flags.insert(ActorFlags::GROUNDED);
-            } else {
-                actor.flags.remove(ActorFlags::GROUNDED);
-            }
+                        )
+                })
+        {
+            actor.flags.insert(ActorFlags::GROUNDED);
+        } else {
+            actor.flags.remove(ActorFlags::GROUNDED);
         }
 
-        // if actor.movement_type == MovementType::Walking {
-        //     let intersection = rapier_context.intersection_with_shape(
-        //         actor.position / (CHUNK_SIZE as f32) +
-        //             vec2((width as f32) / 4.0 / (CHUNK_SIZE as f32), 0.0),
-        //         0.0,
-        //         &Collider::cuboid(
-        //             (width as f32) / 4.0 / (CHUNK_SIZE as f32),
-        //             (1 as f32) / 2.0 / (CHUNK_SIZE as f32)
-        //         ),
-        //         QueryFilter::only_dynamic()
-        //     );
-
-        //     if let Some(object_entity) = intersection {
-        //         let object_velocitry = object_q.get(object_entity).unwrap();
-
-        //         velocity.linvel += object_velocitry.linvel * 0.8;
-        //     }
-        // }
-
         match actor.movement_type {
-            MovementType::Walking => {
+            MovementType::Floating => {
+                velocity.linvel *= 0.95;
+            }
+            MovementType::Walking { .. } => {
                 if !actor.flags.contains(ActorFlags::INFLUENCED) {
                     velocity.linvel.x *= 0.85;
                 } else {
                     velocity.linvel.x *= 0.975;
                 }
-                // velocity.linvel.y -= 0.98 * time.delta_seconds() * 6.0;
             }
-            MovementType::Floating => {
-                velocity.linvel *= 0.95;
-            }
-            // MovementType::Bouncing => todo!(),
         }
 
         if actor.flags.contains(ActorFlags::GROUNDED) {
@@ -624,10 +518,22 @@ pub fn update_actors(
     }
 }
 
+#[derive(Resource, Default, PartialEq)]
+pub struct ActorDebugRender(pub bool);
+
+pub fn toggle_actors(
+    mut ctx: ResMut<ActorDebugRender>,
+    keys: Res<ButtonInput<KeyCode>>
+) {
+    if keys.just_pressed(KeyCode::F3) {
+        ctx.0 = !ctx.0;
+    }
+}
+
 pub fn render_actor_gizmos(mut gizmos: Gizmos, actors: Query<&Actor>) {
     for actor in actors.iter() {
         gizmos.rect_2d(
-            (actor.position + actor.size) / (CHUNK_SIZE as f32),
+            (actor.position + actor.size / 2.0) / (CHUNK_SIZE as f32),
             0.0,
             actor.size / (CHUNK_SIZE as f32),
             Color::Rgba {

@@ -2,7 +2,7 @@ use bevy::{
     ecs::system::{ Res, Resource },
     gizmos::gizmos::Gizmos,
     render::color::Color,
-    utils::HashMap,
+    utils::{HashMap, HashSet},
 };
 use bevy_math::{ ivec2, IVec2, URect, UVec2, Vec2 };
 use itertools::Itertools;
@@ -24,6 +24,7 @@ pub fn dirty_rects_gizmos(mut gizmos: Gizmos, dirty_rects_resource: Res<DirtyRec
 pub struct DirtyRects {
     pub current: HashMap<IVec2, URect>,
     pub new: HashMap<IVec2, URect>,
+    pub collider: HashSet<IVec2>,
     pub render: HashMap<IVec2, URect>,
 }
 
@@ -31,6 +32,14 @@ impl DirtyRects {
     pub fn request_render(&mut self, position: IVec2) {
         update_dirty_rects(
             &mut self.render,
+            position.div_euclid(IVec2::splat(CHUNK_SIZE)),
+            position.rem_euclid(IVec2::splat(CHUNK_SIZE)).as_uvec2()
+        );
+    }
+
+    pub fn request_update_3x3(&mut self, position: IVec2) {
+        update_dirty_rects_3x3(
+            &mut self.current,
             position.div_euclid(IVec2::splat(CHUNK_SIZE)),
             position.rem_euclid(IVec2::splat(CHUNK_SIZE)).as_uvec2()
         );

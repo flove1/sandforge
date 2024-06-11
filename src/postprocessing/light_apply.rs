@@ -3,7 +3,7 @@ use bevy::{
     ecs::query::QueryItem,
     prelude::*,
     render::{
-        extract_component::{ ComponentUniforms, ExtractComponent }, render_asset::RenderAssets, render_graph::{ NodeRunError, RenderGraphContext, RenderLabel, ViewNode }, render_resource::{ binding_types::{ sampler, texture_2d, uniform_buffer }, * }, renderer::{ RenderContext, RenderDevice }, texture::{BevyDefault, GpuImage}, view::ViewTarget
+        extract_component::ExtractComponent, render_asset::RenderAssets, render_graph::{ NodeRunError, RenderGraphContext, RenderLabel, ViewNode }, render_resource::{ binding_types::{ sampler, texture_2d }, * }, renderer::{ RenderContext, RenderDevice }, texture:: BevyDefault, view::ViewTarget
     },
 };
 
@@ -76,7 +76,6 @@ impl ViewNode for ApplyLightingNode {
         render_pass.set_render_pipeline(pipeline);
         render_pass.set_bind_group(0, &bind_group, &[]);
         render_pass.draw(0..3, 0..1);
-
 
         Ok(())
     }

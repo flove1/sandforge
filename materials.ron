@@ -1,67 +1,169 @@
 [
     (
         id: "grass",
+        ui_name: "grass",
+        durability: Some(4.0),
         physics_type: Static,
         color: (0x7d, 0xaa, 0x4d, 0xff),
         color_offset: 10,
-        fire_parameters: Some((
-            probability: 0.5,
+        fire: Some((
+            probability: 0.2,
             fire_hp: 25,
             requires_oxygen: true,
         )),
     ),
     (
         id: "dirt",
+        ui_name: "dirt",
+        durability: Some(6.0),
         physics_type: Static,
         color: (0x6d, 0x5f, 0x3d, 0xff),
         color_offset: 10,
     ),
     (
         id: "stone",
+        ui_name: "stone",
+        durability: Some(16.0),
         physics_type: Static,
         color: (0x77, 0x77, 0x77, 0xff),
         color_offset: 25,
     ),
     (
         id: "icy_stone",
+        ui_name: "icy stone",
         physics_type: Static,
         color: (0x3E, 0x53, 0x62, 0xff),
         color_offset: 25,
     ),
     (
         id: "ice",
+        ui_name: "ice",
         physics_type: Static,
         color: (0x8A, 0x9B, 0xFF, 0x90),
         color_offset: 15,
     ),
     (
         id: "snow",
+        ui_name: "snow",
         physics_type: Static,
-        color: (0xA6, 0xC2, 0xD8, 0xFF),
+        color: (0xC6, 0xE2, 0xF8, 0xFF),
         color_offset: 10,
     ),
     (
+        id: "granite",
+        ui_name: "granity",
+        physics_type: Static,
+        color: (0x62, 0x3B, 0x32, 0xFF),
+        color_offset: 25,
+    ),
+    (
+        id: "sandstone",
+        ui_name: "sandstone",
+        physics_type: Static,
+        color: (0x99, 0x70, 0x41, 0xFF),
+        color_offset: 25,
+    ),
+    (
         id: "sand",
+        ui_name: "sand",
         color: (0xf2, 0xf1, 0xa3, 0xff),
         color_offset: 40,
         physics_type: Powder,
     ),
     (
-        id: "water",
-        color: (0x47, 0x7C, 0xB8, 0xff),
+        id: "sulfur",
+        ui_name: "sulfur",
+        color: (0xC9, 0xBB, 0x69, 0xff),
+        color_offset: 40,
+        physics_type: Powder,
+        contact: Some(Explode(
+            radius: 8.0,
+            damage: 8.0,
+            force: 4.0,
+        )),
+    ),
+    (
+        id: "acid",
+        ui_name: "acid",
+        color: (0x00, 0xff, 0x3d, 0xee),
+        lighting: Some((0x00, 0xff, 0x5d, 0xff)),
+        color_offset: 0,
+        contact: Some(Damage(0.1)),
+        physics_type: Liquid(( 
+            flow_rate: 4,
+            density: 17
+        )),
+        // contact: Some(Heal(1.0))
+    ),
+    (
+        id: "healium",
+        ui_name: "healium",
+        color: (0xd9, 0xff, 0xbb, 0x99),
+        lighting: Some((0xee, 0xff, 0xdd, 0xff)),
         color_offset: 0,
         physics_type: Liquid(( 
-            flow_rate: 4 
+            flow_rate: 4,
+            density: 17
+        )),
+        contact: Some(Heal(1.0))
+    ),
+    (
+        id: "water",
+        ui_name: "water",
+        color: (0x47, 0x7C, 0xB8, 0xaa),
+        color_offset: 0,
+        physics_type: Liquid(( 
+            flow_rate: 4,
+            density: 16
+        )),
+    ),
+    (
+        id: "mud",
+        ui_name: "mud",
+        color: (0x56, 0x44, 0x36, 0xdd),
+        color_offset: 0,
+        physics_type: Liquid(( 
+            flow_rate: 1,
+            density: 32
+        )),
+    ),
+    (
+        id: "oil",
+        ui_name: "oil",
+        color: (0x57, 0x57, 0x57, 0xff),
+        color_offset: 0,
+        physics_type: Liquid(( 
+            flow_rate: 2,
+            density: 8
+        )),
+        fire: Some ((
+            probability: 0.75,
+            fire_hp: 25,
+            requires_oxygen: false,
+        )),
+    ),
+    (
+        id: "dirty_water",
+        ui_name: "dirty water",
+        color: (0x57, 0x57, 0x57, 0xee),
+        color_offset: 0,
+        physics_type: Liquid(( 
+            flow_rate: 3,
+            density: 24
         )),
     ),
     (
         id: "lava",
-        color: (0xEA, 0x5C, 0x0F, 0xEE),
+        ui_name: "lava",
+        color: (0xff, 0x66, 0x00, 0xEE),
+        lighting: Some((0xff, 0xaa, 0x44, 0xFf)),
         color_offset: 0,
+        contact: Some(Damage(0.025)),
         physics_type: Liquid(( 
-            flow_rate: 1 
+            flow_rate: 1,
+            density: 64
         )),
-        //  fire_parameters: !FireParameters (
+        //  fire: !FireParameters (
         //    fire_temperature: 150,
         //    ignition_temperature: 45,
         //    fire_hp: 15,
@@ -69,42 +171,185 @@
     ),
     (
         id: "coal",
+        ui_name: "coal",
         color: (0x09, 0x09, 0x09, 0xff),
         color_offset: 25,
         physics_type: Powder,
-        fire_parameters: Some((
-            probability: 0.9,
+        fire: Some((
+            probability: 0.2,
             fire_hp: 100,
             requires_oxygen: true,
         )),
     ),
     (
         id: "wood",
+        ui_name: "wood",
         color: (0x6a, 0x4b, 0x35, 0xff),
         color_offset: 50,
         physics_type: Static,
-        fire_parameters: Some ((
-            probability: 0.75,
+        fire: Some ((
+            probability: 0.01,
             fire_hp: 50,
-            requires_oxygen: true,
+            requires_oxygen: false,
         )),
     ),
     (
         id: "steam",
+        ui_name: "steam",
         color: (0x80, 0x80, 0x80, 0x99),
         color_offset: 0,
-        physics_type: Gas,
+        physics_type: Gas((
+            density: 2
+        )),
+    ),
+    (
+        id: "gas",
+        ui_name: "gas",
+        color: (0x55, 0x75, 0x56, 0x99),
+        color_offset: 10,
+        physics_type: Gas((
+            density: 2
+        )),
+        fire: Some((
+            probability: 0.25,
+            fire_hp: 10,
+            requires_oxygen: false,
+        )),
+    ),
+    (
+        id: "enemy_death_mist",
+        ui_name: "mist",
+        color: (0x80, 0x80, 0x80, 0x99),
+        color_offset: 0,
+        physics_type: Gas((
+            density: 2,
+            dissipate: 32,
+        )),
     ),
     (
         id: "burning_gas",
+        ui_name: "burning gas",
         color: (0xff, 0x5a, 0x00, 0x99),
         color_offset: 0,
-        physics_type: Gas,
-        fire_parameters: Some((
-            probability: 0.0,
+        physics_type: Gas((
+            density: 2
+        )),
+        fire: Some((
+            probability: 1.0,
             fire_hp: 10,
             requires_oxygen: false,
-            auto_start: true,
+            try_to_ignite: true,
         )),
+    ),
+    (
+        id: "stone_6",
+        ui_name: "stone",
+        physics_type: Static,
+        color: (0x6B, 0x6B, 0x6B, 0xff),
+        color_offset: 10,
+    ),
+    (
+        id: "stone_5",
+        ui_name: "stone",
+        physics_type: Static,
+        color: (0x6D, 0x6D, 0x6D, 0xff),
+        color_offset: 15,
+    ),
+    (
+        id: "stone_4",
+        ui_name: "stone",
+        physics_type: Static,
+        color: (0x6F, 0x6F, 0x6F, 0xff),
+        color_offset: 20,
+    ),
+    (
+        id: "stone_3",
+        ui_name: "stone",
+        physics_type: Static,
+        color: (0x7B, 0x7B, 0x7B, 0xff),
+        color_offset: 25,
+    ),
+    (
+        id: "stone_2",
+        ui_name: "stone",
+        physics_type: Static,
+        color: (0x7D, 0x7D, 0x7D, 0xff),
+        color_offset: 30,
+    ),
+    (
+        id: "stone_1",
+        ui_name: "stone",
+        physics_type: Static,
+        color: (0x8C, 0x8C, 0x8C, 0xff),
+        color_offset: 30,
+    ),
+    (
+        id: "diorite",
+        ui_name: "diorite",
+        color: (0xB0, 0xB1, 0xB3, 0xff),
+        color_offset: 45,
+        physics_type: Static,
+    ),
+    (
+        id: "amethyst",
+        ui_name: "amethyst",
+        color: (0xB0, 0x80, 0xF0, 0xAA),
+        lighting: Some((0xDD, 0xAB, 0xC5, 255)),
+        color_offset: 35,
+        physics_type: Powder,
+    ),
+    (
+        id: "shimmer",
+        ui_name: "shimmer",
+        color: (0x7a, 0x7a, 0xFF, 0x99),
+        lighting: Some((0xDD, 0xAB, 0xC5, 255)),
+        color_offset: 20,
+        physics_type: Liquid(( 
+            flow_rate: 4,
+            density: 17
+        )),
+    ),
+    (
+        id: "fungal_stone",
+        ui_name: "fungal stone",
+        physics_type: Static,
+        color: (0x26, 0x28, 0x33, 0xff),
+        color_offset: 15,
+    ),
+    (
+        id: "fungal_dirt_3",
+        ui_name: "fungal dirt",
+        physics_type: Static,
+        color: (0x70, 0x6b, 0x40, 0xff),
+        color_offset: 20,
+    ),
+    (
+        id: "fungal_dirt_2",
+        ui_name: "fungal dirt",
+        physics_type: Static,
+        color: (0x72, 0x6c, 0x4b, 0xff),
+        color_offset: 20,
+    ),
+    (
+        id: "fungal_dirt_1",
+        ui_name: "fungal dirt",
+        physics_type: Static,
+        color: (0x74, 0x6e, 0x4d, 0xff),
+        color_offset: 20,
+    ),
+    (
+        id: "fungal_surface",
+        ui_name: "fungal surface",
+        physics_type: Static,
+        color: (0xAB, 0xDF, 0xFB, 0xFf),
+        lighting: Some((0x9B, 0xBF, 0xDB, 0xff)),
+        color_offset: 50,
+    ),
+    (
+        id: "fungus",
+        ui_name: "fungus",
+        physics_type: Powder,
+        color: (0x64, 0x75, 0x35, 0xff),
+        color_offset: 10,
     )
 ]

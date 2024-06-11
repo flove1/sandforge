@@ -1,4 +1,5 @@
-use bevy_math::{ivec2, IVec2, UVec2, Vec2};
+use bevy::prelude::*;
+use bevy_math::{IVec2, UVec2, Vec2};
 
 macro_rules! to_index {
     ($point:expr, $width:expr) => {
@@ -75,4 +76,21 @@ pub fn modify_local_position(
     global_position += change;
 
     global_to_local(global_position)
+}
+
+#[derive(Component, Deref, DerefMut)]
+pub struct DespawnTimer(pub Timer);
+
+pub fn tick_despawn_timer(
+    mut commands: Commands,
+    mut timer_q: Query<(Entity, &mut DespawnTimer)>,
+    time: Res<Time>
+) {
+    for (entity, mut timer) in timer_q.iter_mut() {
+        timer.tick(time.delta());
+
+        if timer.finished() {
+            commands.entity(entity).despawn_recursive();
+        }
+    }
 }

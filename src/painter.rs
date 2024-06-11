@@ -1,15 +1,14 @@
 use bevy::{
     input::mouse::MouseMotion,
     prelude::*,
-    sprite::{ MaterialMesh2dBundle, Mesh2dHandle },
     utils::{ HashMap, HashSet },
     window::PrimaryWindow,
 };
 use bevy_egui::EguiContexts;
 use bevy_math::{ ivec2, vec2, IVec2 };
 use bevy_rapier2d::{
-    dynamics::{ ExternalImpulse, ReadMassProperties, RigidBody, Sleeping, Velocity },
-    geometry::{ Collider, ColliderMassProperties, CollisionGroups, Group },
+    dynamics:: Velocity ,
+    geometry:: ColliderMassProperties ,
 };
 
 use crate::{
@@ -18,17 +17,16 @@ use crate::{
     has_window,
     helpers::WalkGrid,
     simulation::{
-        chunk::Chunk,
         chunk_manager::ChunkManager,
-        colliders::{ ChunkColliderEveny, ACTOR_MASK, OBJECT_MASK, TERRAIN_MASK },
+        colliders:: ChunkColliderEvent ,
         dirty_rect::{ update_dirty_rects, DirtyRects },
         materials::{ Material, PhysicsType },
-        object::{ ExplosionParameters, Object, ObjectBundle },
+        object::{ Object, ObjectBundle },
         particle::{
-            Particle, ParticleBundle, ParticleMovement, ParticleObjectState, ParticleParent
+            Particle, ParticleBundle
         }, pixel::Pixel,
     },
-    state::AppState,
+    state::GameState,
 };
 
 pub struct PainterPlugin;
@@ -40,7 +38,7 @@ impl Plugin for PainterPlugin {
             .init_resource::<PainterObjectBuffer>()
             .add_systems(
                 PreUpdate,
-                mouse_system.run_if(has_window).run_if(in_state(AppState::Game))
+                mouse_system.run_if(has_window).run_if(in_state(GameState::Game))
             );
     }
 }
@@ -128,8 +126,7 @@ fn mouse_system(
     mut mouse_state: ResMut<MouseState>,
     mut object_buffer: ResMut<PainterObjectBuffer>,
     buttons: Res<ButtonInput<MouseButton>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut chunk_collider_ev: EventWriter<ChunkColliderEveny>
+    mut chunk_collider_ev: EventWriter<ChunkColliderEvent>
 ) {
     let (camera, mut camera_transform, camera_global_transform) = camera.single_mut();
     let (window_entity, window) = window_q.single();
@@ -254,7 +251,7 @@ fn mouse_system(
     }
 
     chunk_collider_ev.send_batch(
-        affected_chunks.into_iter().map(|position| ChunkColliderEveny(position))
+        affected_chunks.into_iter().map(|position| ChunkColliderEvent(position))
     );
 
     cursor_evr.clear();

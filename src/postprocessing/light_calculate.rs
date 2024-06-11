@@ -3,17 +3,14 @@ use bevy::{
     ecs::query::QueryItem,
     prelude::*,
     render::{
-        extract_component::{
-            ComponentUniforms,
-            ExtractComponent,
-        },
+        extract_component::ExtractComponent,
         render_graph::{
             NodeRunError,
             RenderGraphContext,
             RenderLabel,
             ViewNode,
         },
-        render_resource::{ binding_types::{ sampler, texture_2d, uniform_buffer }, * },
+        render_resource::{ binding_types::{ sampler, texture_2d }, * },
         renderer::{ RenderContext, RenderDevice },
         texture::BevyDefault,
         view::ViewTarget,

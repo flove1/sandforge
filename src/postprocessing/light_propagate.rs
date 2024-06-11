@@ -7,6 +7,8 @@ use bevy::{
     },
 };
 
+use crate::generation::ShadowColor;
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 pub(crate) struct LightPropagationLabel;
 
@@ -32,12 +34,24 @@ impl ViewNode for LightPropagationNode {
             return Ok(());
         };
 
+        let shadow = world.resource::<ShadowColor>();
+
+        let shadow_buffer = render_context.render_device().create_buffer_with_data(&BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&[
+                shadow.0.r(),
+                shadow.0.g(),
+                shadow.0.b(),
+            ]),
+            usage: BufferUsages::UNIFORM,
+        });
+
         for step in 0..propagation_settings.passes {
             let post_process = view_target.post_process_write();
 
             let offset_buffer = render_context.render_device().create_buffer_with_data(&BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::bytes_of(&(0.5 + step as f32 * propagation_settings.offset)),
+                contents: bytemuck::bytes_of(&((step + 1) as f32 * propagation_settings.offset)),
                 usage: BufferUsages::UNIFORM,
             });
     
@@ -49,7 +63,8 @@ impl ViewNode for LightPropagationNode {
                     &BindGroupEntries::sequential((
                         post_process.source,
                         &pipeline.sampler,
-                        offset_buffer.as_entire_binding()
+                        offset_buffer.as_entire_binding(),
+                        shadow_buffer.as_entire_binding(),
                     ))
                 );
     
@@ -93,6 +108,7 @@ impl FromWorld for LightPropagationPipeline {
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
                 uniform_buffer::<f32>(false),
+                uniform_buffer::<[f32; 3]>(false),
             ))
         );
 

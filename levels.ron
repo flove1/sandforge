@@ -1,110 +1,300 @@
 [
+
+    //========
+    // CRYSTAL CAVES
+    //========
+
     (
         terrain_layers: [
             (
-                material_id: "stone",
-                value: 0.4
+                material_id: "stone_6", 
+                value: 0.45, 
             ),
             (
-                material_id: "dirt", 
-                value: 0.55, 
+                material_id: "stone_5", 
+                value: 0.50, 
             ),
             (
-                material_id: "grass", 
-                value: 0.6
-                ) 
+                material_id: "stone_4", 
+                value: 0.55 
+            ),
+            (
+                material_id: "stone_3", 
+                value: 0.60, 
+            ),
+            (
+                material_id: "stone_2", 
+                value: 0.65, 
+            ),
+            (
+                material_id: "stone_1", 
+                value: 0.7, 
+            ),
         ],
         background_layers: [
             (
-                material_id: "stone",
-                value: 0.4
+                material_id: "stone_6", 
+                value: 0.45, 
             ),
             (
-                material_id: "dirt", 
-                value: 0.55, 
+                material_id: "stone_5", 
+                value: 0.50, 
             ),
             (
-                material_id: "grass", 
-                value: 0.75
-            ) 
+                material_id: "stone_4", 
+                value: 0.55 
+            ),
+            (
+                material_id: "stone_3", 
+                value: 0.60, 
+            ),
+            (
+                material_id: "stone_2", 
+                value: 0.65, 
+            ),
+            (
+                material_id: "stone_1", 
+                value: 0.8, 
+            ),
         ],
-    
         texture_path: "layouts/1.png",
-        noise_type: Fractal,
-        powder_id: "sand",
-        liquid_id: "water",
-        enemy_frequency: 0.2,
-    ),
-    (
-        terrain_layers: [
-            (
-                material_id: "stone",
-                value: 0.4
-            ),
-            (
-                material_id: "dirt", 
-                value: 0.55, 
-            ),
-            (
-                material_id: "grass", 
-                value: 0.6
-                ) 
-        ],
-        background_layers: [
-            (
-                material_id: "stone",
-                value: 0.4
-            ),
-            (
-                material_id: "dirt", 
-                value: 0.55, 
-            ),
-            (
-                material_id: "grass", 
-                value: 0.75
-            ) 
-        ],
-    
-        texture_path: "layouts/1.png",
+        ambient: "audio/dark_forest.ogg",
         noise_type: Billow,
-        powder_id: "sand",
-        liquid_id: "water",
-        enemy_frequency: 0.2,
+        powder_id: "amethyst",
+        liquid_id: "diorite",
+        background: (0.1373, 0.0863, 0.1216),
+        lighting: (0.5020, 0.5020, 0.5020),
+        shadow: (0.002, 0.002, 0.002),
+        enemies: [
+            (
+                enemy_id: "bat",
+                frequency: 0.75,
+                spawn_chance: 1.0,
+            ),
+            (
+                enemy_id: "plant",
+                frequency: 0.25,
+                spawn_chance: 1.0,
+            ),
+        ]
+    ),
+    
+    //========
+    // FOREST
+    //========
+
+    // (
+    //     terrain_layers: [
+    //         (
+    //             material_id: "stone",
+    //             value: 0.4
+    //         ),
+    //         (
+    //             material_id: "dirt", 
+    //             value: 0.55, 
+    //         ),
+    //         (
+    //             material_id: "grass", 
+    //             value: 0.6
+    //             ) 
+    //     ],
+    //     background_layers: [
+    //         (
+    //             material_id: "stone",
+    //             value: 0.4
+    //         ),
+    //         (
+    //             material_id: "dirt", 
+    //             value: 0.55, 
+    //         ),
+    //         (
+    //             material_id: "grass", 
+    //             value: 0.75
+    //         ) 
+    //     ],
+    //     texture_path: "layouts/1.png",
+    //     ambient: "audio/light_forest.ogg",
+    //     noise_type: Fractal,
+    //     powder_id: "coal",
+    //     liquid_id: "water",
+    //     background: (0.6, 0.878, 1.0),
+    //     lighting: (1.0, 1.0, 1.0),
+    //     shadow: (0.002, 0.002, 0.002),
+    //     enemies: [
+    //         (
+    //             enemy_id: "rat",
+    //             frequency: 0.5,
+    //             spawn_chance: 0.75,
+    //         ),
+    //         (
+    //             enemy_id: "frog",
+    //             frequency: 0.4,
+    //             spawn_chance: 0.5,
+    //         ),
+    //     ]
+    // ),
+
+    //========
+    // COAL MINES
+    //========
+
+    (
+        terrain_layers: [
+            (
+                material_id: "stone_6", 
+                value: 0.45, 
+            ),
+            (
+                material_id: "stone_5", 
+                value: 0.50, 
+            ),
+            (
+                material_id: "stone_4", 
+                value: 0.55 
+            ),
+            (
+                material_id: "stone_3", 
+                value: 0.60, 
+            ),
+            (
+                material_id: "stone_2", 
+                value: 0.65, 
+            ),
+            (
+                material_id: "dirt", 
+                value: 0.7, 
+            ),
+        ],
+        background_layers: [
+            (
+                material_id: "stone_6", 
+                value: 0.45, 
+            ),
+            (
+                material_id: "stone_5", 
+                value: 0.50, 
+            ),
+            (
+                material_id: "stone_4", 
+                value: 0.55 
+            ),
+            (
+                material_id: "stone_3", 
+                value: 0.60, 
+            ),
+            (
+                material_id: "stone_2", 
+                value: 0.65, 
+            ),
+            (
+                material_id: "dirt", 
+                value: 0.95, 
+            ),
+        ],
+        texture_path: "layouts/1.png",
+        ambient: "audio/light_forest.ogg",
+        noise_type: Fractal,
+        powder_id: "coal",
+        liquid_id: "gas",
+        background: (0.1098, 0.1020, 0.0824),
+        lighting: (0.9, 0.9, 0.9),
+        shadow: (0.015, 0.015, 0.015),
+        enemies: [
+            (
+                enemy_id: "fungus_tiny",
+                frequency: 0.75,
+                spawn_chance: 1.0,
+            ),
+            (
+                enemy_id: "fungus_big",
+                frequency: 0.5,
+                spawn_chance: 1.0,
+            ),
+        ]
     ),
     (
         terrain_layers: [
             (
-                material_id: "icy_stone",
-                value: 0.4
-            ),
-            (
-                material_id: "snow", 
+                material_id: "granite", 
                 value: 0.55, 
             ),
             (
-                material_id: "ice", 
+                material_id: "sandstone", 
                 value: 0.6
             ) 
         ],
         background_layers: [
             (
-                material_id: "icy_stone",
-                value: 0.4
-            ),
-            (
-                material_id: "snow", 
+                material_id: "granite", 
                 value: 0.55, 
             ),
             (
-                material_id: "ice", 
+                material_id: "sandstone", 
                 value: 0.75
-            )  
+            ) 
         ],
-    
         texture_path: "layouts/1.png",
-        noise_type: HybridMulti,
-        powder_id: "sand",
-        liquid_id: "water",
-        enemy_frequency: 0.2,
+        ambient: "audio/light_forest.ogg",
+        noise_type: Billow,
+        powder_id: "coal",
+        liquid_id: "lava",
+        background: (0.6, 0.878, 1.0),
+        lighting: (1.0, 1.0, 1.0),
+        shadow: (0.002, 0.002, 0.002),
+        enemies: [
+            (
+                enemy_id: "plant",
+                frequency: 0.5,
+                spawn_chance: 1.0,
+            ),
+        ]
     ),
+
+    // (
+    //     terrain_layers: [
+    //         (
+    //             material_id: "icy_stone",
+    //             value: 0.4
+    //         ),
+    //         (
+    //             material_id: "snow", 
+    //             value: 0.55, 
+    //         ),
+    //         (
+    //             material_id: "ice", 
+    //             value: 0.6
+    //         ) 
+    //     ],
+    //     background_layers: [
+    //         (
+    //             material_id: "icy_stone",
+    //             value: 0.4
+    //         ),
+    //         (
+    //             material_id: "snow", 
+    //             value: 0.50, 
+    //         ),
+    //         (
+    //             material_id: "ice", 
+    //             value: 0.75
+    //         )  
+    //     ],
+    
+    //     texture_path: "layouts/1.png",
+    //     noise_type: HybridMulti,
+    //     powder_id: "sand",
+    //     liquid_id: "water",
+    //     enemies: [
+    //         (
+    //             enemy_id: "bat",
+    //             frequency: 0.75,
+    //             spawn_chance: 1.0,
+    //         ),
+    //         (
+    //             enemy_id: "plant",
+    //             frequency: 0.25,
+    //             spawn_chance: 1.0,
+    //         ),
+    //     ]
+    // ),
 ]

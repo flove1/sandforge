@@ -1,5 +1,4 @@
-use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::noise::NoiseType;
 
@@ -10,6 +9,13 @@ pub struct NoiseLayer {
 }
 
 #[derive(Deserialize, Clone)]
+pub struct EnemyOnLevel {
+    pub enemy_id: String,
+    pub frequency: f32,
+    pub spawn_chance: f32,
+}
+
+#[derive(Deserialize, Clone)]
 pub struct Level {
     pub terrain_layers: Vec<NoiseLayer>,
     pub background_layers: Vec<NoiseLayer>,
@@ -17,5 +23,9 @@ pub struct Level {
     pub noise_type: NoiseType,
     pub powder_id: String,
     pub liquid_id: String,
-    pub enemy_frequency: f32,
+    pub enemies: Vec<EnemyOnLevel>,
+    pub lighting: [f32; 3],
+    pub background: [f32; 3],
+    pub shadow: [f32; 3],
+    pub ambient: String,
 }

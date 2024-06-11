@@ -10,7 +10,9 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let lighting = textureSample(t_2, ts, (in.uv + 0.125) / 1.25);
 
     if lighting.a > 0.0 {
-        output *= lighting;
+        output.r = output.r * lighting.r;
+        output.g = output.g * lighting.g;
+        output.b = output.b * lighting.b;
     }
     
     return output;

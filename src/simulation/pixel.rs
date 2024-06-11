@@ -1,50 +1,40 @@
 use lazy_static::lazy_static;
 
-use super::materials::{ FireParameters, Material, PhysicsType };
+use super::materials::{ Fire, Material, PhysicsType };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Pixel {
-    pub id: String,
+    pub material: Material,
     pub physics_type: PhysicsType,
+
+    pub durability: Option<f32>,
     pub color: [u8; 4],
+    pub fire_parameters: Option<Fire>,
 
-    pub fire_parameters: Option<FireParameters>,
-
-    pub ra: u8,
-    pub rb: u8,
     pub updated_at: u8,
-
     pub on_fire: bool,
 }
 
 impl Default for Pixel {
     fn default() -> Self {
         Self {
-            ra: 0,
-            rb: 0,
-            updated_at: 0,
-            on_fire: false,
-            id: "air".to_string(),
             physics_type: PhysicsType::Air,
-            color: [0; 4],
+            material: Material::default(),
             fire_parameters: None,
+            on_fire: false,
+            updated_at: 0,
+            color: [0; 4],
+            durability: None,
         }
     }
 }
 
 lazy_static! {
-    pub static ref WALL: Pixel = Pixel {
-        id: "wall".to_string(),
-        color: [0; 4],
-        physics_type: PhysicsType::Static,
-        fire_parameters: None,
-
-        ra: 0,
-        rb: 0,
-        updated_at: 0,
-
-        on_fire: false,
-    };
+    pub static ref WALL: Pixel = Pixel::from(Material {
+        id: "barrier".to_string(),
+        physics_type: PhysicsType::Air,
+        ..Default::default()
+    });
 }
 
 impl From<Material> for Pixel {
@@ -59,11 +49,12 @@ impl From<Material> for Pixel {
         ];
 
         Self {
-            id: val.id,
             color: color_offseted,
-            physics_type: val.physics_type,
-            fire_parameters: val.fire_parameters,
-            
+            durability: val.durability.clone(),
+            physics_type: val.physics_type.clone(),
+            fire_parameters: val.fire.clone(),
+            material: val,
+
             ..Default::default()
         }
     }
@@ -81,11 +72,11 @@ impl From<&Material> for Pixel {
         ];
 
         Self {
-            id: val.id.clone(),
             color: color_offseted,
             physics_type: val.physics_type.clone(),
-            fire_parameters: val.fire_parameters.clone(),
-            
+            fire_parameters: val.fire.clone(),
+            material: val.clone(),
+
             ..Default::default()
         }
     }
@@ -94,13 +85,11 @@ impl From<&Material> for Pixel {
 impl Pixel {
     pub fn get_color(&self) -> [u8; 4] {
         match self.physics_type {
-            PhysicsType::Air | PhysicsType::Static | PhysicsType::Powder | PhysicsType::Rigidbody =>
-                self.color,
             PhysicsType::Liquid { .. } =>
                 self.color.map(|channel| channel.saturating_add(fastrand::u8(0..10))),
-            PhysicsType::Gas =>
+            PhysicsType::Gas(..) =>
                 self.color.map(|channel| channel.saturating_add(fastrand::u8(0..50))),
-            PhysicsType::Disturbed(..) => self.color,
+            _ => self.color,
         }
     }
 
@@ -111,10 +100,10 @@ impl Pixel {
         }
     }
 
-    // pub fn with_material(mut self, material: MaterialInstance) -> Self {
-    //     self.material = material;
-    //     self
-    // }
+    pub fn reset_physics(mut self) -> Self {
+        self.physics_type = self.material.physics_type.clone();
+        self
+    }
 
     pub fn with_physics(mut self, physics: PhysicsType) -> Self {
         self.physics_type = physics;

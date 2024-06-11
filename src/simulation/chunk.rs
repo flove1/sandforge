@@ -1,23 +1,23 @@
+use bevy::prelude::*;
+
 use async_channel::Sender;
 use bevy::{
     asset::{ Assets, Handle },
-    ecs::{ bundle::Bundle, component::Component, entity::Entity },
     render::{
         render_asset::RenderAssetUsages,
         render_resource::{ Extent3d, TextureDimension, TextureFormat },
         texture::{ BevyDefault, Image },
     },
-    utils::HashMap,
 };
 use bevy_math::{ ivec2, IVec2, URect, UVec2, Vec2 };
 
 use bevy_rapier2d::prelude::*;
-use crate::{ constants::{ CHUNK_CELLS, CHUNK_SIZE, COLLIDER_PRECISION } };
+use crate::constants::{ CHUNK_CELLS, CHUNK_SIZE };
 
 use super::{
     chunk_groups::ChunkGroup,
     dirty_rect::{ RenderMessage, UpdateMessage },
-    materials::{ Material, PhysicsType },
+    materials::PhysicsType,
     colliders::douglas_peucker,
     pixel::{ Pixel, WALL },
 };
@@ -47,7 +47,6 @@ pub struct ChunkCollider;
 pub enum ChunkState {
     Initialized,
     Generating,
-    Processing,
     Populating,
     Active,
     Sleeping,
@@ -75,17 +74,6 @@ impl Default for ChunkData {
 }
 
 impl ChunkData {
-    pub fn new() -> ChunkData {
-        let cells = vec![Pixel::default(); CHUNK_CELLS as usize];
-        ChunkData {
-            pixels: cells,
-            texture: Handle::default(),
-            background: Handle::default(),
-            lighting: Handle::default(),
-            state: ChunkState::Initialized,
-        }
-    }
-
     pub fn new_image() -> Image {
         Image::new(
             Extent3d {
@@ -100,21 +88,10 @@ impl ChunkData {
         )
     }
 
-    pub fn update_lighting(&self, images: &mut Assets<Image>, rect: URect) {
-        let background = images.get(self.background.clone());
-        let texture = images.get(self.texture.clone());
-        let lighting = images.get(self.lighting.clone());
-
-        for x in rect.min.x..rect.max.x {
-            for y in rect.min.y..rect.max.y {
-                let index = (y * (CHUNK_SIZE as u32) + x) as usize;
-            }
-        }
-    }
-
-    pub fn update_texture(&self, image: &mut Image) {
-        self.update_texture_part(
-            image,
+    pub fn update_textures(&self, images: &mut Assets<Image>, lighting: [f32; 3]) {
+        self.update_textures_part(
+            images,
+            lighting,
             URect::from_corners(UVec2::ZERO, UVec2::splat(CHUNK_SIZE as u32))
         );
     }
@@ -183,7 +160,17 @@ impl ChunkData {
             .map_err(|_| "no contours were found".to_string())
     }
 
-    pub fn update_texture_part(&self, image: &mut Image, rect: URect) {
+    pub fn update_textures_part(&self, images: &mut Assets<Image>, lighting_color: [f32; 3], rect: URect) {
+        let Some(mut terrain) = images.remove(self.texture.clone()) else {
+            panic!();
+        };
+        let Some(mut lighting) = images.remove(self.lighting.clone()) else {
+            panic!();
+        };
+        let Some(background) = images.remove(self.background.clone()) else {
+            panic!();
+        };
+
         let fire_colors: [[u8; 4]; 5] = [
             [0xa9, 0x43, 0x1e, 0xff],
             [0xd7, 0x88, 0x25, 0xff],
@@ -196,23 +183,63 @@ impl ChunkData {
             for y in rect.min.y..rect.max.y {
                 let index = (y * (CHUNK_SIZE as u32) + x) as usize;
                 let pixel = &self.pixels[index];
+
+                let texture_range = index * 4..(index + 1) * 4;
+
                 if pixel.on_fire {
-                    image.data[index * 4..(index + 1) * 4].copy_from_slice(
+                    terrain.data[texture_range.clone()].copy_from_slice(
                         &fire_colors[fastrand::i32(0..fire_colors.len() as i32) as usize]
                     );
                 } else {
-                    let mut color = pixel.get_color();
+                    let color = pixel.get_color();
+                    terrain.data[texture_range.clone()].copy_from_slice(&color);
+                }
 
-                    // if let SimulationType::Displaced(dx, dy) = pixel.simulation {
-                    //     color[0] = f32::sqrt(dx.powi(2) + dy.powi(2)) as u8 * 16;
-                    //     color[1] = 0;
-                    //     color[2] = 0;
-                    // }
+                let terrain_opactiy = terrain.data[index * 4 + 3];
+                let background_opactiy = background.data[index * 4 + 3];
 
-                    image.data[index * 4..(index + 1) * 4].copy_from_slice(&color);
+                let lighting_value = if terrain_opactiy == 255 {
+                    0.0
+                } else {
+                    (1.0 - (terrain_opactiy as f32) / 255.0) *
+                        (1.0 - (background_opactiy as f32) / 255.0)
+                };
+
+                if let Some(color) = pixel.material.lighting {
+                    lighting.data[texture_range.clone()].copy_from_slice(
+                        &[
+                            u8::max(color[0], (lighting_color[0] * 255.0 * lighting_value) as u8),
+                            u8::max(color[1], (lighting_color[1] * 255.0 * lighting_value) as u8),
+                            u8::max(color[2], (lighting_color[2] * 255.0 * lighting_value) as u8),
+                            127,
+                        ]
+                    );
+                } else if pixel.on_fire {
+                    let color = fire_colors[fastrand::i32(0..fire_colors.len() as i32) as usize];
+                    lighting.data[texture_range.clone()].copy_from_slice(
+                        &[
+                            u8::max(color[0], (lighting_color[0] * 255.0 * lighting_value) as u8),
+                            u8::max(color[1], (lighting_color[1] * 255.0 * lighting_value) as u8),
+                            u8::max(color[2], (lighting_color[2] * 255.0 * lighting_value) as u8),
+                            127,
+                        ]
+                    );
+                } else {
+                    lighting.data[texture_range.clone()].copy_from_slice(
+                        &[
+                            (lighting_color[0] * 255.0 * lighting_value) as u8,
+                            (lighting_color[1] * 255.0 * lighting_value) as u8,
+                            (lighting_color[2] * 255.0 * lighting_value) as u8,
+                            127,
+                        ]
+                    );
                 }
             }
         }
+
+        images.insert(self.texture.clone(), terrain);
+        images.insert(self.lighting.clone(), lighting);
+        images.insert(self.background.clone(), background);
     }
 }
 
@@ -222,6 +249,7 @@ pub struct ChunkApi<'a> {
     pub chunk_group: &'a mut ChunkGroup<Pixel>,
     pub update_send: &'a Sender<UpdateMessage>,
     pub render_send: &'a Sender<RenderMessage>,
+    pub collider_send: &'a Sender<IVec2>,
     pub clock: u8,
 }
 
@@ -250,24 +278,6 @@ impl<'a> ChunkApi<'a> {
         match self.chunk_group.get(cell_position) {
             Some(pixel) => pixel.physics_type.clone(),
             None => PhysicsType::Static,
-        }
-    }
-
-    pub fn is_empty(&self, dx: i32, dy: i32) -> bool {
-        let cell_position = self.cell_position + ivec2(dx, dy);
-
-        match self.chunk_group.get(cell_position) {
-            Some(pixel) => pixel.is_empty(),
-            None => false,
-        }
-    }
-
-    pub fn match_element(&self, dx: i32, dy: i32, other: String) -> bool {
-        let cell_position = self.cell_position + ivec2(dx, dy);
-
-        match self.chunk_group.get(cell_position) {
-            Some(pixel) => pixel.id == other,
-            None => false,
         }
     }
 
@@ -324,6 +334,15 @@ impl<'a> ChunkApi<'a> {
             .unwrap();
     }
 
+    pub fn collider_changed(&mut self, dx: i32, dy: i32) {
+        let cell_position = self.cell_position + IVec2::new(dx, dy);
+        let chunk_offset = cell_position.div_euclid(IVec2::splat(CHUNK_SIZE));
+
+        self.collider_send
+            .try_send(self.chunk_position + chunk_offset)
+            .ok();
+    }
+
     pub fn mark_updated(&mut self) {
         self.chunk_group[self.cell_position].updated_at = self.clock;
 
@@ -336,10 +355,6 @@ impl<'a> ChunkApi<'a> {
             .unwrap();
     }
 
-    pub fn iteration_direction(&mut self) -> i32 {
-        if self.clock % 2 == 0 { 1 } else { -1 }
-    }
-
     pub fn rand_int(&mut self, n: i32) -> i32 {
         fastrand::i32(0..n)
     }
@@ -350,35 +365,6 @@ impl<'a> ChunkApi<'a> {
             -1
         } else {
             1
-        }
-    }
-
-    pub fn rand_vec(&mut self) -> (i32, i32) {
-        let i = self.rand_int(2000);
-        match i % 9 {
-            0 => (1, 1),
-            1 => (1, 0),
-            2 => (1, -1),
-            3 => (0, -1),
-            4 => (-1, -1),
-            5 => (-1, 0),
-            6 => (-1, 1),
-            7 => (0, 1),
-            _ => (0, 0),
-        }
-    }
-
-    pub fn rand_vec_8(&mut self) -> (i32, i32) {
-        let i = self.rand_int(8);
-        match i {
-            0 => (1, 1),
-            1 => (1, 0),
-            2 => (1, -1),
-            3 => (0, -1),
-            4 => (-1, -1),
-            5 => (-1, 0),
-            6 => (-1, 1),
-            _ => (0, 1),
         }
     }
 

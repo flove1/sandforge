@@ -1,25 +1,14 @@
 use std::mem;
 
 use async_channel::Sender;
-use bevy::{
-    prelude::*,
-    render::{ mesh::PrimitiveTopology, render_asset::RenderAssetUsages, view::{NoFrustumCulling, RenderLayers} },
-    sprite::Mesh2dHandle,
-    tasks::ComputeTaskPool,
-    transform,
-    utils::HashMap,
-};
-use bevy_egui::egui::vec2;
+use bevy::{ prelude::*, render::view::RenderLayers, tasks::ComputeTaskPool, utils::HashMap };
 use bevy_math::ivec2;
 use bevy_rapier2d::dynamics::Velocity;
-use bytemuck::{ Pod, Zeroable };
-use itertools::Itertools;
 use serde::{ Deserialize, Serialize };
 
-use crate::{ camera::PARTICLE_RENDER_LAYER, constants::{ CHUNK_SIZE, PARTICLE_Z }, helpers::WalkGrid };
+use crate::{ camera::PARTICLE_RENDER_LAYER, constants::CHUNK_SIZE, helpers::WalkGrid };
 
 use super::{
-    chunk::ChunkState,
     chunk_groups::{ build_chunk_group, ChunkGroup },
     chunk_manager::ChunkManager,
     dirty_rect::{
@@ -29,7 +18,7 @@ use super::{
         RenderMessage,
         UpdateMessage,
     },
-    materials::{ Material, PhysicsType },
+    materials::PhysicsType,
     pixel::Pixel,
 };
 
@@ -40,7 +29,7 @@ pub struct ParticleBundle {
     pub movement: ParticleMovement,
     pub state: ParticleObjectState,
     pub particle: Particle,
-    pub render_layers: RenderLayers
+    pub render_layers: RenderLayers,
 }
 
 impl Default for ParticleBundle {
@@ -51,7 +40,7 @@ impl Default for ParticleBundle {
             movement: ParticleMovement::Fall,
             state: ParticleObjectState::FirstFrame,
             particle: Particle::default(),
-            render_layers: RenderLayers::layer(PARTICLE_RENDER_LAYER)
+            render_layers: RenderLayers::layer(PARTICLE_RENDER_LAYER),
         }
     }
 }
@@ -72,10 +61,11 @@ pub enum ParticleObjectState {
     Outside,
 }
 
-#[derive(Default, Component, Debug, Clone)]
+#[derive(Default, Component, Clone)]
 pub struct Particle {
     pub active: bool,
     pub pixel: Pixel,
+    pub place: bool,
 }
 
 impl Particle {
@@ -83,6 +73,15 @@ impl Particle {
         Self {
             active: true,
             pixel,
+            place: true,
+        }
+    }
+
+    pub fn visual(pixel: Pixel) -> Self {
+        Self {
+            active: true,
+            pixel,
+            place: false,
         }
     }
 }
@@ -216,11 +215,7 @@ impl<'a> ParticleApi<'a> {
 }
 //
 pub fn particle_setup(mut commands: Commands) {
-    commands.spawn((
-        Name::new("Particles"),
-        SpatialBundle::INHERITED_IDENTITY,
-        ParticleParent,
-    ));
+    commands.spawn((Name::new("Particles"), SpatialBundle::INHERITED_IDENTITY, ParticleParent));
 }
 
 pub fn particle_set_parent(
@@ -248,7 +243,7 @@ pub fn particle_modify_velocity(
         .filter(|(particle, ..)| particle.active) {
         match *movement {
             ParticleMovement::Fall => {
-                velocity.linvel.y -= (0.2 / (CHUNK_SIZE as f32)) * time.delta_seconds() * 100.0;
+                velocity.linvel.y -= (0.2 / (CHUNK_SIZE as f32)) * time.delta_seconds() * 25.0;
             }
             ParticleMovement::Follow(target_entity) => {
                 let Ok(target_transform) = transform_q.get(target_entity) else {
@@ -258,7 +253,7 @@ pub fn particle_modify_velocity(
 
                 let distance = target_transform.translation().xy() - transform.translation.xy();
 
-                if distance.length() * CHUNK_SIZE as f32 > 24.0 {
+                if distance.length() * (CHUNK_SIZE as f32) > 24.0 {
                     *movement = ParticleMovement::Fall;
                     continue;
                 }
@@ -266,11 +261,14 @@ pub fn particle_modify_velocity(
                 let angle = distance.normalize_or_zero().to_angle();
                 let magnitude = distance.length_recip().sqrt();
 
-                velocity.linvel = (
-                    (Vec2::new(angle.cos(), angle.sin()) * magnitude +
-                        (Vec2::new(fastrand::f32(), fastrand::f32()) / 2.0 - 0.5)) /
-                    (CHUNK_SIZE as f32)
-                ).clamp(-Vec2::ONE, Vec2::ONE);
+                velocity.linvel =
+                    (
+                        (Vec2::new(angle.cos(), angle.sin()) * magnitude +
+                            (Vec2::new(fastrand::f32(), fastrand::f32()) / 2.0 - 0.5)) /
+                        (CHUNK_SIZE as f32)
+                    ).clamp(-Vec2::ONE, Vec2::ONE) *
+                    time.delta_seconds() *
+                    25.0 * (fastrand::f32() * 0.05 + 0.95);
             }
         }
     }
@@ -347,7 +345,7 @@ pub fn particles_update(
 
         for (entity, transform, velocity, particle, object_state, movement) in particles
             .iter_mut()
-            .filter(|(_, transform, _, particle, ..)| particle.active) {
+            .filter(|(_, _, _, particle, ..)| particle.active) {
             let chunk_position = transform.translation.xy().as_ivec2();
 
             (
@@ -408,9 +406,7 @@ pub fn particles_update(
 
                                             match *movement {
                                                 ParticleMovement::Fall => {
-                                                    if
-                                                        pixel.is_empty()
-                                                    {
+                                                    if pixel.is_empty() {
                                                         *object_state =
                                                             ParticleObjectState::Outside;
                                                         continue;
@@ -418,7 +414,7 @@ pub fn particles_update(
 
                                                     let is_object = matches!(
                                                         pixel.physics_type,
-                                                        PhysicsType::Rigidbody
+                                                        PhysicsType::Rigidbody { .. }
                                                     );
 
                                                     match *object_state {
@@ -446,21 +442,22 @@ pub fn particles_update(
                                                             ParticleObjectState::Outside
                                                     {
                                                         match pixel.physics_type {
-                                                            PhysicsType::Air | PhysicsType::Gas => {
-                                                                if
-                                                                    api
-                                                                        .set(
-                                                                            position.x as i32,
-                                                                            position.y as i32,
-                                                                            particle.pixel.clone()
-                                                                        )
-                                                                        .is_ok()
-                                                                {
-                                                                    return Some(entity);
-                                                                }
+                                                            | PhysicsType::Air
+                                                            | PhysicsType::Gas(..) => {
+                                                                if !particle.place ||
+                                                                        api
+                                                                            .set(
+                                                                                position.x as i32,
+                                                                                position.y as i32,
+                                                                                particle.pixel.clone()
+                                                                            )
+                                                                            .is_ok()
+                                                                    {
+                                                                        return Some(entity);
+                                                                    }
                                                             }
                                                             _ => {
-                                                                let succeeded = api.displace(
+                                                                let succeeded = !particle.place || api.displace(
                                                                     IVec2::new(
                                                                         position.x as i32,
                                                                         position.y as i32
@@ -522,278 +519,3 @@ pub fn particles_update(
         particle_send.close();
     });
 }
-
-// #[allow(clippy::too_many_arguments)]
-// fn queue_custom(
-//     transparent_2d_draw_functions: Res<DrawFunctions<Transparent2d>>,
-//     custom_pipeline: Res<CustomPipeline>,
-//     msaa: Res<Msaa>,
-//     mut pipelines: ResMut<SpecializedRenderPipelines<CustomPipeline>>,
-//     pipeline_cache: Res<PipelineCache>,
-//     meshes: Res<RenderAssets<Mesh>>,
-//     render_mesh_instances: Res<RenderMesh2dInstances>,
-//     material_meshes: Query<Entity, With<ParticleInstances>>,
-//     mut views: Query<(&ExtractedView, &mut RenderPhase<Transparent2d>)>,
-// ) {
-//     let draw_custom = transparent_2d_draw_functions.read().id::<DrawCustom>();
-
-//     let msaa_key = Mesh2dPipelineKey::from_msaa_samples(msaa.samples());
-
-//     for (view, mut transparent_phase) in &mut views {
-//         let view_key = msaa_key | Mesh2dPipelineKey::from_hdr(view.hdr);
-
-//         for entity in &material_meshes {
-//             let Some(mesh_instance) = render_mesh_instances.get(&entity) else {
-//                 continue
-//             };
-
-//             let mesh2d_handle = mesh_instance.mesh_asset_id;
-
-//             let mut mesh2d_key = view_key;
-//             if let Some(mesh) = meshes.get(mesh2d_handle) {
-//                 mesh2d_key |=
-//                     Mesh2dPipelineKey::from_primitive_topology(mesh.primitive_topology);
-//             }
-
-//             let pipeline = pipelines.specialize(&pipeline_cache, &custom_pipeline, mesh2d_key);
-//             transparent_phase.add(Transparent2d {
-//                 entity,
-//                 pipeline,
-//                 draw_function: draw_custom,
-//                 batch_range: 0..1,
-//                 dynamic_offset: None,
-//                 sort_key: FloatOrd(PARTICLE_LAYER),
-//             });
-//         }
-//     }
-// }
-
-// #[derive(Component)]
-// struct InstanceBuffer {
-//     buffer: Buffer,
-//     length: usize,
-// }
-
-// fn prepare_instance_buffers(
-//     mut commands: Commands,
-//     query: Query<&Particle>,
-//     query_instances: Query<Entity, With<ParticleInstances>>,
-//     render_device: Res<RenderDevice>,
-// ) {
-//     let array = query.iter()
-//     .map(|particle| particle.into())
-//     .collect::<Vec<ParticleRenderInstance>>();
-
-//     let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-//         label: Some("instance data buffer"),
-//         contents: bytemuck::cast_slice(&array),
-//         usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-//     });
-
-//     commands.entity(query_instances.single()).insert(InstanceBuffer {
-//         buffer,
-//         length: array.length(),
-//     });
-// }
-
-// #[derive(Resource)]
-// struct CustomPipeline {
-//     shader: Handle<Shader>,
-//     mesh_pipeline: Mesh2dPipeline,
-// }
-
-// impl FromWorld for CustomPipeline {
-//     fn from_world(world: &mut World) -> Self {
-//         let asset_server = world.resource::<AssetServer>();
-//         let shader = asset_server.load("shaders/particle.wgsl");
-
-//         let mesh_pipeline = world.resource::<Mesh2dPipeline>();
-
-//         CustomPipeline {
-//             shader,
-//             mesh_pipeline: mesh_pipeline.clone(),
-//         }
-//     }
-// }
-
-// impl SpecializedRenderPipeline for CustomPipeline {
-//     type Key = Mesh2dPipelineKey;
-
-//     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
-//         let format = match key.contains(Mesh2dPipelineKey::HDR) {
-//             true => ViewTarget::TEXTURE_FORMAT_HDR,
-//             false => TextureFormat::bevy_default(),
-//         };
-
-//         RenderPipelineDescriptor {
-//             vertex: VertexState {
-//                 // Use our custom shader
-//                 shader: self.shader.clone_weak(),
-//                 entry_point: "vs_main".into(),
-//                 shader_defs: vec![],
-//                 // Use our custom vertex buffer
-//                 buffers: vec![
-//                     VertexBufferLayout::from_vertex_formats(
-//                         VertexStepMode::Vertex,
-//                         [
-//                             VertexFormat::Float32x3,
-//                             VertexFormat::Float32x3,
-//                             VertexFormat::Float32x4,
-//                         ],
-//                     ),
-//                 ],
-//             },
-//             fragment: Some(FragmentState {
-//                 // Use our custom shader
-//                 shader: self.shader.clone_weak(),
-//                 shader_defs: vec![],
-//                 entry_point: "fs_main".into(),
-//                 targets: vec![Some(ColorTargetState {
-//                     format,
-//                     blend: Some(BlendState::ALPHA_BLENDING),
-//                     write_mask: ColorWrites::ALL,
-//                 })],
-//             }),
-//             // Use the two standard uniforms for 2d meshes
-//             layout: vec![
-//                 self.mesh_pipeline.view_layout.clone(),
-//                 self.mesh_pipeline.mesh_layout.clone(),
-//             ],
-//             push_constant_ranges: Vec::new(),
-//             primitive: PrimitiveState {
-//                 topology: key.primitive_topology(),
-//                 strip_index_format: None,
-//                 front_face: FrontFace::Ccw,
-//                 cull_mode: Some(Face::Back),
-//                 polygon_mode: PolygonMode::Fill,
-//                 unclipped_depth: false,
-//                 conservative: false,
-//             },
-//             depth_stencil: None,
-//             multisample: MultisampleState {
-//                 count: key.msaa_samples(),
-//                 mask: !0,
-//                 alpha_to_coverage_enabled: false,
-//             },
-//             label: Some("particle_pipeline".into()),
-//         }
-
-//     }
-
-//     // fn specialize(
-//     //     &self,
-//     //     key: Self::Key,
-//     //     layout: &MeshVertexBufferLayout,
-//     // ) -> Result<RenderPipelineDescriptor, SpecializedMeshPipelineError> {
-//         // let mut descriptor = self.mesh_pipeline.specialize(key, layout)?;
-
-//     //     descriptor.vertex.shader = self.shader.clone();
-//     //     descriptor.vertex.buffers.push(VertexBufferLayout {
-//     //         array_stride: std::mem::size_of::<ParticleRenderInstance>() as u64,
-//     //         step_mode: VertexStepMode::Instance,
-//     //         attributes: vec![
-//     //             VertexAttribute {
-//     //                 format: VertexFormat::Float32x3,
-//     //                 offset: 0,
-//     //                 shader_location: 3, // shader locations 0-2 are taken up by Position, Normal and UV attributes
-//     //             },
-//     //             VertexAttribute {
-//     //                 format: VertexFormat::Float32x4,
-//     //                 offset: VertexFormat::Float32x3.size(),
-//     //                 shader_location: 4,
-//     //             },
-//     //         ],
-//     //     });
-//     //     descriptor.fragment.as_mut().unwrap().shader = self.shader.clone();
-//     //     Ok(descriptor)
-//     // }
-// }
-
-// type DrawCustom = (
-//     SetItemPipeline,
-//     SetMeshViewBindGroup<0>,
-//     SetMeshBindGroup<1>,
-//     DrawMeshInstanced,
-// );
-
-// struct DrawMeshInstanced;
-
-// impl<P: PhaseItem> RenderCommand<P> for DrawMeshInstanced {
-//     type Param = (SRes<RenderAssets<Mesh>>, SRes<RenderMesh2dInstances>);
-//     type ViewQuery = ();
-//     type ItemQuery = Read<InstanceBuffer>;
-
-//     #[inline]
-//     fn render<'w>(
-//         item: &P,
-//         _view: (),
-//         instance_buffer: Option<&'w InstanceBuffer>,
-//         (meshes, render_mesh2d_instances): SystemParamItem<'w, '_, Self::Param>,
-//         pass: &mut TrackedRenderPass<'w>,
-//     ) -> RenderCommandResult {
-//         let meshes = meshes.into_inner();
-//         let render_mesh2d_instances = render_mesh2d_instances.into_inner();
-
-//         let Some(RenderMesh2dInstance { mesh_asset_id, .. }) =
-//             render_mesh2d_instances.get(&item.entity())
-//         else {
-//             return RenderCommandResult::Failure;
-//         };
-
-//         let Some(gpu_mesh) = meshes.get(*mesh_asset_id) else {
-//             return RenderCommandResult::Failure;
-//         };
-
-//         let Some(instance_buffer) = instance_buffer else {
-//             dbg!("non succ 3");
-//             return RenderCommandResult::Failure;
-//         };
-
-//         pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-//         pass.set_vertex_buffer(1, instance_buffer.buffer.slice(..));
-
-//         match &gpu_mesh.buffer_info {
-//             GpuBufferInfo::Indexed {
-//                 buffer,
-//                 index_format,
-//                 count,
-//             } => {
-//                 pass.set_index_buffer(buffer.slice(..), 0, *index_format);
-//                 pass.draw_indexed(0..*count, 0, 0..instance_buffer.length as u32);
-//             }
-//             GpuBufferInfo::NonIndexed => {
-//                 pass.draw(0..gpu_mesh.vertex_count, 0..instance_buffer.length as u32);
-//             }
-//         }
-
-//         dbg!("succ");
-
-//         RenderCommandResult::Success
-//     }
-// }
-
-// pub fn extract_particles(
-//     mut commands: Commands,
-//     // mut previous_len: Local<usize>,
-//     query: Extract<Query<(Entity, &Mesh2dHandle, &GlobalTransform), With<ParticleInstances>>>,
-//     mut render_mesh_instances: ResMut<RenderMesh2dInstances>,
-// ) {
-//     if let Ok((entity, mesh, transform)) = query.get_single() {
-//         let transforms = Mesh2dTransforms {
-//             transform: (&transform.affine()).into(),
-//             flags: MeshFlags::empty().bits(),
-//         };
-
-//         commands.insert_or_spawn_batch([(entity, ParticleInstances)]);
-
-//         render_mesh_instances.insert(
-//             entity,
-//             RenderMesh2dInstance {
-//                 mesh_asset_id: mesh.0.id(),
-//                 transforms,
-//                 material_bind_group_id: Material2dBindGroupId::default(),
-//                 automatic_batching: false,
-//             },
-//         );
-//     }
-// }

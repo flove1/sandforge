@@ -1,34 +1,32 @@
 use bevy::{
     prelude::*,
     render::{
-        camera:: RenderTarget ,
-        extract_resource::{ExtractResource,  ExtractResourcePlugin} ,
+        camera::{ CameraOutputMode, RenderTarget },
+        extract_resource::{ ExtractResource, ExtractResourcePlugin },
         render_resource::{
+            BlendState,
             Extent3d,
             TextureDescriptor,
             TextureDimension,
             TextureFormat,
             TextureUsages,
         },
-        texture::
-            BevyDefault
-        ,
+        texture::BevyDefault,
         view::RenderLayers,
     },
     window::{ PrimaryWindow, WindowResized },
 };
 use bevy_math::vec2;
-use log::{debug, info};
+use log::info;
 
 use crate::{
     actors::player::Player,
     constants::CHUNK_SIZE,
     postprocessing::{
         light_apply::LightApply,
-        light_calculate::LightMask,
         light_propagate::LightPropagationSettings,
     },
-    state::AppState,
+    state::GameState,
 };
 
 #[derive(Component)]
@@ -65,7 +63,6 @@ impl TrackingCamera {
         let new_last_track = self.last_track + (dt as f32);
 
         if self.last_track < self.recenter_timeout && new_last_track > self.recenter_timeout {
-            // target the player
             self.target = player_pos;
         }
 
@@ -112,6 +109,11 @@ impl TrackingCamera {
             self.position += offset;
         }
     }
+
+    pub fn set_position(&mut self, position: Vec2) {
+        self.position = position;
+        self.target = position;
+    }
 }
 
 pub fn update_camera(
@@ -122,6 +124,7 @@ pub fn update_camera(
     let transform = player_q.single();
     let (mut camera_transform, mut camera_tracking) = camera_q.single_mut();
     let dt = time.delta_seconds_f64();
+
     camera_tracking.update(transform.translation.xy(), dt);
     camera_transform.translation = camera_tracking.position.extend(4.0);
 }
@@ -130,6 +133,7 @@ pub const BACKGROUND_RENDER_LAYER: u8 = 1;
 pub const TERRAIN_RENDER_LAYER: u8 = 2;
 pub const ACTOR_RENDER_LAYER: u8 = 3;
 pub const PARTICLE_RENDER_LAYER: u8 = 4;
+pub const LIGHTING_RENDER_LAYER: u8 = 5;
 
 #[derive(Default, Resource, ExtractResource, Clone)]
 pub struct LightingTexture {
@@ -140,7 +144,7 @@ pub struct LightingTexture {
 fn on_resize_system(
     mut resize_reader: EventReader<WindowResized>,
     lighting: Res<LightingTexture>,
-    mut images: ResMut<Assets<Image>>
+    mut images: ResMut<Assets<Image>>,
 ) {
     for e in resize_reader.read() {
         let size = Extent3d {
@@ -155,7 +159,7 @@ fn on_resize_system(
             size,
             ..image.texture_descriptor.clone()
         };
-        
+
         info!("window was resized: {}:{}", e.width, e.height);
 
         image.resize(size);
@@ -169,13 +173,17 @@ pub struct LightingCamera;
 fn setup_camera(
     mut commands: Commands,
     mut time: ResMut<Time<Fixed>>,
-    lighting: Res<LightingTexture>
+    lighting: Res<LightingTexture>,
 ) {
     time.set_timestep_hz(58.0);
 
     commands
         .spawn((
             Camera2dBundle {
+                camera: Camera {
+                    order: 0,
+                    ..Default::default()
+                },
                 projection: OrthographicProjection {
                     scale: 0.375 / (CHUNK_SIZE as f32),
                     ..Default::default()
@@ -186,7 +194,14 @@ fn setup_camera(
             Visibility::Visible,
             TrackingCamera::default(),
             LightApply,
-            RenderLayers::from_layers(&[BACKGROUND_RENDER_LAYER, TERRAIN_RENDER_LAYER, ACTOR_RENDER_LAYER, PARTICLE_RENDER_LAYER]),
+            RenderLayers::from_layers(
+                &[
+                    BACKGROUND_RENDER_LAYER,
+                    TERRAIN_RENDER_LAYER,
+                    ACTOR_RENDER_LAYER,
+                    PARTICLE_RENDER_LAYER,
+                ]
+            ),
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -196,6 +211,10 @@ fn setup_camera(
                         order: -1,
                         clear_color: ClearColorConfig::Custom(Color::rgba_from_array([0.0; 4])),
                         target: RenderTarget::Image(lighting.texture.clone()),
+                        output_mode: CameraOutputMode::Write {
+                            blend_state: Some(BlendState::REPLACE),
+                            color_attachment_load_op: bevy::render::render_resource::LoadOp::Load,
+                        },
                         ..Default::default()
                     },
                     projection: OrthographicProjection {
@@ -204,21 +223,20 @@ fn setup_camera(
                     },
                     ..Default::default()
                 },
-                LightMask,
-                LightPropagationSettings { offset: 2.0, passes: 8 },
-                RenderLayers::from_layers(&[BACKGROUND_RENDER_LAYER, TERRAIN_RENDER_LAYER]),
+                LightPropagationSettings { offset: 4.0, passes: 8 },
+                RenderLayers::layer(LIGHTING_RENDER_LAYER),
             ));
 
             parent.spawn((
                 Name::new("Other"),
                 Camera2dBundle {
                     camera: Camera {
-                        order: 1,
+                        order: 10,
                         clear_color: ClearColorConfig::None,
                         ..Default::default()
                     },
                     projection: OrthographicProjection {
-                        scale: (0.375 / (CHUNK_SIZE as f32)),
+                        scale: 0.375 / (CHUNK_SIZE as f32),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -242,7 +260,7 @@ pub fn setup_lighting(
         ..Default::default()
     };
 
-    let mut lighting = Image {
+    let mut texture = Image {
         texture_descriptor: TextureDescriptor {
             label: None,
             size,
@@ -259,11 +277,11 @@ pub fn setup_lighting(
         ..default()
     };
 
-    lighting.resize(size);
+    texture.resize(size);
 
     commands.insert_resource(LightingTexture {
         scale,
-        texture: images.add(lighting),
+        texture: images.add(texture.clone()),
     })
 }
 
@@ -273,9 +291,7 @@ impl Plugin for CameraPlugin {
         app.add_plugins(ExtractResourcePlugin::<LightingTexture>::default())
 
             .add_systems(Startup, (setup_lighting, setup_camera).chain())
-            .add_systems(
-                Update,
-                (update_camera, on_resize_system).run_if(in_state(AppState::Game))
-            );
+            .add_systems(Update, update_camera.run_if(in_state(GameState::Game)))
+            .add_systems(Update, on_resize_system);
     }
 }

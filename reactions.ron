@@ -1,25 +1,58 @@
-[]
-
-// - {
-//     probability: 0.5,
-//     input_material_1: lava,
-//     input_material_2: water,
-//     output_material_1: stone,
-//     output_material_2: stone,
-//   }
-
-// - {
-//     probability: 0.0005,
-//     input_material_1: steam,
-//     input_material_2: steam,
-//     output_material_1: water,
-//     output_material_2: air,
-//   }
-
-// - {
-//     probability: 0.02,
-//     input_material_1: water,
-//     input_material_2: dirt,
-//     output_material_1: water,
-//     output_material_2: grass,
-//   }
+[
+    (
+        probability: 0.5,
+        input_material_1: "lava",
+        input_material_2: "water",
+        output_material_1: "stone",
+        output_material_2: "stone",
+    ),
+    (
+        probability: 1.0,
+        input_material_1: "acid",
+        input_material_2: "any",
+        output_material_1: "air",
+        output_material_2: "air",
+    ),
+    (
+        probability: 0.05,
+        input_material_1: "water",
+        input_material_2: "mud",
+        output_material_1: "dirty_water",
+        output_material_2: "dirty_water",
+    ),
+    (
+        probability: 0.05,
+        input_material_1: "water",
+        input_material_2: "amethyst",
+        output_material_1: "shimmer",
+        output_material_2: "shimmer",
+    ),
+    (
+        probability: 0.05,
+        input_material_1: "water",
+        input_material_2: "shimmer",
+        output_material_1: "shimmer",
+        output_material_2: "shimmer",
+    ),
+    (
+        probability: 0.05,
+        input_material_1: "amethyst",
+        input_material_2: "shimmer",
+        output_material_1: "shimmer",
+        output_material_2: "shimmer",
+    ),
+    (
+        probability: 0.05,
+        input_material_1: "water",
+        input_material_2: "dirty_water",
+        output_material_1: "dirty_water",
+        output_material_2: "dirty_water",
+    ),
+    (
+        probability: 0.05,
+        input_material_1: "mud",
+        input_material_2: "dirty_water",
+        output_material_1: "dirty_water",
+        output_material_2: "dirty_water",
+    ),
+]

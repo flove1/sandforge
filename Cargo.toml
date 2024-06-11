@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-debug-render=[]
+debug-render = []
 
 [profile.dev]
 opt-level = 0
@@ -23,13 +23,10 @@ debug = false
 [dependencies]
 log = "0.4"
 rand = { version = "0.8.4", features = ["small_rng"] }
-dashmap = { version = "5.5.1", features = ["inline"] }
 bytemuck = "1.13.1"
 earcutr = "0.4.2"
 ahash = "0.8.3"
-cdt = "0.1.0"
 lazy_static = "1.4.0"
-serde_yaml = "0.9.25"
 serde = { version = "1.0.188", features = ["derive"] }
 poly2tri-rs = "0.1.2"
 bitflags = "2.4.0"
@@ -37,24 +34,18 @@ rayon = "1.8.0"
 fastrand = "2.0.1"
 notify = "6.1.1"
 noise = "0.8.2"
-compact_str = { version = "0.7.1", features = ["serde"] }
-bevy = { version = "0.13.2", features = ["dynamic_linking"] }
+bevy = { version = "0.13.2", features = ["dynamic_linking", "wav"] }
 bevy_math = "0.13.2"
 bevy_rapier2d = "0.26"
-serde-big-array = "0.5.1"
 array-macro = "2.1.8"
-smallvec = "1.12.0"
 itertools = "0.12.0"
 async-channel = "2.1.1"
 bevy_common_assets = "0.10.0"
-scoped_threadpool = "0.1.9"
 bevy_egui = "0.27.0"
 bevy-inspector-egui = "0.24.0"
-concache = "0.2.1"
-flurry = "0.5.0"
 rustc-hash = "1.1.0"
 contour = "0.12.1"
-bevy_asset_loader = { version = "0.20.0", features = ["2d"]}
+bevy_asset_loader = { version = "0.20.0", features = ["2d"] }
 thiserror = "1.0.58"
 tokio = "1.37.0"
 egui-notify = "0.14.0"
@@ -64,3 +55,9 @@ leafwing-input-manager = "0.13.3"
 fast_poisson = "1.0.0"
 indexmap = "2.2.6"
 ron = "0.8.1"
+pathfinding = "4.9.1"
+bevy_tween = "0.4.0"
+mimalloc = "0.1.42"
+bevy_pkv = "0.10.0"
+bevy-persistent = { version = "0.5.0", features = ["all"] }
+dirs = "5.0.1"

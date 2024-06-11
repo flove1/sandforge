@@ -1,8 +1,8 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, utils::HashSet};
 use bevy_math::{ IVec2, Vec2 };
-use bevy_rapier2d::geometry::{Collider, CollisionGroups, Group};
+use bevy_rapier2d::geometry::{ Collider, CollisionGroups, Group };
 
-use super::{chunk::Chunk, chunk_manager::ChunkManager};
+use super::{ chunk::Chunk, chunk_manager::ChunkManager };
 
 pub const TERRAIN_MASK: u32 = 1 << 0;
 pub const PLAYER_MASK: u32 = 1 << 1;
@@ -56,18 +56,19 @@ fn perpendicular_squared_distance(point: Vec2, line: (Vec2, Vec2)) -> f32 {
 }
 
 #[derive(Event, Deref, DerefMut)]
-pub struct ChunkColliderEveny(pub IVec2);
+pub struct ChunkColliderEvent(pub IVec2);
 
 pub fn process_chunk_collider_events(
     mut commands: Commands,
     chunk_manager: Res<ChunkManager>,
-    mut chunk_ev: EventReader<ChunkColliderEveny>,
+    mut chunk_ev: EventReader<ChunkColliderEvent>,
     mut chunk_set: ParamSet<
         (Query<&Children, With<Chunk>>, Query<Entity, (With<Parent>, With<Collider>)>)
     >
 ) {
-    for ev in chunk_ev.read() {
-        let chunk_position = ev.0;
+    let set: HashSet<IVec2> = chunk_ev.read().map(|ev| ev.0).collect();
+
+    for chunk_position in set {
         if let Some((entity, chunk)) = chunk_manager.chunks.get(&chunk_position) {
             let mut chunk_children = vec![];
 
@@ -77,7 +78,7 @@ pub fn process_chunk_collider_events(
 
             for child in chunk_children {
                 if let Ok(child_entity) = chunk_set.p1().get(child) {
-                    commands.entity(child_entity).despawn();
+                    commands.entity(child_entity).remove_parent().despawn();
                 }
             }
 

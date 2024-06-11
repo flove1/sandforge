@@ -3,7 +3,6 @@ use std::{ sync::Arc, time::{ SystemTime, UNIX_EPOCH } };
 use bevy::prelude::*;
 use noise::{
     Billow,
-    Checkerboard,
     Fbm,
     HybridMulti,
     MultiFractal,
@@ -17,9 +16,15 @@ use serde::Deserialize;
 #[derive(Resource, Deref, DerefMut)]
 pub struct Seed(pub u32);
 
-impl FromWorld for Seed {
-    fn from_world(world: &mut World) -> Self {
+impl Seed {
+    pub fn new() -> Self {
         Self(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_millis())
+    }
+}
+
+impl FromWorld for Seed {
+    fn from_world(_: &mut World) -> Self {
+        Self::new()
     }
 }
 
@@ -60,18 +65,23 @@ impl Noise {
                     Box::new(move |point| { noise.get(point) / 4.0 }) as Box<dyn Fn([f64; 2]) -> f64 + Send + Sync>
                 }
                 NoiseType::Billow => {
-                    let noise = Billow::<Perlin>
+                    let noise_1 = Fbm::<Perlin>
                         ::new(seed + 2)
                         .set_octaves(6)
                         .set_frequency(3.0);
 
-                    Box::new(move |point| { noise.get(point) / 8.0 }) as Box<dyn Fn([f64; 2]) -> f64 + Send + Sync>
+                    let noise_2 = Billow::<Perlin>
+                        ::new(seed + 2)
+                        .set_octaves(6)
+                        .set_frequency(4.5);
+
+                    Box::new(move |point| { noise_1.get(point) / 4.0 + noise_2.get(point) / 16.0 }) as Box<dyn Fn([f64; 2]) -> f64 + Send + Sync>
                 }
                 NoiseType::HybridMulti => {
                     let noise = HybridMulti::<Perlin>
                         ::new(seed + 2)
                         .set_octaves(6)
-                        .set_frequency(3.0);
+                        .set_frequency(1.5);
 
                     Box::new(move |point| { noise.get(point) / 2.0 }) as Box<dyn Fn([f64; 2]) -> f64 + Send + Sync>
                 }
@@ -93,10 +103,10 @@ impl Noise {
             let noise_1 = HybridMulti::<Perlin>::new(seed);
             let noise_2 = Simplex::new(seed + 1);
 
-            move |mut point: Vec2| {
-                let mut point = [(point.x as f64) / 2.0, (point.y as f64) / 2.0];
+            move |point: Vec2| {
+                let point = [(point.x as f64) / 2.0, (point.y as f64) / 2.0];
 
-                if noise_1.get(point) * 0.75 + noise_2.get(point) / 2.0 > 0.8 {
+                if noise_1.get(point) * 0.75 + noise_2.get(point) / 2.0 > 0.6 {
                     1.0
                 } else {
                     0.0
@@ -108,13 +118,13 @@ impl Noise {
             let seed = seed * 3;
 
             let ridged = RidgedMulti::<Perlin>::new(seed).set_octaves(1).set_frequency(2.0);
-            let noise = Simplex::new(seed + 1);
+            let noise = Perlin::new(seed + 1);
             let fbm = Fbm::<Perlin>
                 ::new(seed + 2)
                 .set_octaves(6)
                 .set_frequency(3.0);
 
-            move |mut point: Vec2| {
+            move |point: Vec2| {
                 let mut point = [(point.x as f64) / 48.0, (point.y as f64) / 48.0];
 
                 point[0] += fbm.get(point) / 2.0;

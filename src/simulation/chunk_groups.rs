@@ -24,25 +24,25 @@ struct TextureAccess {
 
 pub fn build_chunk_group_with_texture_access(
     chunk_manager: &mut ChunkManager,
-    position: IVec2,
+    chunk_position: IVec2,
     images: &mut Assets<Image>
 ) -> Option<ChunkGroup<Pixel>> {
-    chunk_group_helper(chunk_manager, position, Some(images))
+    chunk_group_helper(chunk_manager, chunk_position, Some(images))
 }
 
 pub fn build_chunk_group(
     chunk_manager: &mut ChunkManager,
-    position: IVec2
+    chunk_position: IVec2
 ) -> Option<ChunkGroup<Pixel>> {
-    chunk_group_helper(chunk_manager, position, None)
+    chunk_group_helper(chunk_manager, chunk_position, None)
 }
 
 fn chunk_group_helper(
     chunk_manager: &mut ChunkManager,
-    position: IVec2,
+    chunk_position: IVec2,
     mut images: Option<&mut Assets<Image>>
 ) -> Option<ChunkGroup<Pixel>> {
-    let Some(center_chunk) = chunk_manager.get_chunk_data_mut(&position) else {
+    let Some(center_chunk) = chunk_manager.get_chunk_data_mut(&chunk_position) else {
         return None;
     };
 
@@ -81,7 +81,7 @@ fn chunk_group_helper(
             // UP and DOWN
             (0, -1) | (0, 1) => {
                 let Some(chunk) = chunk_manager.get_chunk_data_mut(
-                    &(position + ivec2(dx, dy))
+                    &(chunk_position + ivec2(dx, dy))
                 ) else {
                     continue;
                 };
@@ -106,7 +106,7 @@ fn chunk_group_helper(
             //LEFT and RIGHT
             (-1, 0) | (1, 0) => {
                 let Some(chunk) = chunk_manager.get_chunk_data_mut(
-                    &(position + ivec2(dx, dy))
+                    &(chunk_position + ivec2(dx, dy))
                 ) else {
                     continue;
                 };
@@ -131,7 +131,7 @@ fn chunk_group_helper(
             //CORNERS
             (-1, -1) | (1, -1) | (-1, 1) | (1, 1) => {
                 let Some(chunk) = chunk_manager.get_chunk_data_mut(
-                    &(position + ivec2(dx, dy))
+                    &(chunk_position + ivec2(dx, dy))
                 ) else {
                     continue;
                 };

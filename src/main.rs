@@ -1,3 +1,10 @@
+// #![windows_subsystem = "windows"]
+
+// use mimalloc::MiMalloc;
+
+// #[global_allocator]
+// static GLOBAL: MiMalloc = MiMalloc;
+
 mod actors;
 mod animation;
 mod assets;
@@ -12,13 +19,24 @@ mod simulation;
 mod state;
 mod raycast;
 mod postprocessing;
+mod cursor;
+mod settings;
+mod interpolator;
+
+use std::time::Duration;
 
 use actors::ActorsPlugin;
-use animation::{ Animation, AnimationPlugin, AnimationState };
-use assets::{ process_assets, ChunkLayoutAssets, FontBytes, FontAssetLoader, FontAssets, SpriteSheets };
-use benimator::FrameRate;
+use animation::AnimationPlugin;
+use assets::{
+    process_assets, AudioAssetCollection, FontAssetCollection, FontAssetLoader, FontBytes, LayoutAssetCollection, SpriteAssetCollection
+};
 use bevy::{
-    audio::AudioPlugin, diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, render::{ settings::WgpuSettings, RenderPlugin }, window::PrimaryWindow, winit::{ UpdateMode, WinitSettings }
+    audio::{AudioPlugin, SpatialScale},
+    diagnostic::FrameTimeDiagnosticsPlugin,
+    prelude::*,
+    render::{ settings::{ PowerPreference, WgpuSettings }, RenderPlugin },
+    window::{ Cursor, PresentMode, PrimaryWindow, WindowMode, WindowResolution },
+    winit::{ UpdateMode, WinitSettings },
 };
 use bevy_asset_loader::loading_state::{
     config::ConfigureLoadingState,
@@ -27,30 +45,37 @@ use bevy_asset_loader::loading_state::{
 };
 use bevy_egui::EguiPlugin;
 
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
-use bevy_rapier2d::
-    plugin::{ NoUserData, RapierConfiguration, RapierPhysicsPlugin }
-;
+use bevy_rapier2d::plugin::{ NoUserData, RapierConfiguration, RapierPhysicsPlugin };
+use bevy_tween::{ interpolation::EaseFunction, span_tween::SpanTweenerBundle, tween::ComponentTween };
 use camera::CameraPlugin;
 use constants::CHUNK_SIZE;
-use generation::chunk::GenerationTask;
+use cursor::{ move_cursor, setup_cursor };
 use gui::GuiPlugin;
 
+use helpers::{ tick_despawn_timer, DespawnTimer };
+use interpolator::{ InterpolateVolume, InterpolatorPlugin };
 use painter::PainterPlugin;
+
 use postprocessing::PostProcessPlugin;
+use registries::Registries;
 use seldom_state::StateMachinePlugin;
+use settings::{ process_config, SettingsPlugin };
 use simulation::SimulationPlugin;
-use state::AppState;
+use state::{ state_auto_transition, GameState };
 
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins.set(ImagePlugin::default_nearest())
-                .disable::<AudioPlugin>()
+            DefaultPlugins
+                .set(AudioPlugin {
+                    default_spatial_scale: SpatialScale::new_2d(1.0),
+                    ..Default::default()
+                })
+                .set(ImagePlugin::default_nearest())
                 .set(RenderPlugin {
                     render_creation: bevy::render::settings::RenderCreation::Automatic(
                         WgpuSettings {
-                            power_preference: bevy::render::settings::PowerPreference::LowPower,
+                            power_preference: PowerPreference::LowPower,
                             ..Default::default()
                         }
                     ),
@@ -58,6 +83,13 @@ fn main() {
                 })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
+                        mode: WindowMode::Windowed,
+                        resolution: WindowResolution::default().with_scale_factor_override(1.0),
+                        present_mode: PresentMode::AutoVsync,
+                        cursor: Cursor {
+                            visible: false,
+                            ..Default::default()
+                        },
                         title: "Sandforge".into(),
                         resizable: false,
                         ..default()
@@ -65,7 +97,8 @@ fn main() {
                     ..default()
                 }),
             RapierPhysicsPlugin::<NoUserData>
-                ::pixels_per_meter((CHUNK_SIZE as f32) / 4.0).with_default_system_setup(false)
+                ::pixels_per_meter((CHUNK_SIZE as f32) / 4.0)
+                .with_default_system_setup(false)
                 .in_fixed_schedule(),
             EguiPlugin,
             StateMachinePlugin,
@@ -77,104 +110,70 @@ fn main() {
             unfocused_mode: UpdateMode::Continuous,
         })
         .add_plugins((
+            InterpolatorPlugin,
             SimulationPlugin,
             ActorsPlugin,
             AnimationPlugin,
             CameraPlugin,
             PainterPlugin,
             GuiPlugin,
-            PostProcessPlugin
+            PostProcessPlugin,
+            SettingsPlugin,
         ))
         .insert_resource(RapierConfiguration::new(0.1))
-        .init_state::<AppState>()
+        .insert_resource(ClearColor(Color::BLACK))
+        .init_state::<GameState>()
         .init_asset::<FontBytes>()
         .init_asset_loader::<FontAssetLoader>()
         .add_loading_state(
-            LoadingState::new(AppState::LoadingAssets)
-                .load_collection::<FontAssets>()
-                .load_collection::<ChunkLayoutAssets>()
-                .load_collection::<SpriteSheets>()
-                .continue_to_state(AppState::WorldInitilialization)
+            LoadingState::new(GameState::LoadingAssets)
+                .load_collection::<FontAssetCollection>()
+                .load_collection::<LayoutAssetCollection>()
+                .load_collection::<SpriteAssetCollection>()
+                .load_collection::<AudioAssetCollection>()
+                .continue_to_state(GameState::Menu)
         )
-        .add_systems(OnExit(AppState::LoadingAssets), process_assets)
-        .add_systems(OnEnter(AppState::WorldInitilialization), (splash_setup, add_splash_content).chain())
-        .add_systems(
-            Update,
-            countdown
-                .run_if(in_state(AppState::WorldInitilialization))
-        )
-        .add_systems(OnExit(AppState::WorldInitilialization), despawn_screen::<SplashScreen>)
+        .add_systems(OnExit(GameState::LoadingAssets), (
+            process_assets,
+            setup_cursor,
+            process_config,
+            move |mut commands: Commands| {
+                commands.init_resource::<Registries>();
+            },
+        ))
+        .add_systems(Update, (state_auto_transition, tick_despawn_timer, move_cursor))
         .run();
-}
-
-#[derive(Component)]
-struct SplashScreen;
-
-#[derive(Resource, Deref, DerefMut)]
-struct SplashTimer(Timer);
-
-fn splash_setup(mut commands: Commands) {
-    commands.spawn((
-        SplashScreen,
-        NodeBundle {
-            style: Style {
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
-            background_color: BackgroundColor(Color::BLACK),
-            ..default()
-        },
-    ));
-}
-
-fn add_splash_content(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    splash_q: Query<Entity, With<SplashScreen>>
-) {
-    let icon = asset_server.load("loading.png");
-    let texture_atlas_layout = texture_atlas_layouts.add(
-        TextureAtlasLayout::from_grid(Vec2::new(48.0, 48.0), 6, 1, None, None)
-    );
-
-    commands.entity(splash_q.single()).with_children(|parent| {
-        parent.spawn((
-            AnimationState::default(),
-            Animation(
-                benimator::Animation::from_indices(0..=5, FrameRate::from_fps(12.0)).repeat()
-            ),
-            AtlasImageBundle {
-                style: Style {
-                    width: Val::Px(200.0),
-                    ..default()
-                },
-                image: UiImage::new(icon),
-                texture_atlas: TextureAtlas {
-                    layout: texture_atlas_layout,
-                    index: 0,
-                },
-                ..default()
-            },
-        ));
-    });
-
-    commands.insert_resource(SplashTimer(Timer::from_seconds(1.0, TimerMode::Once)));
-}
-
-fn countdown(mut timer: ResMut<SplashTimer>, time: Res<Time>) {
-    timer.tick(time.delta());
 }
 
 pub fn has_window(query: Query<&Window, With<PrimaryWindow>>) -> bool {
     !query.is_empty()
 }
 
-fn despawn_screen<T: Component>(to_despawn: Query<Entity, With<T>>, mut commands: Commands) {
+pub fn fade_out_audio<T: Component>(
+    mut commands: Commands,
+    mut audio_sink_q: Query<(Entity, &mut AudioSink), With<T>>
+) {
+    for (entity, sink) in audio_sink_q.iter_mut() {
+        commands
+            .entity(entity)
+            .insert(DespawnTimer(Timer::from_seconds(1.0, TimerMode::Once)))
+            .insert(EaseFunction::Linear)
+            .insert(SpanTweenerBundle::new(Duration::from_secs(1)).tween_here())
+            .insert(
+                ComponentTween::new(InterpolateVolume {
+                    start: sink.volume(),
+                    end: 0.0,
+                })
+            );
+    }
+}
+
+fn despawn_component<T: Component>(to_despawn: Query<Entity, With<T>>, mut commands: Commands) {
     for entity in &to_despawn {
         commands.entity(entity).despawn_recursive();
     }
+}
+
+fn remove_respurce<T: Resource>(mut commands: Commands) {
+    commands.remove_resource::<T>();
 }

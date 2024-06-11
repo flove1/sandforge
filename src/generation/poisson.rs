@@ -1,31 +1,34 @@
 use bevy::{prelude::*, utils::HashMap};
 use fast_poisson::Poisson2D;
+use rand::{Rng, SeedableRng};
+
+use super::level::EnemyOnLevel;
 
 #[derive(Resource, Deref, DerefMut)]
-pub struct Poisson(Poisson2D);
+pub struct EnemyPositions(pub HashMap<IVec2, Vec<(String, Vec2)>>);
 
-#[derive(Resource, Deref, DerefMut)]
-pub struct PoissonEnemyPosition(pub HashMap<IVec2, Vec<Vec2>>);
-
-impl Poisson {
-    pub fn from_seed(seed: u32, frequency: f32) -> Self {
-        Self(
-            Poisson2D::new()
-                .with_seed(seed as u64)
-                .with_dimensions([20.0, 20.0], (1.0 / frequency) as f64
-            )
-        )
-    }
-}
-
-impl PoissonEnemyPosition {
-    pub fn from_distibution(poisson: &Poisson) -> Self {
+impl EnemyPositions {
+    pub fn new(seed: u32, size: IVec2, enemies: Vec<EnemyOnLevel>) -> Self {
         let mut map = HashMap::new();
+        let mut seed = seed;
 
-        for point in poisson.iter() {
-            let point = Vec2::new(point[0] as f32, point[1] as f32) - 10.0;
+        for enemy_type in enemies {
+            seed += 1;
+            let poisson = Poisson2D::new()
+                .with_seed(seed as u64)
+                .with_dimensions([size.x as f64, size.y as f64], (1.0 / enemy_type.frequency) as f64
+            );
+            
+            let mut probability_rng = rand::rngs::SmallRng::seed_from_u64(seed as u64);
 
-            map.entry(point.floor().as_ivec2()).or_insert(Vec::new()).push(point);
+            for point in poisson.iter() {
+                if !probability_rng.gen_bool(enemy_type.spawn_chance as f64) {
+                    continue;
+                }
+
+                let point = Vec2::new(point[0] as f32, point[1] as f32) - size.as_vec2() / 2.0;
+                map.entry(point.floor().as_ivec2()).or_insert(Vec::new()).push((enemy_type.enemy_id.clone(), point));
+            }
         }
 
         Self(map)
